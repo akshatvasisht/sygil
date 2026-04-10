@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "name": "e2e-diamond",
+  "nodes": {
+    "start":  { "adapter": "echo", "model": "test", "role": "start",  "prompt": "Begin" },
+    "left":   { "adapter": "echo", "model": "test", "role": "left",   "prompt": "Left branch" },
+    "right":  { "adapter": "echo", "model": "test", "role": "right",  "prompt": "Right branch" },
+    "merge":  { "adapter": "echo", "model": "test", "role": "merge",  "prompt": "Merge results" }
+  },
+  "edges": [
+    { "id": "s-l", "from": "start", "to": "left" },
+    { "id": "s-r", "from": "start", "to": "right" },
+    { "id": "l-m", "from": "left",  "to": "merge" },
+    { "id": "r-m", "from": "right", "to": "merge" }
+  ]
+}

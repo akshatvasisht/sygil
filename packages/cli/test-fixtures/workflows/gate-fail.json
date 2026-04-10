@@ -1,0 +1,26 @@
+{
+  "version": "1",
+  "name": "e2e-gate-fail",
+  "nodes": {
+    "writer": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "writer",
+      "prompt": "Write something"
+    },
+    "checker": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "checker",
+      "prompt": "Check the output"
+    }
+  },
+  "edges": [
+    {
+      "id": "write-to-check",
+      "from": "writer",
+      "to": "checker",
+      "gate": { "conditions": [{ "type": "exit_code", "value": 0 }] }
+    }
+  ]
+}

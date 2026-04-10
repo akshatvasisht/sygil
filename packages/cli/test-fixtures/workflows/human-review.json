@@ -1,0 +1,30 @@
+{
+  "version": "1",
+  "name": "e2e-human-review",
+  "nodes": {
+    "impl": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "impl",
+      "prompt": "Implement feature"
+    },
+    "done": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "done",
+      "prompt": "Complete"
+    }
+  },
+  "edges": [
+    {
+      "id": "impl-to-done",
+      "from": "impl",
+      "to": "done",
+      "gate": {
+        "conditions": [
+          { "type": "human_review", "prompt": "Does the implementation look correct?" }
+        ]
+      }
+    }
+  ]
+}

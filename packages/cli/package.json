@@ -1,0 +1,71 @@
+{
+  "name": "sigil",
+  "version": "0.1.0",
+  "description": "Deterministic orchestration for probabilistic agents — run multi-agent AI workflows as typed DAGs with gates, retries, and checkpointing.",
+  "keywords": [
+    "ai",
+    "agents",
+    "orchestration",
+    "llm",
+    "workflow",
+    "dag",
+    "claude",
+    "codex",
+    "automation"
+  ],
+  "author": "Akshat Vasisht",
+  "license": "MIT",
+  "homepage": "https://github.com/akshatvasisht/sigil#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akshatvasisht/sigil.git"
+  },
+  "bugs": {
+    "url": "https://github.com/akshatvasisht/sigil/issues"
+  },
+  "type": "module",
+  "bin": {
+    "sigil": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "dist-ui",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist dist-ui *.tsbuildinfo",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@sigil/shared": "*",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "open": "^10.2.0",
+    "ora": "^8.0.1",
+    "sirv": "^3.0.2",
+    "ws": "^8.17.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sigil/web": "*",
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "@vitest/coverage-v8": "^1.6.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

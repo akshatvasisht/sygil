@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "name": "e2e-loop-back",
+  "nodes": {
+    "writer": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "writer",
+      "prompt": "write code"
+    },
+    "reviewer": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "reviewer",
+      "prompt": "review code"
+    }
+  },
+  "edges": [
+    { "id": "w-r", "from": "writer", "to": "reviewer" },
+    {
+      "id": "r-loop",
+      "from": "reviewer",
+      "to": "writer",
+      "isLoopBack": true,
+      "maxRetries": 2,
+      "gate": {
+        "conditions": [
+          { "type": "exit_code", "value": 1 }
+        ]
+      }
+    }
+  ]
+}

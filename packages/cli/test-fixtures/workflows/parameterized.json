@@ -1,0 +1,17 @@
+{
+  "version": "1",
+  "name": "e2e-params",
+  "parameters": {
+    "task": { "type": "string", "required": true },
+    "mode": { "type": "string", "default": "fast" }
+  },
+  "nodes": {
+    "worker": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "worker",
+      "prompt": "Do {{task}} in {{mode}} mode"
+    }
+  },
+  "edges": []
+}

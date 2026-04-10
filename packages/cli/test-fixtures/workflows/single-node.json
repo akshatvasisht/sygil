@@ -1,0 +1,13 @@
+{
+  "version": "1",
+  "name": "e2e-single-node",
+  "nodes": {
+    "greeter": {
+      "adapter": "echo",
+      "model": "test",
+      "role": "greeter",
+      "prompt": "Hello from the echo adapter"
+    }
+  },
+  "edges": []
+}

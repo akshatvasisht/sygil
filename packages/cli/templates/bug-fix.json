@@ -1,0 +1,68 @@
+{
+  "version": "1",
+  "name": "bug-fix",
+  "description": "Bug fix pipeline: reproduce → fix → verify (gate on test suite passing)",
+  "parameters": {
+    "bug": {
+      "type": "string",
+      "description": "Bug description, e.g. 'Login fails with 500 error when email contains a + character'",
+      "required": true
+    }
+  },
+  "nodes": {
+    "reproducer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a QA engineer who writes minimal, focused test cases that reliably reproduce bugs. You never fix the bug — only prove it exists with a failing test.",
+      "prompt": "Reproduce this bug with a failing test:\n\n{{bug}}\n\nSteps:\n1. Explore the codebase to understand the project structure, test framework, and conventions\n2. Identify the code path involved in the bug\n3. Write a minimal test case that FAILS because of the bug\n4. Run the test and confirm it fails — paste the failure output\n5. Write a brief analysis to reproduce/analysis.md: root cause hypothesis, affected files, and suggested fix approach\n\nDo NOT fix the bug. Only reproduce it. The test must fail with the current code.",
+      "tools": ["Read", "Glob", "Grep", "Bash", "Write", "Edit"],
+      "expectedOutputs": ["reproduce/analysis.md"],
+      "maxTurns": 20,
+      "timeoutMs": 300000,
+      "idleTimeoutMs": 60000
+    },
+    "fixer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a senior engineer who writes minimal, surgical bug fixes. You change only what's necessary to fix the root cause. You never refactor unrelated code, add features, or 'improve' things that aren't broken.",
+      "prompt": "Fix this bug:\n\n{{bug}}\n\nThe reproducer's analysis is at reproduce/analysis.md — read it first.\n\nThe reproducer wrote a failing test. Find it and understand what it expects.\n\nRules:\n1. Read the analysis and the failing test first\n2. Fix the root cause — not the symptom\n3. Make the failing test pass\n4. Run the FULL test suite (not just the new test) and fix any regressions\n5. Change as few lines as possible — this is a bug fix, not a refactor\n6. If the fix requires a design decision, write your reasoning to fix/notes.md",
+      "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+      "maxTurns": 25,
+      "timeoutMs": 300000,
+      "idleTimeoutMs": 60000
+    },
+    "verifier": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a verification engineer. You confirm fixes are correct, complete, and haven't introduced regressions. You are skeptical by default and verify everything by running actual tests.",
+      "prompt": "Verify the bug fix for:\n\n{{bug}}\n\nSteps:\n1. Read the reproducer's analysis at reproduce/analysis.md\n2. Review the fix — what files were changed? Is the change minimal and correct?\n3. Run the full test suite and capture results\n4. Verify the reproducer's test now passes\n5. Check for regressions — any tests that passed before but fail now?\n6. Write a verification report to verify/report.md:\n   - First line: VERIFIED or FAILED\n   - Fix summary: what was changed and why\n   - Test results: pass/fail counts, any regressions\n   - Risk assessment: could this fix break anything in production?",
+      "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
+      "expectedOutputs": ["verify/report.md"],
+      "maxTurns": 15,
+      "timeoutMs": 180000,
+      "idleTimeoutMs": 60000
+    }
+  },
+  "edges": [
+    {
+      "id": "reproduce-to-fix",
+      "from": "reproducer",
+      "to": "fixer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "reproduce/analysis.md" }
+        ]
+      }
+    },
+    {
+      "id": "fix-to-verify",
+      "from": "fixer",
+      "to": "verifier",
+      "gate": {
+        "conditions": [
+          { "type": "exit_code", "value": 0 }
+        ]
+      }
+    }
+  ]
+}

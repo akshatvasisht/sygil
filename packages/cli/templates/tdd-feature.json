@@ -1,0 +1,81 @@
+{
+  "version": "1",
+  "name": "tdd-feature",
+  "description": "Test-driven development: plan → implement → review (loops back on failure, max 2 retries)",
+  "parameters": {
+    "task": {
+      "type": "string",
+      "description": "Feature to implement, e.g. 'Add rate-limiting middleware for /api routes'",
+      "required": true
+    }
+  },
+  "nodes": {
+    "planner": {
+      "adapter": "claude-cli",
+      "model": "opus",
+      "role": "You are a senior software architect who writes precise, actionable implementation plans. You think carefully about edge cases, API design, and testability. You always specify exact file paths and function signatures.",
+      "prompt": "Plan the implementation for:\n\n{{task}}\n\nFirst, explore the existing codebase to understand the project structure, language, framework, and conventions. Then produce a plan at planning/plan.md covering:\n\n1. **Context** — what exists today, what changes\n2. **Files to create or modify** — exact paths\n3. **Interface design** — function signatures, types, exports\n4. **Test cases** — list every test that must pass, including edge cases\n5. **Implementation order** — tests first (TDD), then implementation\n\nThe implementer will follow this plan exactly. Be precise enough that there's no ambiguity.",
+      "tools": ["Read", "Glob", "Grep", "Write"],
+      "expectedOutputs": ["planning/plan.md"],
+      "maxTurns": 15,
+      "timeoutMs": 180000,
+      "idleTimeoutMs": 60000
+    },
+    "implementer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are an expert software engineer who writes clean, well-tested code. You follow plans precisely and always run tests to verify your work. When given review feedback, you address every point before doing anything else.",
+      "prompt": "Implement the following feature:\n\n{{task}}\n\nRead the implementation plan at planning/plan.md first.\n\nRules:\n1. If review feedback exists in review/verdict.txt with CHANGES_REQUESTED, fix every issue mentioned before proceeding\n2. Write test files FIRST — follow the test cases from the plan\n3. Then write the implementation to make all tests pass\n4. Run the tests and fix failures\n5. Do NOT modify existing tests unless the plan explicitly says to\n6. Verify all tests pass before finishing",
+      "tools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+      "maxTurns": 30,
+      "timeoutMs": 600000,
+      "idleTimeoutMs": 90000
+    },
+    "reviewer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a meticulous code reviewer. You verify implementations against plans, check for bugs and security issues, and ensure tests are adequate. You are strict but fair — only request changes for real problems, not style preferences.",
+      "prompt": "Review the implementation of:\n\n{{task}}\n\nRead the plan at planning/plan.md, then review what the implementer built.\n\nReview checklist:\n1. Do test files exist and cover the requirements from the plan?\n2. Do the tests actually run and pass? (run them)\n3. Is the implementation correct — does it handle edge cases from the plan?\n4. Are there obvious bugs, security issues, or missing error handling?\n5. Does it follow the project's existing conventions?\n\nWrite your verdict to review/verdict.txt:\n- First line must be exactly: APPROVED or CHANGES_REQUESTED\n- Following lines: detailed explanation\n- If CHANGES_REQUESTED: list every specific change needed (the implementer will see this)",
+      "tools": ["Read", "Glob", "Grep", "Bash", "Write"],
+      "expectedOutputs": ["review/verdict.txt"],
+      "maxTurns": 20,
+      "timeoutMs": 180000,
+      "idleTimeoutMs": 60000
+    }
+  },
+  "edges": [
+    {
+      "id": "plan-to-implement",
+      "from": "planner",
+      "to": "implementer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "planning/plan.md" }
+        ]
+      }
+    },
+    {
+      "id": "implement-to-review",
+      "from": "implementer",
+      "to": "reviewer",
+      "gate": {
+        "conditions": [
+          { "type": "exit_code", "value": 0 }
+        ]
+      }
+    },
+    {
+      "id": "review-loop-back",
+      "from": "reviewer",
+      "to": "implementer",
+      "isLoopBack": true,
+      "maxRetries": 2,
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/verdict.txt" },
+          { "type": "script", "path": "gates/check-changes-requested.sh" }
+        ]
+      }
+    }
+  ]
+}

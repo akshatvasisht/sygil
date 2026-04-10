@@ -1,0 +1,48 @@
+{
+  "version": "1",
+  "name": "quick-review",
+  "description": "Fast 2-node demo: analyze code → write summary (under 1 minute)",
+  "parameters": {
+    "target": {
+      "type": "string",
+      "description": "File or directory to review (e.g., 'src/', 'lib/auth.ts')",
+      "required": true
+    }
+  },
+  "nodes": {
+    "analyzer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a senior engineer doing a quick code review. Be concise — no more than 50 lines of output.",
+      "prompt": "Review the code at {{target}}. Read the files, then write a brief report to review/analysis.md with:\n1. What the code does (2-3 sentences)\n2. Top 3 issues found (bugs, security, or quality)\n3. One-line fix suggestion for each\n\nKeep it SHORT. Under 50 lines total.",
+      "tools": ["Read", "Glob", "Grep", "Write"],
+      "expectedOutputs": ["review/analysis.md"],
+      "maxTurns": 10,
+      "timeoutMs": 120000,
+      "idleTimeoutMs": 30000
+    },
+    "summarizer": {
+      "adapter": "claude-cli",
+      "model": "haiku",
+      "role": "You produce one-paragraph executive summaries. Never exceed 5 sentences.",
+      "prompt": "Read review/analysis.md. Write a 3-5 sentence executive summary to review/summary.md. Include: what was reviewed, the most critical finding, and an overall quality score (1-10).",
+      "tools": ["Read", "Write"],
+      "expectedOutputs": ["review/summary.md"],
+      "maxTurns": 5,
+      "timeoutMs": 60000,
+      "idleTimeoutMs": 15000
+    }
+  },
+  "edges": [
+    {
+      "id": "analyze-to-summarize",
+      "from": "analyzer",
+      "to": "summarizer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/analysis.md" }
+        ]
+      }
+    }
+  ]
+}

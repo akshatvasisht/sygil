@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 
+  Sigil Logo - Dynamic Forward Slant
+  Mathematically perfect corner/face intersecting nodes!
+  -->
+
+  <g transform="rotate(-18 256 256)">
+    <!-- EDGES -->
+    <!-- Top Horizontal Edge -->
+    <line x1="368" y1="144" x2="144" y2="144" stroke="#000" stroke-width="48" stroke-linecap="square" />
+    
+    <!-- Middle 45-Degree Edge -->
+    <line x1="144" y1="144" x2="368" y2="368" stroke="#000" stroke-width="48" stroke-linecap="square" />
+    
+    <!-- Bottom Horizontal Edge -->
+    <line x1="368" y1="368" x2="144" y2="368" stroke="#000" stroke-width="48" stroke-linecap="square" />
+
+    <!-- NODES -->
+    <!-- Top Left Node -->
+    <rect x="96" y="96" width="96" height="96" fill="#000" />
+    
+    <!-- Top Right Node -->
+    <rect x="320" y="96" width="96" height="96" fill="#000" />
+    
+    <!-- Bottom Right Node -->
+    <rect x="320" y="320" width="96" height="96" fill="#000" />
+    
+    <!-- Bottom Left Node -->
+    <rect x="96" y="320" width="96" height="96" fill="#000" />
+  </g>
+</svg>

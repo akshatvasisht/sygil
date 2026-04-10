@@ -1,0 +1,824 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Tokens ───────────────────────────────── */
+:root {
+  --canvas: #09090b;
+  --surface: #111113;
+  --panel: #18181b;
+  --border: #27272a;
+  --border-bright: #3f3f46;
+  --muted: #3f3f46;
+  --subtle: #52525b;
+  --dim: #71717a;
+  --body: #a1a1aa;
+  --bright: #e4e4e7;
+  --white: #fafafa;
+
+  --accent: #FF5C00;
+  --accent-hover: #FF7A2E;
+  --accent-dim: #CC4A00;
+  --accent-glow: rgba(255, 92, 0, 0.15);
+
+  --success: #34d399;
+  --warning: #f5a623;
+  --error: #f0553e;
+}
+
+/* ── Base ─────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background-color: var(--canvas);
+  color: var(--body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--canvas);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Scrollbar ────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--canvas);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--subtle);
+}
+
+/* ── Selection — accent colored ───────────── */
+::selection {
+  background: rgba(255, 92, 0, 0.2);
+  color: var(--white);
+}
+
+/* ── Focus ring ───────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Code ─────────────────────────────────── */
+code,
+pre,
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Utility: hide scrollbar (step selector on mobile) ── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Utility: card inner-edge glow ────────── */
+.card-glow {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.card-glow-accent {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 92, 0, 0.18),
+    0 0 32px -8px rgba(255, 92, 0, 0.12),
+    0 0 0 1px rgba(255, 92, 0, 0.06);
+}
+
+/* DAG card — multi-adapter colored ambient glow */
+.card-glow-dag {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(255, 255, 255, 0.02),
+    -20px -10px 40px -20px rgba(129, 140, 248, 0.05),
+    20px -10px 40px -20px rgba(52, 211, 153, 0.04),
+    -20px 20px 40px -20px rgba(192, 132, 252, 0.04);
+}
+
+/* ── Noise texture overlay ───────────────── */
+.noise-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── CTA glow button ─────────────────────── */
+.cta-glow {
+  box-shadow:
+    0 0 24px rgba(255, 92, 0, 0.35),
+    0 0 60px rgba(255, 92, 0, 0.15),
+    0 0 120px rgba(255, 92, 0, 0.06),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+.cta-glow:hover {
+  box-shadow:
+    0 0 36px rgba(255, 92, 0, 0.5),
+    0 0 80px rgba(255, 92, 0, 0.22),
+    0 0 160px rgba(255, 92, 0, 0.08),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+}
+
+/* Satisfying press — inset shadow swap on click */
+.cta-glow:active {
+  transform: scale(0.97) !important;
+  box-shadow:
+    0 0 10px rgba(255, 92, 0, 0.2),
+    0 0 30px rgba(255, 92, 0, 0.06),
+    inset 0 2px 6px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  transition: all 0.08s ease !important;
+}
+
+/* ── Code block premium styling ──────────── */
+.code-block-premium {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 4px 24px -4px rgba(0, 0, 0, 0.6),
+    0 12px 48px -8px rgba(0, 0, 0, 0.4),
+    0 24px 80px -12px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* ── Code line number gutter ────────────── */
+.code-line-number {
+  color: rgba(255, 255, 255, 0.08);
+  user-select: none;
+  text-align: right;
+  min-width: 2ch;
+  padding-right: 1em;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  margin-right: 1em;
+}
+
+/* ── Terminal syntax colors — subtle glow for colored tokens ── */
+.terminal-key { color: #818cf8; text-shadow: 0 0 14px rgba(129, 140, 248, 0.12); }
+.terminal-string { color: #34d399; text-shadow: 0 0 14px rgba(52, 211, 153, 0.12); }
+.terminal-number { color: #f5a623; text-shadow: 0 0 14px rgba(245, 166, 35, 0.12); }
+.terminal-operator { color: var(--subtle); }
+.terminal-success { color: #34d399; text-shadow: 0 0 14px rgba(52, 211, 153, 0.15); }
+.terminal-error { color: #f0553e; text-shadow: 0 0 14px rgba(240, 85, 62, 0.15); }
+.terminal-accent { color: var(--accent); text-shadow: 0 0 14px rgba(255, 92, 0, 0.15); }
+.terminal-prompt { color: var(--subtle); }
+.terminal-dim { color: var(--dim); }
+
+/* ── React Flow overrides ─────────────────── */
+.react-flow__renderer {
+  background: transparent !important;
+}
+
+.react-flow__background {
+  background-color: transparent !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 1.5;
+}
+
+.react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  border-width: 1.5px !important;
+  background: var(--panel) !important;
+  border-color: var(--border-bright) !important;
+  transition: all 0.15s ease !important;
+}
+
+/* Input handle — hollow ring */
+.react-flow__handle.handle-target {
+  background: var(--panel) !important;
+  border-color: var(--border-bright) !important;
+}
+
+/* Output handle — filled dot */
+.react-flow__handle.handle-source {
+  background: var(--border-bright) !important;
+  border-color: var(--border-bright) !important;
+}
+
+.react-flow__handle:hover {
+  border-color: var(--accent) !important;
+  background: var(--accent) !important;
+}
+
+.react-flow__controls {
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: var(--panel) !important;
+  border-color: var(--border) !important;
+  color: var(--dim) !important;
+  fill: var(--dim) !important;
+  transition: all 0.15s ease !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--border) !important;
+  color: var(--bright) !important;
+  fill: var(--bright) !important;
+}
+
+.react-flow__minimap {
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(9, 9, 11, 0.85) !important;
+}
+
+.react-flow__minimap-node {
+  fill: var(--border-bright) !important;
+  stroke: none !important;
+  rx: 2;
+}
+
+/* ── Context menu ────────────────────────── */
+.context-menu {
+  animation: context-menu-in 0.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── Sidebar collapse toggle ─────────────── */
+.sidebar-toggle {
+  transition: background-color 0.15s ease,
+              color 0.15s ease;
+}
+
+.sidebar-toggle:hover {
+  background-color: var(--surface);
+  color: var(--dim);
+}
+
+/* ── Shortcuts popover ───────────────────── */
+.shortcuts-popover {
+  animation: shortcuts-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes shortcuts-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Node state animations (GPU-composited) ── */
+@keyframes node-running-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 92, 0, 0.4),
+      0 0 16px rgba(255, 92, 0, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 92, 0, 0.08),
+      0 0 32px rgba(255, 92, 0, 0.3);
+  }
+}
+
+@keyframes gate-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.4),
+      0 0 16px rgba(245, 166, 35, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(245, 166, 35, 0.1),
+      0 0 32px rgba(245, 166, 35, 0.3);
+  }
+}
+
+/* Animated node states — box-shadow is not GPU-compositable,
+   so will-change just wastes a layer. Let the browser handle it. */
+
+.node-running {
+  animation: node-running-pulse 2s ease-in-out infinite;
+  border-color: var(--accent) !important;
+}
+
+.node-completed {
+  border-color: var(--success) !important;
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.12);
+}
+
+.node-failed {
+  border-color: var(--error) !important;
+  box-shadow: 0 0 16px rgba(240, 85, 62, 0.12);
+}
+
+.node-gate {
+  animation: gate-pulse 1.5s ease-in-out infinite;
+  border-color: var(--warning) !important;
+}
+
+/* ── Terminal cursor — warm glow pulse ────── */
+.terminal-cursor::after {
+  content: "\25CA";
+  animation: cursor-glow 1.2s ease-in-out infinite;
+  color: var(--accent);
+  font-size: 0.85em;
+  margin-left: 1px;
+  text-shadow: 0 0 8px rgba(255, 92, 0, 0.6);
+}
+
+@keyframes cursor-glow {
+  0%, 100% {
+    opacity: 1;
+    text-shadow: 0 0 8px rgba(255, 92, 0, 0.6);
+  }
+  40% {
+    opacity: 0;
+    text-shadow: 0 0 0px rgba(255, 92, 0, 0);
+  }
+}
+
+/* ── Nav link hover underline ────────────── */
+.nav-link {
+  position: relative;
+}
+
+.nav-link::after {
+  content: "";
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: var(--dim);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nav-link:hover::after {
+  transform: scaleX(1);
+}
+
+/* ── Logo hover — subtle accent tint ─────── */
+.logo-mark {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              filter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.logo-mark:hover {
+  transform: scale(1.08);
+}
+
+.logo-mark:hover svg {
+  filter: drop-shadow(0 0 6px rgba(255, 92, 0, 0.35));
+}
+
+/* ── CTA button hover lift ───────────────── */
+.cta-editor {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.2s ease,
+              box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cta-editor:hover {
+  transform: translateY(-1px);
+}
+
+.cta-editor:active {
+  transform: translateY(1px);
+  transition: transform 0.08s ease;
+}
+
+/* ── Step button hover — border brightens ── */
+.step-btn {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.step-btn:hover {
+  transform: translateX(2px);
+}
+
+.step-btn:active {
+  transform: translateX(0px);
+}
+
+/* ── Step active accent bar transition ───── */
+.step-accent-bar {
+  animation: accent-bar-grow 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes accent-bar-grow {
+  from {
+    opacity: 0;
+    transform: scaleY(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+/* ── Code block chrome dots hover ────────── */
+.chrome-dot {
+  transition: background-color 0.15s ease;
+}
+
+.code-chrome:hover .chrome-dot:nth-child(1) {
+  background-color: #f0553e;
+}
+
+.code-chrome:hover .chrome-dot:nth-child(2) {
+  background-color: #f5a623;
+}
+
+.code-chrome:hover .chrome-dot:nth-child(3) {
+  background-color: #34d399;
+}
+
+/* ── Hero accent text glow + shimmer ────── */
+@keyframes accent-shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.hero-accent-text {
+  background: linear-gradient(
+    90deg,
+    #FF5C00 0%,
+    #FF5C00 40%,
+    #FF9A5C 50%,
+    #FF5C00 60%,
+    #FF5C00 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: accent-shimmer 8s ease-in-out infinite;
+  filter: drop-shadow(0 0 20px rgba(255, 92, 0, 0.3))
+          drop-shadow(0 0 60px rgba(255, 92, 0, 0.1));
+}
+
+/* ── Closing CTA atmospheric glow ────────── */
+.cta-section-glow {
+  position: relative;
+}
+
+.cta-section-glow::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 700px;
+  height: 400px;
+  background: radial-gradient(ellipse 60% 50% at 50% 50%, rgba(255, 92, 0, 0.06) 0%, rgba(255, 92, 0, 0.02) 40%, transparent 70%);
+  pointer-events: none;
+}
+
+.cta-section-glow::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, rgba(255, 92, 0, 0.12) 30%, rgba(255, 92, 0, 0.12) 70%, transparent);
+}
+
+/* ── Code block adapter-tinted top border ── */
+.code-block-json {
+  border-top: 1px solid rgba(129, 140, 248, 0.15);
+}
+
+.code-block-terminal {
+  border-top: 1px solid rgba(255, 92, 0, 0.15);
+}
+
+/* ── Terminal scanlines — ultra subtle ───── */
+.terminal-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.008) 2px,
+    rgba(255, 255, 255, 0.008) 4px
+  );
+}
+
+/* ── DAG SVG node pulse ─────────────────── */
+@keyframes dag-node-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+.dag-node-pulse {
+  animation: dag-node-pulse 2s ease-in-out infinite;
+}
+
+/* ── DAG edge flow animation ────────────── */
+@keyframes dag-edge-flow {
+  from { stroke-dashoffset: 220; }
+  to { stroke-dashoffset: 0; }
+}
+
+.dag-edge-pulse {
+  animation: dag-edge-flow 0.8s ease-out forwards;
+}
+
+/* ── Section transition gradient ────────── */
+.section-transition {
+  position: relative;
+}
+
+.section-transition::before {
+  content: "";
+  position: absolute;
+  top: -100px;
+  left: 0;
+  right: 0;
+  height: 200px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(255, 92, 0, 0.02) 40%,
+    rgba(255, 92, 0, 0.02) 60%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* ── Hero headline gradient underline ────── */
+.hero-headline-accent {
+  position: relative;
+  display: inline;
+}
+
+.hero-headline-accent::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 2px;
+  background: linear-gradient(to right, #FF5C00, rgba(255, 92, 0, 0.2), transparent);
+  border-radius: 1px;
+}
+
+/* ── Bold section divider ───────────────── */
+.section-divider-bold {
+  position: relative;
+}
+
+.section-divider-bold::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 120px;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--accent), transparent);
+  opacity: 0.4;
+}
+
+/* ── View Source button — subtle border glow ── */
+.view-source-btn {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.view-source-btn:hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06),
+              0 4px 16px -4px rgba(0, 0, 0, 0.4);
+}
+
+.view-source-btn:active {
+  transform: scale(0.98);
+  transition: transform 0.08s ease;
+}
+
+/* ── Version badge hover reveal ──────────── */
+.version-badge {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: default;
+}
+
+.version-badge:hover {
+  border-color: rgba(255, 92, 0, 0.2);
+  background-color: rgba(255, 92, 0, 0.04);
+}
+
+/* ── Terminal line hover highlight ────────── */
+.terminal-line-hover {
+  transition: background-color 0.15s ease;
+  margin: 0 -1rem;
+  padding: 0 1rem;
+  border-radius: 2px;
+}
+
+.terminal-line-hover:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* ── Code line hover highlight (HowItWorks) ── */
+.code-hover-line {
+  transition: background-color 0.1s ease;
+  margin: 0 -0.5rem;
+  padding: 0 0.5rem;
+}
+
+.code-hover-line:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* ── DAG card hover lift ─────────────────── */
+.dag-card-tilt {
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dag-card-tilt:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 8px 32px -8px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Step progress bar (HowItWorks) ──────── */
+.step-progress-track {
+  position: relative;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.step-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 1px;
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 8px rgba(255, 92, 0, 0.3);
+}
+
+/* ── Adapter dot staggered float ─────────── */
+@keyframes adapter-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+.adapter-dot {
+  animation: adapter-float 3s ease-in-out infinite;
+}
+
+.adapter-dot:nth-child(2) { animation-delay: 0.4s; }
+.adapter-dot:nth-child(3) { animation-delay: 0.8s; }
+.adapter-dot:nth-child(4) { animation-delay: 1.2s; }
+
+/* ── Nav CTA bottom accent line ──────────── */
+.nav-cta-glow {
+  position: relative;
+}
+
+.nav-cta-glow::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: rgba(255, 92, 0, 0.4);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.nav-cta-glow:hover::after {
+  opacity: 1;
+}
+
+/* ── Footer logo hover ───────────────────── */
+.footer-logo {
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.footer-logo:hover {
+  opacity: 0.7;
+}
+
+/* ── HeroSigil traveling wave ─────────────── */
+@keyframes sigilWave {
+  0%   { fill-opacity: 0.18; fill: #FF5C00; }
+  5%   { fill-opacity: 0.8;  fill: #FF8A22; }
+  15%  { fill-opacity: 0.18; fill: #FF5C00; }
+  100% { fill-opacity: 0.18; fill: #FF5C00; }
+}
+
+/* No will-change here — fill/fill-opacity don't benefit from compositor layers */
+.sigil-travel {
+  animation: sigilWave 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ── Below-fold content visibility ────────── */
+/* Skip rendering off-screen sections until near viewport */
+.below-fold {
+  content-visibility: auto;
+  /* Approximate height prevents layout jump when section enters viewport */
+  contain-intrinsic-size: 0 700px;
+}
+
+/* ── Reduced motion ───────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  .logo-mark:hover {
+    transform: none;
+  }
+
+  .step-btn:hover {
+    transform: none;
+  }
+
+  .cta-editor:hover,
+  .cta-editor:active {
+    transform: none;
+  }
+
+  .dag-card-tilt:hover {
+    transform: none;
+  }
+
+  .view-source-btn:active {
+    transform: none;
+  }
+
+  .hero-accent-text {
+    background: none;
+    -webkit-background-clip: unset;
+    background-clip: unset;
+    -webkit-text-fill-color: #FF5C00;
+    animation: none;
+  }
+
+  .adapter-dot {
+    animation: none;
+  }
+}

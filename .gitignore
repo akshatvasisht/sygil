@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+dist-ui/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# Vite
+.vite/
+
+# Test coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Environment
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# Sigil runtime
+.sigil/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.local
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Claude agent worktrees
+.claude/worktrees/
+
+# Misc
+*.tgz
+.cache/

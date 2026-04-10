@@ -1,0 +1,100 @@
+{
+  "version": "1",
+  "name": "code-review",
+  "description": "Parallel code review: analyze → [security + performance] → synthesize",
+  "parameters": {
+    "target": {
+      "type": "string",
+      "description": "File or directory to review (e.g., 'src/', 'lib/auth.ts')",
+      "required": true
+    }
+  },
+  "nodes": {
+    "analyzer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a senior software engineer conducting a thorough code analysis. You read source files carefully and produce structured, actionable reports.",
+      "prompt": "Analyze the code at: {{target}}\n\nRead through the files and produce a report at review/analysis.md covering:\n1. Architecture overview — how modules are organized, key abstractions, data flow\n2. Code quality — naming, error handling, duplication, complexity hotspots\n3. Test coverage gaps — what's tested, what's missing, what's fragile\n4. Dependencies — anything outdated, risky, or unnecessary\n\nBe specific. Reference file paths and line numbers. Keep it under 500 lines.",
+      "tools": ["Read", "Glob", "Grep", "Bash"],
+      "expectedOutputs": ["review/analysis.md"],
+      "maxTurns": 25,
+      "timeoutMs": 300000,
+      "idleTimeoutMs": 60000
+    },
+    "security-reviewer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a security engineer specializing in application security. You identify vulnerabilities with specific code references and severity ratings.",
+      "prompt": "Perform a security review of the code at: {{target}}\n\nThe code analysis report is available at review/analysis.md — read it first for context.\n\nFocus on:\n- Input validation and sanitization (SQL injection, XSS, command injection, path traversal)\n- Authentication and authorization flaws\n- Sensitive data exposure (secrets in code, logging PII, insecure storage)\n- Insecure dependencies (check package.json / requirements.txt / go.mod)\n- Cryptographic issues\n\nWrite findings to review/security.md. Rate each issue CRITICAL / HIGH / MEDIUM / LOW. Include the exact file:line and a suggested fix for each.",
+      "tools": ["Read", "Glob", "Grep", "Bash"],
+      "expectedOutputs": ["review/security.md"],
+      "maxTurns": 20,
+      "timeoutMs": 300000,
+      "idleTimeoutMs": 60000
+    },
+    "perf-reviewer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a performance engineer. You identify bottlenecks, inefficiencies, and scaling risks with concrete data and recommendations.",
+      "prompt": "Perform a performance review of the code at: {{target}}\n\nThe code analysis report is available at review/analysis.md — read it first for context.\n\nFocus on:\n- Algorithmic complexity — O(n²) loops, unnecessary sorting, repeated traversals\n- Memory — large allocations, unbounded caches, leaks in long-lived processes\n- I/O — N+1 queries, synchronous blocking, missing connection pooling\n- Concurrency — race conditions, lock contention, missed parallelism opportunities\n- Bundle/startup — unnecessary imports, cold start costs, tree-shaking gaps\n\nWrite findings to review/performance.md. Rate each issue by impact (HIGH / MEDIUM / LOW) and include a suggested fix.",
+      "tools": ["Read", "Glob", "Grep", "Bash"],
+      "expectedOutputs": ["review/performance.md"],
+      "maxTurns": 20,
+      "timeoutMs": 300000,
+      "idleTimeoutMs": 60000
+    },
+    "synthesizer": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a technical lead writing an executive summary from multiple review reports. You prioritize ruthlessly and give clear next-steps.",
+      "prompt": "Read all three review reports:\n- review/analysis.md (code quality)\n- review/security.md (security)\n- review/performance.md (performance)\n\nSynthesize them into a single actionable report at review/SUMMARY.md with:\n\n1. **Executive Summary** — 3-5 bullet overall assessment\n2. **Critical Issues** — anything that must be fixed before shipping (from any report)\n3. **Recommended Improvements** — prioritized list, grouped by effort (quick wins vs. larger refactors)\n4. **Scores** — rate each dimension 1-10: Code Quality, Security, Performance, Test Coverage\n5. **Next Steps** — top 5 concrete actions in priority order\n\nKeep it concise and actionable. No filler.",
+      "tools": ["Read", "Write"],
+      "expectedOutputs": ["review/SUMMARY.md"],
+      "maxTurns": 10,
+      "timeoutMs": 120000,
+      "idleTimeoutMs": 30000
+    }
+  },
+  "edges": [
+    {
+      "id": "analysis-to-security",
+      "from": "analyzer",
+      "to": "security-reviewer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/analysis.md" }
+        ]
+      }
+    },
+    {
+      "id": "analysis-to-perf",
+      "from": "analyzer",
+      "to": "perf-reviewer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/analysis.md" }
+        ]
+      }
+    },
+    {
+      "id": "security-to-synth",
+      "from": "security-reviewer",
+      "to": "synthesizer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/security.md" }
+        ]
+      }
+    },
+    {
+      "id": "perf-to-synth",
+      "from": "perf-reviewer",
+      "to": "synthesizer",
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "review/performance.md" }
+        ]
+      }
+    }
+  ]
+}
