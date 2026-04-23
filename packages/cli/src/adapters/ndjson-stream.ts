@@ -1,6 +1,10 @@
-import type { AgentEvent } from "@sigil/shared";
+import type { AgentEvent } from "@sygil/shared";
+import { logger } from "../utils/logger.js";
 
 export const DEFAULT_QUEUE_HIGH_WATER_MARK = 1_000;
+
+/** Internal: warn-once guard per-session so a runaway adapter doesn't spam logs. */
+const droppedWarned = new WeakSet<object>();
 
 /**
  * Minimal internal state required by the streaming helpers.
@@ -25,8 +29,18 @@ export function pushEvent(internal: StreamableInternal, ev: AgentEvent): boolean
     res(ev);
     return true;
   }
-  // Drop events silently if queue is at 2x high-water mark (hard cap)
+  // Hard cap at 2x high-water mark: drop the event. Warn exactly once per
+  // session so operators get observability without log spam — silent drops
+  // break NDJSON replay and cost accounting, so a producer hitting the cap
+  // is either a bug in the adapter or a stalled downstream consumer.
   if (internal.eventQueue.length >= internal.maxQueueSize * 2) {
+    if (!droppedWarned.has(internal)) {
+      droppedWarned.add(internal);
+      logger.warn(
+        `[ndjson-stream] Event queue at hard cap (${internal.maxQueueSize * 2}); ` +
+        `dropping events of type "${ev.type}" — downstream consumer is not draining.`,
+      );
+    }
     return false;
   }
   internal.eventQueue.push(ev);

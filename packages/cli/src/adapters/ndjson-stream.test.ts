@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { AgentEvent } from "@sigil/shared";
+import type { AgentEvent } from "@sygil/shared";
 import {
   pushEvent,
   finishStream,

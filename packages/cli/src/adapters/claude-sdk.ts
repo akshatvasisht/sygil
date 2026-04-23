@@ -12,8 +12,8 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
-} from "@sigil/shared";
-import { SigilErrorCode, STALL_EXIT_CODE } from "@sigil/shared";
+} from "@sygil/shared";
+import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Security helper — path-traversal-safe tool permission check
@@ -155,13 +155,13 @@ export class ClaudeSDKAdapter implements AgentAdapter {
     const exitCode = Number(summary["exitCode"] ?? 0);
 
     // Map exit code to structured error code
-    let errorCode: SigilErrorCode | undefined;
+    let errorCode: SygilErrorCode | undefined;
     if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SigilErrorCode.NODE_STALLED;
+      errorCode = SygilErrorCode.NODE_STALLED;
     } else if (exitCode === 124) {
-      errorCode = SigilErrorCode.NODE_TIMEOUT;
+      errorCode = SygilErrorCode.NODE_TIMEOUT;
     } else if (exitCode !== 0) {
-      errorCode = SigilErrorCode.NODE_CRASHED;
+      errorCode = SygilErrorCode.NODE_CRASHED;
     }
 
     return {

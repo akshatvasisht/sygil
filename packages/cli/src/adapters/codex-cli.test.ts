@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
 import { CodexCLIAdapter } from "./codex-cli.js";
-import type { AgentSession } from "@sigil/shared";
+import type { AgentSession } from "@sygil/shared";
 import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -271,6 +271,43 @@ describe("CodexCLIAdapter", () => {
       expect(typeof session.id).toBe("string");
       expect(session.startedAt).toBeInstanceOf(Date);
     });
+
+    it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+      await adapter.spawn({
+        adapter: "codex",
+        model: "o4-mini",
+        role: "agent",
+        prompt: "task",
+        tools: ["Read", "Write"],
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/codex adapter ignores NodeConfig\.tools.*Read.*Write/)
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("does not warn when NodeConfig.tools is omitted or empty", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+      await adapter.spawn({
+        adapter: "codex",
+        model: "o4-mini",
+        role: "agent",
+        prompt: "task",
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -505,6 +542,32 @@ describe("CodexCLIAdapter", () => {
       expect(result).not.toHaveProperty("costUsd");
       expect(result).not.toHaveProperty("tokenUsage");
     });
+
+    it("force-kills and returns within the timeout budget when the child never marks done", async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeFakeProc();
+        const session = makeSession(adapter, proc);
+        // internal.done stays false, exitCode stays null — simulates the stuck-teardown case.
+
+        const resultPromise = adapter.getResult(session);
+
+        // Advance past CODEX_GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
+        await vi.advanceTimersByTimeAsync(10_000);
+        // SIGTERM should have been sent immediately on timeout.
+        expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+
+        // The child never exits — advance past GETRESULT_KILL_GRACE_MS (2_000).
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+
+        const result = await resultPromise;
+        // Force-teardown path synthesizes exitCode=1 when the child never reported one.
+        expect(result.exitCode).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -517,13 +580,27 @@ describe("CodexCLIAdapter", () => {
       expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
     });
 
-    it("does not send SIGTERM when already done", async () => {
+    // Kill gates on process liveness (proc.exitCode / proc.killed), NOT on
+    // internal.done — the stall path flips internal.done=true BEFORE the
+    // process exits.
+    it("does not send SIGTERM when the process is already dead", async () => {
+      const proc = makeFakeProc();
+      proc.exitCode = 0;
+      const session = makeSession(adapter, proc);
+
+      await adapter.kill(session);
+      expect(proc.kill).not.toHaveBeenCalled();
+    });
+
+    it("still sends SIGTERM when internal.done is true but the process is alive (stall-path leak)", async () => {
       const proc = makeFakeProc();
       const session = makeSession(adapter, proc);
       (session._internal as { done: boolean }).done = true;
 
-      await adapter.kill(session);
-      expect(proc.kill).not.toHaveBeenCalled();
+      const killPromise = adapter.kill(session);
+      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+      proc.emit("exit", 0);
+      await killPromise;
     });
   });
 

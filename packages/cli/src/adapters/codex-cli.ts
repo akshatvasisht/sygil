@@ -1,17 +1,32 @@
 import { spawn, execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import type {
   AgentAdapter,
   AgentSession,
   AgentEvent,
   NodeConfig,
   NodeResult,
-} from "@sigil/shared";
-import { SigilErrorCode, STALL_EXIT_CODE } from "@sigil/shared";
+} from "@sygil/shared";
+import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
+import { waitForDoneOrTimeout } from "./await-done.js";
+import { logger } from "../utils/logger.js";
 
 /** Grace period in ms before emitting a stall event after stdout closes without process exit */
 const STALL_GRACE_MS = 5_000;
+
+/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
+ * never legitimately exceed this; if it does, we assume a hung socket or a misbehaving
+ * MCP server pinning the child and force-kill so the workflow isn't pinned forever. */
+const CODEX_GETRESULT_TIMEOUT_MS = 10_000;
+
+/** Grace period after SIGTERM before SIGKILL during getResult's forced teardown. */
+const GETRESULT_KILL_GRACE_MS = 2_000;
+
+/** Polling cadence while waiting for the child to exit in getResult. */
+const GETRESULT_POLL_INTERVAL_MS = 50;
 
 interface TokenUsage {
   input: number;
@@ -45,6 +60,15 @@ export class CodexCLIAdapter implements AgentAdapter {
   }
 
   async spawn(config: NodeConfig): Promise<AgentSession> {
+    // Codex exposes `--sandbox` but no tool-name allowlist flag; `NodeConfig.tools`
+    // is accepted for cross-adapter shape parity but has no runtime effect here
+    // Warn so users don't silently assume tools are sandboxed.
+    if (config.tools && config.tools.length > 0) {
+      logger.warn(
+        `codex adapter ignores NodeConfig.tools (no upstream allowlist flag): ${config.tools.join(", ")}`
+      );
+    }
+
     const sandbox = config.sandbox ?? "workspace-write";
     const cwd = config.outputDir ?? process.cwd();
 
@@ -157,9 +181,12 @@ export class CodexCLIAdapter implements AgentAdapter {
 
     let stdoutClosed = false;
     let lineBuffer = "";
+    // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
+    // chunk boundaries (see claude-cli.ts for rationale).
+    const stdoutDecoder = new StringDecoder("utf8");
 
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
+      lineBuffer += stdoutDecoder.write(chunk);
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
       for (const line of lines) {
@@ -173,6 +200,7 @@ export class CodexCLIAdapter implements AgentAdapter {
     });
 
     proc.stdout?.on("end", () => {
+      lineBuffer += stdoutDecoder.end();
       if (lineBuffer.trim()) {
         internal.outputLines.push(lineBuffer.trim());
         const event = this.parseLine(lineBuffer.trim(), internal);
@@ -211,125 +239,23 @@ export class CodexCLIAdapter implements AgentAdapter {
   }
 
   private parseLine(line: string, internal: CodexInternal): AgentEvent | null {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      if (process.env["SIGIL_DEBUG"]) {
-        process.stderr.write(`[codex-cli] malformed NDJSON (first 200 chars): ${line.slice(0, 200)}\n`);
-      }
-      return null;
-    }
-
-    const type = parsed["type"] as string | undefined;
-
-    switch (type) {
-      case "turn.started":
-        return null; // No user-facing event for this
-
-      case "turn.completed":
-      case "item.done": {
-        // Extract cost/usage information from completed turn events
-        const usage = (parsed["usage"] ?? parsed["cost"] ?? (parsed["data"] as Record<string, unknown> | undefined)?.["usage"]) as Record<string, unknown> | undefined;
-        if (usage) {
-          internal.totalCostUsd = Number(usage["total_cost"] ?? usage["cost_usd"] ?? internal.totalCostUsd);
-          internal.tokenUsage = {
-            input: Number(usage["input_tokens"] ?? usage["prompt_tokens"] ?? 0),
-            output: Number(usage["output_tokens"] ?? usage["completion_tokens"] ?? 0),
-          };
-          if (internal.totalCostUsd > 0) {
-            return { type: "cost_update", totalCostUsd: internal.totalCostUsd };
-          }
+    return dispatchEventLine(line, CODEX_EVENT_MAPPING, internal, {
+      onParseError: (bad) => {
+        if (process.env["SYGIL_DEBUG"]) {
+          process.stderr.write(`[codex-cli] malformed NDJSON (first 200 chars): ${bad.slice(0, 200)}\n`);
         }
-        return null;
-      }
-
-      case "turn.failed":
-        return { type: "error", message: String(parsed["error"] ?? "turn failed") };
-
-      case "item.created":
-      case "item.updated": {
-        const item = parsed["item"] as Record<string, unknown> | undefined;
-        if (!item) return null;
-
-        const itemType = item["type"] as string | undefined;
-
-        if (itemType === "message") {
-          const content = item["content"];
-          let text = "";
-          if (typeof content === "string") {
-            text = content;
-          } else if (Array.isArray(content)) {
-            text = (content as Array<Record<string, unknown>>)
-              .filter((c) => c["type"] === "text")
-              .map((c) => String(c["text"] ?? ""))
-              .join("");
-          }
-          if (text) {
-            internal.outputText += text;
-            return { type: "text_delta", text };
-          }
-          return null;
-        }
-
-        if (itemType === "function_call") {
-          let input: Record<string, unknown> = {};
-          try {
-            input = JSON.parse(String(item["arguments"] ?? "{}")) as Record<string, unknown>;
-          } catch {
-            input = { raw: item["arguments"] };
-          }
-          return {
-            type: "tool_call",
-            tool: String(item["name"] ?? ""),
-            input,
-          };
-        }
-
-        if (itemType === "function_call_output") {
-          const output = String(item["output"] ?? "");
-          // Heuristic: detect shell exec by checking for exit code field
-          if (typeof item["exit_code"] === "number") {
-            return {
-              type: "shell_exec",
-              command: String(item["call_id"] ?? ""),
-              exitCode: item["exit_code"] as number,
-            };
-          }
-          return {
-            type: "tool_result",
-            tool: String(item["call_id"] ?? ""),
-            output,
-            success: true,
-          };
-        }
-
-        return null;
-      }
-
-      case "cost": {
-        const cost = Number(parsed["total_cost_usd"] ?? 0);
-        internal.totalCostUsd = cost;
-        return { type: "cost_update", totalCostUsd: cost };
-      }
-
-      default:
-        return null;
-    }
+      },
+    });
   }
 
   async getResult(session: AgentSession): Promise<NodeResult> {
     const internal = session._internal as CodexInternal;
 
     if (!internal.done || internal.exitCode === null) {
-      // Poll rather than listening for "exit" because the stall path marks done=true
-      // without the process exiting — we need to handle both cases.
-      await new Promise<void>((resolve) => {
-        const check = (): void => {
-          if (internal.done) resolve();
-          else setTimeout(check, 50);
-        };
-        check();
+      await waitForDoneOrTimeout(internal, {
+        timeoutMs: CODEX_GETRESULT_TIMEOUT_MS,
+        pollIntervalMs: GETRESULT_POLL_INTERVAL_MS,
+        killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
     }
 
@@ -343,13 +269,13 @@ export class CodexCLIAdapter implements AgentAdapter {
       : undefined;
 
     // Map exit code to structured error code
-    let errorCode: SigilErrorCode | undefined;
+    let errorCode: SygilErrorCode | undefined;
     if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SigilErrorCode.NODE_STALLED;
+      errorCode = SygilErrorCode.NODE_STALLED;
     } else if (exitCode === 124) {
-      errorCode = SigilErrorCode.NODE_TIMEOUT;
+      errorCode = SygilErrorCode.NODE_TIMEOUT;
     } else if (exitCode !== 0) {
-      errorCode = SigilErrorCode.NODE_CRASHED;
+      errorCode = SygilErrorCode.NODE_CRASHED;
     }
 
     return {
@@ -365,7 +291,15 @@ export class CodexCLIAdapter implements AgentAdapter {
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as CodexInternal;
-    if (!internal.done) {
+    // Guard on process liveness, NOT on internal.done. The stall path flips
+    // done=true (via push(stall) + finish()) BEFORE the process exits, so
+    // an `if (!internal.done)` check here would silently skip termination
+    // and leak the child. The scheduler's stall handler calls adapter.kill
+    // expecting the child to die — gate on `proc.exitCode === null` (the only
+    // reliable liveness signal; Node's `proc.killed` means "signal was sent",
+    // not "process exited", so it turns true right after SIGTERM while the
+    // child is still running and about to need SIGKILL).
+    if (internal.proc.exitCode === null) {
       if (internal.stallTimer !== null) {
         clearTimeout(internal.stallTimer);
         internal.stallTimer = null;
@@ -384,6 +318,103 @@ export class CodexCLIAdapter implements AgentAdapter {
     }
   }
 }
+
+const handleTurnCompleted = (
+  raw: Record<string, unknown>,
+  internal: CodexInternal,
+): AgentEvent | null => {
+  const usage = (raw["usage"] ??
+    raw["cost"] ??
+    (raw["data"] as Record<string, unknown> | undefined)?.["usage"]) as
+    | Record<string, unknown>
+    | undefined;
+  if (usage) {
+    internal.totalCostUsd = Number(
+      usage["total_cost"] ?? usage["cost_usd"] ?? internal.totalCostUsd,
+    );
+    internal.tokenUsage = {
+      input: Number(usage["input_tokens"] ?? usage["prompt_tokens"] ?? 0),
+      output: Number(usage["output_tokens"] ?? usage["completion_tokens"] ?? 0),
+    };
+    if (internal.totalCostUsd > 0) {
+      return { type: "cost_update", totalCostUsd: internal.totalCostUsd };
+    }
+  }
+  return null;
+};
+
+const handleItemEvent = (
+  raw: Record<string, unknown>,
+  internal: CodexInternal,
+): AgentEvent | null => {
+  const item = raw["item"] as Record<string, unknown> | undefined;
+  if (!item) return null;
+  const itemType = item["type"] as string | undefined;
+
+  if (itemType === "message") {
+    const content = item["content"];
+    let text = "";
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      text = (content as Array<Record<string, unknown>>)
+        .filter((c) => c["type"] === "text")
+        .map((c) => String(c["text"] ?? ""))
+        .join("");
+    }
+    if (text) {
+      internal.outputText += text;
+      return { type: "text_delta", text };
+    }
+    return null;
+  }
+
+  if (itemType === "function_call") {
+    let input: Record<string, unknown> = {};
+    try {
+      input = JSON.parse(String(item["arguments"] ?? "{}")) as Record<string, unknown>;
+    } catch {
+      input = { raw: item["arguments"] };
+    }
+    return { type: "tool_call", tool: String(item["name"] ?? ""), input };
+  }
+
+  if (itemType === "function_call_output") {
+    const output = String(item["output"] ?? "");
+    if (typeof item["exit_code"] === "number") {
+      return {
+        type: "shell_exec",
+        command: String(item["call_id"] ?? ""),
+        exitCode: item["exit_code"] as number,
+      };
+    }
+    return {
+      type: "tool_result",
+      tool: String(item["call_id"] ?? ""),
+      output,
+      success: true,
+    };
+  }
+
+  return null;
+};
+
+const CODEX_EVENT_MAPPING: EventMapping<Record<string, unknown>, CodexInternal> = {
+  "turn.started": () => null,
+  "turn.completed": handleTurnCompleted,
+  "item.done": handleTurnCompleted,
+  "turn.failed": (raw) => ({
+    type: "error",
+    message: String(raw["error"] ?? "turn failed"),
+  }),
+  "item.created": handleItemEvent,
+  "item.updated": handleItemEvent,
+  cost: (raw, internal) => {
+    const cost = Number(raw["total_cost_usd"] ?? 0);
+    internal.totalCostUsd = cost;
+    return { type: "cost_update", totalCostUsd: cost };
+  },
+};
 
 /**
  * Best-effort: try to extract the last JSON object from a text string.

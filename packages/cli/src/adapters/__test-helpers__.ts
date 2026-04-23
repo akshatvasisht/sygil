@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
-import type { AgentEvent } from "@sigil/shared";
+import type { AgentEvent } from "@sygil/shared";
 
 /**
  * Creates a minimal fake ChildProcess with controllable stdout/stderr streams.
@@ -16,12 +16,30 @@ export function makeFakeProc() {
     stderr: typeof stderr;
     kill: ReturnType<typeof vi.fn>;
     pid: number;
+    // Match Node's real ChildProcess surface so adapters that gate on process
+    // liveness (`proc.exitCode === null && !proc.killed`) see the right state.
+    // Without these, a fake proc reads `exitCode === undefined` — strict-null
+    // checks return "dead", skipping SIGTERM in tests that expected a kill.
+    exitCode: number | null;
+    killed: boolean;
   };
 
   proc.stdout = stdout;
   proc.stderr = stderr;
-  proc.kill = vi.fn();
+  proc.exitCode = null;
+  proc.killed = false;
+  const killFn = vi.fn();
+  killFn.mockImplementation(() => {
+    proc.killed = true;
+    return true;
+  });
+  proc.kill = killFn;
   proc.pid = 12345;
+  // Bridge the real 'exit' event → exitCode field so test-driven exits
+  // match production where Node sets exitCode just before firing 'exit'.
+  proc.on("exit", (code: number | null) => {
+    if (proc.exitCode === null) proc.exitCode = code ?? 0;
+  });
 
   return proc;
 }

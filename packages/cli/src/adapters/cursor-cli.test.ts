@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
 import { CursorCLIAdapter } from "./cursor-cli.js";
-import type { AgentSession } from "@sigil/shared";
+import type { AgentSession } from "@sygil/shared";
 import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -78,14 +78,19 @@ const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 
 describe("CursorCLIAdapter", () => {
   let adapter: CursorCLIAdapter;
+  let savedApiKey: string | undefined;
 
   beforeEach(() => {
     adapter = new CursorCLIAdapter();
     vi.clearAllMocks();
+    savedApiKey = process.env["CURSOR_API_KEY"];
+    delete process.env["CURSOR_API_KEY"];
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (savedApiKey === undefined) delete process.env["CURSOR_API_KEY"];
+    else process.env["CURSOR_API_KEY"] = savedApiKey;
   });
 
   // -------------------------------------------------------------------------
@@ -114,6 +119,21 @@ describe("CursorCLIAdapter", () => {
       expect(result).toBe(true);
     });
 
+    it("returns true when CURSOR_API_KEY is set even without credentials file", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(false);
+
+      const prev = process.env["CURSOR_API_KEY"];
+      process.env["CURSOR_API_KEY"] = "test-key";
+      try {
+        const result = await adapter.isAvailable();
+        expect(result).toBe(true);
+      } finally {
+        if (prev === undefined) delete process.env["CURSOR_API_KEY"];
+        else process.env["CURSOR_API_KEY"] = prev;
+      }
+    });
+
     it("name is 'cursor-cli'", () => {
       expect(adapter.name).toBe("cursor-cli");
     });
@@ -130,27 +150,7 @@ describe("CursorCLIAdapter", () => {
       ).rejects.toThrow(/not available/);
     });
 
-    it("includes --force when Write is in allowed tools", async () => {
-      mockExecSync.mockReturnValue("");
-      mockExistsSync.mockReturnValue(true);
-
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      await adapter.spawn({
-        adapter: "cursor",
-        model: "gpt-4o",
-        role: "agent",
-        prompt: "test",
-        tools: ["Write", "Read"],
-      });
-
-      expect(mockSpawn).toHaveBeenCalledOnce();
-      const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
-      expect(args).toContain("--force");
-    });
-
-    it("does not include --force when only Read tools are allowed", async () => {
+    it("always passes --force in headless mode regardless of tools", async () => {
       mockExecSync.mockReturnValue("");
       mockExistsSync.mockReturnValue(true);
 
@@ -165,8 +165,28 @@ describe("CursorCLIAdapter", () => {
         tools: ["Read"],
       });
 
+      expect(mockSpawn).toHaveBeenCalledOnce();
       const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
-      expect(args).not.toContain("--force");
+      expect(args).toContain("--force");
+      expect(args).toContain("--trust");
+    });
+
+    it("passes --force even without any tools configured", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(true);
+
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn({
+        adapter: "cursor",
+        model: "gpt-4o",
+        role: "agent",
+        prompt: "test",
+      });
+
+      const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
+      expect(args).toContain("--force");
     });
 
     it("includes --model when config.model is set", async () => {
@@ -186,6 +206,49 @@ describe("CursorCLIAdapter", () => {
       const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
       expect(args).toContain("--model");
       expect(args).toContain("claude-3.5-sonnet");
+    });
+
+    it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(true);
+
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+      await adapter.spawn({
+        adapter: "cursor",
+        model: "gpt-4o",
+        role: "agent",
+        prompt: "test",
+        tools: ["Read", "Write"],
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/cursor-cli adapter ignores NodeConfig\.tools.*Read.*Write/)
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("does not warn when NodeConfig.tools is omitted or empty", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(true);
+
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+      await adapter.spawn({
+        adapter: "cursor",
+        model: "gpt-4o",
+        role: "agent",
+        prompt: "test",
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
     });
 
     it("includes --cwd when config.outputDir is set", async () => {
@@ -651,13 +714,31 @@ describe("CursorCLIAdapter", () => {
       expect(proc.kill).not.toHaveBeenCalledWith("SIGKILL");
     });
 
-    it("does not send SIGTERM when already done", async () => {
+    // Kill must gate on process liveness (proc.exitCode / proc.killed), NOT
+    // on internal.done — the stall path flips internal.done=true BEFORE the
+    // process exits, so gating on `done` alone would skip SIGTERM and leak
+    // the child.
+    it("does not send SIGTERM when the process is already dead", async () => {
       const proc = makeFakeProc();
+      proc.exitCode = 0; // simulate a process that already exited
       const session = makeSession(adapter, proc);
-      (session._internal as { done: boolean }).done = true;
 
       await adapter.kill(session);
       expect(proc.kill).not.toHaveBeenCalled();
+    });
+
+    it("still sends SIGTERM when internal.done is true but the process is alive (stall-path leak)", async () => {
+      const proc = makeFakeProc();
+      const session = makeSession(adapter, proc);
+      // Simulate the stall path: internal.done flipped before process exited.
+      (session._internal as { done: boolean }).done = true;
+      // proc.exitCode stays null (process alive).
+
+      const killPromise = adapter.kill(session);
+      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+      // Let the process exit so the grace-period timer doesn't escalate.
+      proc.emit("exit", 0);
+      await killPromise;
     });
   });
 
