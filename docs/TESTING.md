@@ -11,9 +11,9 @@ All unit and integration tests use [Vitest](https://vitest.dev). End-to-end brow
 npm test
 
 # Individual packages
-cd packages/cli && npx vitest run       # CLI: 49 test files
-cd packages/shared && npx vitest run    # Shared: 4 test files
-cd packages/web && npx vitest run       # Web: 10 test files
+cd packages/cli && npx vitest run       # CLI: 68 test files (~895 tests)
+cd packages/shared && npx vitest run    # Shared: 6 test files (~195 tests)
+cd packages/web && npx vitest run       # Web: 14 test files (~188 tests)
 
 # Watch mode (re-runs on file save)
 npx vitest
@@ -24,6 +24,11 @@ npx vitest run --coverage
 # E2E browser tests (requires Next.js dev server at localhost:3000)
 cd packages/web && npm run e2e          # Headless
 cd packages/web && npm run e2e:ui       # Interactive Playwright UI
+
+# Replay-CI — determinism regression harness
+npm run replay:ci                       # Repo root; reads the frozen NDJSON fixture
+                                        # at packages/cli/templates/__replay-fixtures__/tdd-feature-v1/
+                                        # and asserts structural event-tuple equality.
 ```
 
 ## Test configuration
@@ -44,7 +49,7 @@ cd packages/web && npm run e2e:ui       # Interactive Playwright UI
 | `src/scheduler/` | `index.test.ts`, `graph-index.test.ts`, `critical-path.test.ts`, `abort-tree.test.ts`, `abort-signal.test.ts`, `checkpoint-manager.test.ts`, `node-cache.test.ts`, `event-recorder.test.ts`, `event-replay.test.ts` | `WorkflowScheduler` execution, graph indexing, critical path computation, structured cancellation, checkpointing, event recording and replay. |
 | `src/gates/` | `index.test.ts` | `GateEvaluator` — all five condition types against real temp files |
 | `src/monitor/` | `websocket.test.ts`, `event-fanout.test.ts`, `ring-buffer.test.ts` | WebSocket server lifecycle, event fan-out with coalescing, ring buffer semantics |
-| `src/worktree/` | `index.test.ts`, `lazy-worktree-manager.test.ts`, `isolation-check.test.ts`, `worktree-mutex.test.ts` | Worktree create/merge/remove, lazy creation, isolation check, mutex serialization |
+| `src/worktree/` | `index.test.ts`, `lazy-worktree-manager.test.ts`, `isolation-check.test.ts` | Worktree create/merge/remove, lazy creation, isolation check. Mutex serialization is provided by `async-mutex` (covered by its upstream test suite); integration-level serialization is exercised by `lazy-worktree-manager.test.ts`. |
 | `src/commands/` | `init.test.ts`, `list.test.ts`, `validate.test.ts`, `export.test.ts`, `resume.test.ts`, `registry.test.ts`, `import-template.test.ts` | CLI command handlers |
 | `src/utils/` | `config.test.ts`, `workflow.test.ts`, `logger.test.ts`, `registry.test.ts`, `telemetry.test.ts`, `watcher.test.ts` | Config loading, workflow interpolation, logging, registry client, telemetry, file watcher |
 | `src/adapters/` | `ndjson-stream.test.ts` | NDJSON line parsing |
@@ -58,7 +63,7 @@ cd packages/web && npm run e2e:ui       # Interactive Playwright UI
 |---|---|
 | `src/types/workflow.test.ts` | Zod schema validation for `WorkflowGraph`, `NodeConfig`, `EdgeConfig`, `GateCondition`, `ContractConfig`, `ParameterConfig` |
 | `src/types/events.test.ts` | `WsServerEvent`, `WsClientEvent`, `WorkflowRunState`, `RecordedEvent` type validation |
-| `src/types/errors.test.ts` | `SigilErrorCode` enum coverage and `SigilError` interface |
+| `src/types/errors.test.ts` | `SygilErrorCode` enum coverage and `SygilError` interface |
 | `src/utils/contract-validator.test.ts` | `validateStructuredOutput()` — schema validation, required fields, type checking |
 
 ### `packages/web` — 10 test files
@@ -105,7 +110,7 @@ Use `vi.useFakeTimers()` before calling `stream()`, close stdout without emittin
 
 - `node:fs/promises` for gate tests — `GateEvaluator` runs against real temp directories created with `mkdtemp`.
 - Zod validation in shared — test against the real schemas.
-- `@sigil/shared` types in web tests — import real types for type-level correctness.
+- `@sygil/shared` types in web tests — import real types for type-level correctness.
 
 ## Zod schema testing
 

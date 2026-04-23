@@ -12,14 +12,14 @@
 | **Adapter** | An implementation of the `AgentAdapter` interface for a specific agent runtime. Normalises runtime-specific events into `AgentEvent` values. |
 | **AgentSession** | An opaque handle returned by `adapter.spawn()`. Carries a UUID, the adapter name, start timestamp, and an adapter-specific `_internal` field. |
 | **AgentEvent** | A discriminated union emitted by `adapter.stream()`: `tool_call`, `tool_result`, `file_write`, `shell_exec`, `text_delta`, `cost_update`, `stall`, `error`. |
-| **WorkflowRunState** | The persisted checkpoint written to `.sigil/runs/<id>.json` after every node. Tracks completed nodes, per-node results, retry counters, and run status. |
+| **WorkflowRunState** | The persisted checkpoint written to `.sygil/runs/<id>.json` after every node. Tracks completed nodes, per-node results, retry counters, and run status. |
 | **RecordedEvent** | A timestamped `AgentEvent` with node context, written to NDJSON event logs for replay and debugging. |
 
 ---
 
 ## System overview
 
-Sigil is a Turborepo monorepo with three packages.
+Sygil is a Turborepo monorepo with three packages.
 
 ### 1. CLI (`packages/cli`)
 
@@ -28,7 +28,7 @@ The main executable. Responsibilities:
 - **Scheduler** (`src/scheduler/`) — loads the workflow graph, maintains a ready queue, executes nodes, evaluates gates, handles loop-back retries and rate-limit pauses, checkpoints state.
 - **Gate evaluator** (`src/gates/`) — evaluates the five condition types against a completed node's result and output directory.
 - **Adapter registry** (`src/adapters/`) — resolves an `AdapterType` string to the corresponding `AgentAdapter` implementation.
-- **WebSocket monitor server** (`src/monitor/`) — starts an HTTP+WebSocket server on a random port after `sigil run`. Serves the embedded monitor UI (static files from `dist-ui/`) via `sirv`. The monitor page connects to the WebSocket on the same port using `?token=<uuid>` for auth.
+- **WebSocket monitor server** (`src/monitor/`) — starts an HTTP+WebSocket server on a random port after `sygil run`. Serves the embedded monitor UI (static files from `dist-ui/`) via `sirv`. The monitor page connects to the WebSocket on the same port using `?token=<uuid>` for auth.
 - **CLI commands** (`src/commands/`) — Commander.js handlers for `init`, `run`, `validate`, `export`, `list`, `resume`, `replay`, `import-template`, `registry`.
 - **Templates** (`templates/`) — bundled `workflow.json` files (`tdd-feature`, `code-review`, `bug-fix`) and gate scripts.
 
@@ -38,7 +38,7 @@ A Next.js 14 (App Router) application.
 
 - `/` — landing page with animated workflow DAG demo, terminal preview, and feature overview.
 - `/editor` — visual workflow editor using React Flow (`@xyflow/react`). Reads and writes `workflow.json` via file import/export.
-- `/monitor` — real-time run monitor. Connects to the CLI's WebSocket server on the same port as the HTTP server using `?token=<uuid>` for auth, and renders live node/gate events. In dev mode (`SIGIL_UI_DEV=1`), the Next.js dev server at `:3000` connects to the CLI via `?ws=<port>&workflow=<name>&token=<token>`.
+- `/monitor` — real-time run monitor. Connects to the CLI's WebSocket server on the same port as the HTTP server using `?token=<uuid>` for auth, and renders live node/gate events. In dev mode (`SYGIL_UI_DEV=1`), the Next.js dev server at `:3000` connects to the CLI via `?ws=<port>&workflow=<name>&token=<token>`.
 
 Key hooks: `useWorkflowMonitor` (WebSocket connection + event accumulator), `useWorkflowEditor` (React Flow graph state + serialisation).
 
@@ -49,7 +49,7 @@ TypeScript types, Zod schemas, error codes, and contract validation shared betwe
 - `src/types/workflow.ts` — `WorkflowGraph`, `NodeConfig`, `EdgeConfig`, `GateConfig`, `GateCondition`, `ContractConfig`, `ParameterConfig`, Zod schemas for all of the above.
 - `src/types/adapter.ts` — `AgentAdapter` interface, `AgentSession`, `AgentEvent`, `NodeResult`.
 - `src/types/events.ts` — `WsServerEvent`, `WsClientEvent`, `WorkflowRunState`, `RecordedEvent`.
-- `src/types/errors.ts` — `SigilErrorCode` enum and `SigilError` interface.
+- `src/types/errors.ts` — `SygilErrorCode` enum and `SygilError` interface.
 - `src/utils/contract-validator.ts` — `validateStructuredOutput()` for JSON schema-like structural validation.
 
 ---
@@ -97,9 +97,9 @@ duration, and re-spawns — without counting the pause against `maxRetries`.
 
 All adapters populate `errorCode` in `getResult()` by mapping exit codes:
 - `exitCode === 0` → no errorCode
-- `exitCode === STALL_EXIT_CODE (-2)` → `SigilErrorCode.NODE_STALLED`
-- `exitCode === 124` → `SigilErrorCode.NODE_TIMEOUT`
-- any other non-zero → `SigilErrorCode.NODE_CRASHED`
+- `exitCode === STALL_EXIT_CODE (-2)` → `SygilErrorCode.NODE_STALLED`
+- `exitCode === 124` → `SygilErrorCode.NODE_TIMEOUT`
+- any other non-zero → `SygilErrorCode.NODE_CRASHED`
 
 ### AdapterPool
 
@@ -142,13 +142,13 @@ scheduler calls `adapter.kill()`, awaits `sleep(retryAfterMs)`, then calls
 `retryCounters`.
 
 **Checkpointing:** After every node (and on pause), the `CheckpointManager`
-debounces writes (100ms trailing edge) to `.sigil/runs/<id>.json`. `flush()` is
-called at workflow end to ensure the final state is persisted. `sigil resume
+debounces writes (100ms trailing edge) to `.sygil/runs/<id>.json`. `flush()` is
+called at workflow end to ensure the final state is persisted. `sygil resume
 <run-id>` reads this file, reconstructs the scheduler, and skips
 already-completed nodes.
 
 **Event recording:** The `EventRecorder` writes per-node NDJSON event logs for
-replay and debugging. `sigil replay <run-id>` uses `replayEvents()` to stream
+replay and debugging. `sygil replay <run-id>` uses `replayEvents()` to stream
 these back with original timing.
 
 ---
@@ -190,7 +190,7 @@ When the WebSocket monitor is connected, the evaluator emits a
 path that escapes the workflow's `outputDir` or the bundled `templates/gates/`
 directory (path traversal guard). Gate scripts receive a restricted environment
 variable whitelist: `PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`,
-`TMPDIR`, `TMP`, `TEMP`, plus `SIGIL_*` passthrough.
+`TMPDIR`, `TMP`, `TEMP`, plus `SYGIL_*` passthrough.
 
 **Regex gate file size:** Files larger than 10MB are rejected before reading into memory.
 
@@ -202,20 +202,20 @@ reuse.
 
 ## WebSocket protocol
 
-When `sigil run` starts, the CLI creates a `WsMonitorServer` that listens on a
+When `sygil run` starts, the CLI creates a `WsMonitorServer` that listens on a
 random loopback port. It serves both the HTTP monitor UI (static files embedded
 from `dist-ui/`) and the WebSocket endpoint on the same port. The URL is printed
 to stdout in Vite-style format:
 
 ```
-  ➜  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
+  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
 ```
 
 The browser is auto-opened to this URL (unless `--no-open` is passed or running
 in CI/non-TTY). The monitor page connects to the WebSocket on the **same port**
 using `?token=<token>` for authentication — there is no separate WS port.
 
-In dev mode (`SIGIL_UI_DEV=1`), the URL instead points at the Next.js dev server
+In dev mode (`SYGIL_UI_DEV=1`), the URL instead points at the Next.js dev server
 (`localhost:3000`) with `?ws=<port>&workflow=<name>&token=<token>` so the dev
 server proxies the WebSocket connection to the CLI.
 
@@ -282,9 +282,8 @@ exceeding `maxBufferedAmount` (if configured) are disconnected.
 | Module | Purpose |
 |---|---|
 | `worktree/index.ts` | `WorktreeManager` — per-node git worktree create/merge/remove (accepts `AbortSignal`) |
-| `worktree/lazy-worktree-manager.ts` | `LazyWorktreeManager` — lazy creation + sparse checkout + mutex-protected ops |
+| `worktree/lazy-worktree-manager.ts` | `LazyWorktreeManager` — lazy creation + sparse checkout + mutex-protected ops; serializes `git worktree add`/`remove` via an `async-mutex` `Mutex` to avoid `.git/index.lock` contention |
 | `worktree/isolation-check.ts` | `needsIsolation(nodeConfig)` — returns true only for nodes with write-capable tools |
-| `worktree/worktree-mutex.ts` | `WorktreeMutex` — serializes git worktree operations to avoid `.git/index.lock` contention |
 
 ---
 
@@ -323,7 +322,7 @@ packages/
                     event-recorder.ts     — EventRecorder, NDJSON event logs per node
                     event-replay.ts       — replayEvents() async generator for replay
       utils/        config, workflow loading, logger, telemetry, watcher
-      worktree/     WorktreeManager, LazyWorktreeManager, isolation-check, worktree-mutex
+      worktree/     WorktreeManager, LazyWorktreeManager, isolation-check (serialization via `async-mutex`)
     templates/      Bundled workflow.json templates (tdd-feature, code-review, bug-fix)
       gates/        Bundled gate scripts (e.g. check-approved.sh)
   shared/
@@ -344,7 +343,7 @@ packages/
 
 ## Shared types
 
-Key types exported from `@sigil/shared`:
+Key types exported from `@sygil/shared`:
 
 | Type | Module | Description |
 |---|---|---|
@@ -362,8 +361,8 @@ Key types exported from `@sigil/shared`:
 | `WsClientEvent` | `events.ts` | 7 event types sent from monitor clients |
 | `WorkflowRunState` | `events.ts` | Persisted checkpoint (status, completedNodes, nodeResults, totalCostUsd, retryCounters) |
 | `RecordedEvent` | `events.ts` | Timestamped AgentEvent with node context for replay |
-| `SigilErrorCode` | `errors.ts` | Structured error code enum (gate, node, adapter, workflow, checkpoint categories) |
-| `SigilError` | `errors.ts` | Error interface with code, message, optional nodeId/edgeId/details |
+| `SygilErrorCode` | `errors.ts` | Structured error code enum (gate, node, adapter, workflow, checkpoint categories) |
+| `SygilError` | `errors.ts` | Error interface with code, message, optional nodeId/edgeId/details |
 
 ---
 
@@ -389,10 +388,10 @@ Key types exported from `@sigil/shared`:
 
 | Variable | Where set | Purpose |
 |---|---|---|
-| `SIGIL_CONFIG_DIR` | CLI `--config` flag | Path to `.sigil/` config directory |
+| `SYGIL_CONFIG_DIR` | CLI `--config` flag | Path to `.sygil/` config directory |
 | `ANTHROPIC_API_KEY` | Shell environment | Required for claude-sdk and claude-cli adapters |
-| `SIGIL_TELEMETRY` | Shell environment | Set to `0` to disable telemetry |
-| `SIGIL_UI_DEV` | Shell environment | Set to `1` to use the Next.js dev server for the monitor UI |
-| `SIGIL_EXIT_CODE` | Internal | Exit code from node execution (passed to gate scripts) |
-| `SIGIL_OUTPUT` | Internal | Node output text (passed to gate scripts) |
-| `SIGIL_OUTPUT_DIR` | Internal | Output directory for node artifacts (passed to gate scripts) |
+| `SYGIL_TELEMETRY` | Shell environment | Set to `0` to disable telemetry |
+| `SYGIL_UI_DEV` | Shell environment | Set to `1` to use the Next.js dev server for the monitor UI |
+| `SYGIL_EXIT_CODE` | Internal | Exit code from node execution (passed to gate scripts) |
+| `SYGIL_OUTPUT` | Internal | Node output text (passed to gate scripts) |
+| `SYGIL_OUTPUT_DIR` | Internal | Output directory for node artifacts (passed to gate scripts) |

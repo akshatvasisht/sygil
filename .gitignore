@@ -50,6 +50,12 @@ yarn-error.log*
 # Claude agent worktrees
 .claude/worktrees/
 
+# Codegraph local index
+.gitnexus/
+
+# Agent-authored local notes
+agentcontext/
+
 # Misc
 *.tgz
 .cache/

@@ -1,24 +1,24 @@
 # CLI Reference
 
-## `sigil init`
+## `sygil init`
 
-Checks which adapters are available in the current environment and writes an initial `.sigil/config.json` if one does not exist.
+Checks which adapters are available in the current environment and writes an initial `.sygil/config.json` if one does not exist.
 
 ```bash
-sigil init
-sigil init --telemetry       # Enable anonymous usage telemetry
-sigil init --no-telemetry    # Disable anonymous usage telemetry
+sygil init
+sygil init --telemetry       # Enable anonymous usage telemetry
+sygil init --no-telemetry    # Disable anonymous usage telemetry
 ```
 
 ---
 
-## `sigil run <workflow>`
+## `sygil run <workflow>`
 
 Runs a workflow. `<workflow>` is a path to a `workflow.json` file or the name of a built-in template.
 
 ```bash
-sigil run tdd-feature.json
-sigil run tdd-feature "add OAuth2 login"
+sygil run tdd-feature.json
+sygil run tdd-feature "add OAuth2 login"
 ```
 
 **Options**
@@ -32,12 +32,12 @@ sigil run tdd-feature "add OAuth2 login"
 | `--verbose` | Print all agent events to stdout during the run. |
 | `--no-open` | Do not automatically open the monitor in a browser. Also suppressed when `!process.stdout.isTTY` (CI). |
 | `--no-monitor` | Disable the web monitor entirely (headless/CI mode). |
-| `--config <path>` | Path to `.sigil` config directory (default: `./.sigil`). |
+| `--config <path>` | Path to `.sygil` config directory (default: `./.sygil`). |
 
 When a run starts, the CLI prints a Vite-style URL:
 
 ```
-  ➜  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
+  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
 ```
 
 The browser is auto-opened to this URL unless `--no-open` is passed or the
@@ -46,39 +46,39 @@ same port as the WebSocket endpoint — there is no separate WS port.
 
 ---
 
-## `sigil validate <workflow>`
+## `sygil validate <workflow>`
 
 Validates a `workflow.json` against the Zod schema and checks that all referenced adapter types are known. Also validates `timeoutMs > 0`, `idleTimeoutMs > 0`, and `maxRetries >= 0`.
 
 ```bash
-sigil validate tdd-feature.json
+sygil validate tdd-feature.json
 ```
 
 Exits `0` on success, `1` on validation error.
 
 ---
 
-## `sigil resume <run-id>`
+## `sygil resume <run-id>`
 
-Resumes a checkpointed run. The run state is read from `.sigil/runs/<run-id>.json`.
+Resumes a checkpointed run. The run state is read from `.sygil/runs/<run-id>.json`.
 
 ```bash
-sigil resume 3f8a2c1d-...
+sygil resume 3f8a2c1d-...
 ```
 
 Already-completed nodes are skipped. The run continues from the first incomplete node. Session history is preserved for adapters that support `resume()` (e.g. `claude-sdk`).
 
 ---
 
-## `sigil replay <run-id>`
+## `sygil replay <run-id>`
 
 Replays recorded NDJSON events from a previous workflow run for debugging and review.
 
 ```bash
-sigil replay r_8x92kf
-sigil replay r_8x92kf --node implementer    # Only replay one node
-sigil replay r_8x92kf --speed 0             # Instant replay
-sigil replay r_8x92kf --speed 2             # 2x speed
+sygil replay r_8x92kf
+sygil replay r_8x92kf --node implementer    # Only replay one node
+sygil replay r_8x92kf --speed 0             # Instant replay
+sygil replay r_8x92kf --speed 2             # 2x speed
 ```
 
 **Options**
@@ -90,63 +90,63 @@ sigil replay r_8x92kf --speed 2             # 2x speed
 
 ---
 
-## `sigil list`
+## `sygil list`
 
 Lists available adapters and recent workflow runs.
 
 ```bash
-sigil list
+sygil list
 ```
 
 ---
 
-## `sigil export <template> <output>`
+## `sygil export <template> <output>`
 
 Copies a built-in template to a local file for editing.
 
 ```bash
-sigil export tdd-feature my-workflow.json
+sygil export tdd-feature my-workflow.json
 ```
 
 ---
 
-## `sigil import-template <file>`
+## `sygil import-template <file>`
 
-Imports a workflow template from a URL or local file path into the user template store at `~/.sigil/templates/`.
+Imports a workflow template from a URL or local file path into the user template store at `~/.sygil/templates/`.
 
 ```bash
-sigil import-template my-workflow.json
-sigil import-template https://example.com/workflow.json
+sygil import-template my-workflow.json
+sygil import-template https://example.com/workflow.json
 ```
 
 ---
 
-## `sigil registry list`
+## `sygil registry list`
 
 Lists all templates available in the remote registry.
 
 ```bash
-sigil registry list
+sygil registry list
 ```
 
 ---
 
-## `sigil registry search <query>`
+## `sygil registry search <query>`
 
 Searches the remote registry by name, description, or tag.
 
 ```bash
-sigil registry search "tdd typescript"
+sygil registry search "tdd typescript"
 ```
 
 ---
 
-## `sigil registry install <name>`
+## `sygil registry install <name>`
 
-Downloads a template from the remote registry to `~/.sigil/templates/<name>.json`.
+Downloads a template from the remote registry to `~/.sygil/templates/<name>.json`.
 
 ```bash
-sigil registry install tdd-feature
+sygil registry install tdd-feature
 ```
 
 ---
@@ -157,7 +157,7 @@ These options apply to all commands:
 
 | Flag | Description |
 |---|---|
-| `--config <path>` | Path to `.sigil` config directory. Sets `SIGIL_CONFIG_DIR`. |
+| `--config <path>` | Path to `.sygil` config directory. Sets `SYGIL_CONFIG_DIR`. |
 | `-v, --verbose` | Verbose output. |
 | `--version` | Print version and exit. |
 | `-h, --help` | Print help and exit. |
@@ -175,7 +175,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full type reference. Minimal exam
   "nodes": {
     "planner": {
       "adapter": "claude-sdk",
-      "model": "claude-opus-4-5",
+      "model": "claude-opus-4-7",
       "role": "You are a senior software architect.",
       "prompt": "Plan the implementation for: {{task}}",
       "tools": ["Read", "Grep", "Glob"],

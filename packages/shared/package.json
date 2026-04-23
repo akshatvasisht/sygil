@@ -1,17 +1,17 @@
 {
-  "name": "@sigil/shared",
+  "name": "@sygil/shared",
   "version": "0.1.0",
-  "description": "Shared TypeScript types and Zod schemas for the Sigil workflow orchestration system.",
+  "description": "Shared TypeScript types and Zod schemas for the Sygil workflow orchestration system.",
   "keywords": ["ai", "agents", "orchestration", "llm", "workflow", "dag", "claude", "codex", "automation"],
   "author": "Akshat Vasisht",
   "license": "MIT",
-  "homepage": "https://github.com/akshatvasisht/sigil#readme",
+  "homepage": "https://github.com/akshatvasisht/sygil#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/akshatvasisht/sigil.git"
+    "url": "git+https://github.com/akshatvasisht/sygil.git"
   },
   "bugs": {
-    "url": "https://github.com/akshatvasisht/sigil/issues"
+    "url": "https://github.com/akshatvasisht/sygil/issues"
   },
   "type": "module",
   "main": "./dist/index.js",

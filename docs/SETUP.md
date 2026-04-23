@@ -13,8 +13,8 @@ At least one agent adapter must be available at runtime (see below).
 ## Installation
 
 ```bash
-git clone https://github.com/akshatvasisht/sigil.git
-cd sigil
+git clone https://github.com/akshatvasisht/sygil.git
+cd sygil
 npm install
 ```
 
@@ -25,8 +25,8 @@ This installs dependencies across all packages (`cli`, `web`, `shared`) via npm 
 | Variable | Required by | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | `claude-sdk`, `claude-cli` adapters | API key for Claude SDK / CLI sessions |
-| `SIGIL_TELEMETRY` | CLI | Set to `0` to disable telemetry (opt-in is default-off) |
-| `SIGIL_UI_DEV` | CLI (dev) | Set to `1` to use the Next.js dev server for the monitor UI |
+| `SYGIL_TELEMETRY` | CLI | Set to `0` to disable telemetry (opt-in is default-off) |
+| `SYGIL_UI_DEV` | CLI (dev) | Set to `1` to use the Next.js dev server for the monitor UI |
 
 Create a `.env` file in the project root if needed:
 
@@ -57,7 +57,7 @@ node dist/index.js run examples/tdd-feature.json
 
 ## Running the web UI
 
-The monitor UI is embedded in the CLI — `sigil run` serves it automatically and
+The monitor UI is embedded in the CLI — `sygil run` serves it automatically and
 auto-opens the browser. You do **not** need to run the web dev server to use the
 monitor.
 
@@ -75,13 +75,13 @@ node packages/cli/dist/index.js run workflow.json --no-monitor
 The terminal will print a Vite-style URL:
 
 ```
-  ➜  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
+  Monitor: http://localhost:<port>/monitor?workflow=<name>&token=<token>
 ```
 
 ### Developing the web UI itself
 
 To work on the web UI source, run the Next.js dev server and connect it to a
-live `sigil run` session:
+live `sygil run` session:
 
 ```bash
 # Terminal 1 — start the Next.js dev server
@@ -91,17 +91,17 @@ npm run dev
 # Editor:     http://localhost:3000/editor
 
 # Terminal 2 — run a workflow in dev UI mode
-SIGIL_UI_DEV=1 node packages/cli/dist/index.js run workflow.json
+SYGIL_UI_DEV=1 node packages/cli/dist/index.js run workflow.json
 # Monitor URL: http://localhost:3000/monitor?ws=<port>&workflow=<name>&token=<token>
 ```
 
-`SIGIL_UI_DEV=1` makes the CLI print (and open) the `localhost:3000` dev server
+`SYGIL_UI_DEV=1` makes the CLI print (and open) the `localhost:3000` dev server
 URL instead of the embedded UI URL, passing `?ws=<port>` so the dev server can
 connect back to the CLI's WebSocket.
 
 ## Adapters
 
-The CLI auto-detects available adapters on startup. Run `sigil init` to check your environment:
+The CLI auto-detects available adapters on startup. Run `sygil init` to check your environment:
 
 ```bash
 node packages/cli/dist/index.js init
@@ -148,20 +148,20 @@ node packages/cli/dist/index.js replay <run-id> --node implementer --speed 2
 
 ## Troubleshooting
 
-**`@sigil/shared` not found when running CLI tests**
+**`@sygil/shared` not found when running CLI tests**
 The shared package must be built first: `npm run build --workspace packages/shared`.
 
-**`Module '"@sigil/shared"' has no exported member`**
+**`Module '"@sygil/shared"' has no exported member`**
 The shared package needs to be rebuilt after type changes: `cd packages/shared && npx tsc`.
 
 **`agent` binary not found (Cursor adapter)**
 The Cursor headless binary is named `agent`, not `cursor`. Check that it is in your `$PATH` after installing Cursor.
 
-**`sigil run` hangs without output**
+**`sygil run` hangs without output**
 Pass `--verbose` to see all agent events. If a node stalls, the scheduler emits a `stall` event after 5 seconds of silence and kills the process. Consider adding `idleTimeoutMs` to the node config.
 
 **Stale `.next` cache after package rename**
-If you see `Cannot find module '@sigil/shared'` in the web package, clear the cache: `rm -rf packages/web/.next`.
+If you see `Cannot find module '@sygil/shared'` in the web package, clear the cache: `rm -rf packages/web/.next`.
 
 **`process.chdir() not supported in workers`**
 The CLI test config uses `pool: "forks"` in `packages/cli/vitest.config.ts`. Do not change this — scheduler tests call `process.chdir()`.
