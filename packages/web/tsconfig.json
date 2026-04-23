@@ -23,7 +23,7 @@
     "exactOptionalPropertyTypes": false,
     "noUncheckedIndexedAccess": true,
     "paths": {
-      "@sigil/shared": [
+      "@sygil/shared": [
         "../shared/src/index.ts"
       ],
       "@/*": [

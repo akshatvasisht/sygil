@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { X, Cpu, Trash2, AlertTriangle, ChevronDown, Copy, Clipboard } from "lucide-react";
-import type { NodeConfig, AdapterType, SandboxMode } from "@sigil/shared";
+import type { NodeConfig, AdapterType, SandboxMode } from "@sygil/shared";
 import type { NodeCardData } from "./NodeCard";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -12,6 +12,8 @@ const ADAPTER_OPTIONS: { value: AdapterType; label: string }[] = [
   { value: "claude-cli", label: "claude-cli" },
   { value: "codex", label: "codex" },
   { value: "cursor", label: "cursor" },
+  { value: "gemini-cli", label: "gemini-cli" },
+  { value: "local-oai", label: "local-oai" },
 ];
 
 const SANDBOX_OPTIONS: { value: SandboxMode; label: string }[] = [
@@ -22,13 +24,13 @@ const SANDBOX_OPTIONS: { value: SandboxMode; label: string }[] = [
 
 const MODEL_PRESETS: Record<AdapterType, string[]> = {
   "claude-sdk": [
-    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
   ],
   "claude-cli": [
-    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
@@ -36,6 +38,8 @@ const MODEL_PRESETS: Record<AdapterType, string[]> = {
   codex: ["gpt-4o", "gpt-4o-mini", "o3", "o3-mini", "o4-mini"],
   cursor: ["cursor-small", "gpt-4o"],
   echo: ["echo"],
+  "gemini-cli": ["gemini-2.5-pro", "gemini-2.5-flash"],
+  "local-oai": ["llama3.2", "qwen2.5", "mistral-nemo"],
 };
 
 const ADAPTER_ICON_COLOR: Record<string, string> = {
@@ -43,6 +47,8 @@ const ADAPTER_ICON_COLOR: Record<string, string> = {
   "claude-cli": "text-accent-blue",
   codex: "text-accent-green",
   cursor: "text-accent-purple",
+  "gemini-cli": "text-accent-cyan",
+  "local-oai": "text-accent-amber",
 };
 
 const TOOL_PRESETS: Record<AdapterType, string[]> = {
@@ -51,6 +57,8 @@ const TOOL_PRESETS: Record<AdapterType, string[]> = {
   codex: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "LS"],
   cursor: ["Read", "Write", "Edit"],
   echo: [],
+  "gemini-cli": ["shell", "read_file", "write_file", "google_search"],
+  "local-oai": [],
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -235,7 +243,7 @@ export function NodePropertyPanel({
                   </option>
                 ))}
               </select>
-              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-subtle pointer-events-none" />
+              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
             </div>
           </Field>
           <Field label="Model">
@@ -253,7 +261,7 @@ export function NodePropertyPanel({
                   aria-label="Model presets"
                   aria-expanded={showModelDropdown}
                   aria-haspopup="true"
-                  className="bg-canvas border border-border rounded px-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-subtle hover:text-dim hover:border-border-bright transition-colors duration-200"
+                  className="bg-canvas border border-border rounded px-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-dim hover:text-body hover:border-border-bright transition-colors duration-200"
                   title="Presets"
                 >
                   <ChevronDown size={12} />
@@ -512,7 +520,7 @@ export function NodePropertyPanel({
                     </option>
                   ))}
                 </select>
-                <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-subtle pointer-events-none" />
+                <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
               </div>
             </Field>
           )}

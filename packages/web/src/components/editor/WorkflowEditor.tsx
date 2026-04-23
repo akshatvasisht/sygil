@@ -42,17 +42,17 @@ import { EdgeGatePanel } from "./EdgeGatePanel";
 import { NodePropertyPanel } from "./NodePropertyPanel";
 import { NodePalette } from "./NodePalette";
 import { useWorkflowEditor, type NodeArchetype } from "@/hooks/useWorkflowEditor";
-import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sigil/shared";
+import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sygil/shared";
 
 // ── Custom edge ──────────────────────────────────────────────────────────────
 
-interface SigilEdgeData {
+interface SygilEdgeData {
   edgeConfig: EdgeConfig;
   isSelected?: boolean;
   [key: string]: unknown;
 }
 
-function SigilEdge(props: EdgeProps) {
+function SygilEdge(props: EdgeProps) {
   const {
     sourceX,
     sourceY,
@@ -64,7 +64,7 @@ function SigilEdge(props: EdgeProps) {
     markerEnd,
     style,
   } = props;
-  const edgeData = data as SigilEdgeData | undefined;
+  const edgeData = data as SygilEdgeData | undefined;
   const config = edgeData?.edgeConfig;
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -127,7 +127,7 @@ function SigilEdge(props: EdgeProps) {
 // ── Node / edge type maps ────────────────────────────────────────────────────
 
 const NODE_TYPES = { nodeCard: NodeCard };
-const EDGE_TYPES = { sigil: SigilEdge };
+const EDGE_TYPES = { sygil: SygilEdge };
 
 // ── Empty sidebar hint ───────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ function RunModal({ workflowName, onClose }: RunModalProps) {
   const [copied, setCopied] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLButtonElement>(null);
-  const cmd = `sigil run ./${workflowName}.json "your task here"`;
+  const cmd = `sygil run ./${workflowName}.json "your task here"`;
 
   // Trap focus inside the dialog immediately so keyboard users don't need to
   // Tab through the backdrop to reach the close button.
@@ -373,8 +373,12 @@ export function WorkflowEditor({
   useEffect(() => {
     if (isMonitor) return;
     function handleKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Skip when focus is inside a contenteditable region — native
+      // browser shortcuts (undo, duplicate-line, etc.) must win.
+      if (el?.isContentEditable) return;
 
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
@@ -386,6 +390,9 @@ export function WorkflowEditor({
         e.preventDefault();
         editor.redo();
       } else if (e.key === "d" && mod) {
+        // Ctrl+D on a focused button hijacks the native bookmark shortcut
+        // without doing anything useful — the canvas isn't the target.
+        if (tag === "BUTTON") return;
         e.preventDefault();
         if (editor.selectedNodeId) {
           editor.duplicateNode(editor.selectedNodeId);
@@ -499,7 +506,7 @@ export function WorkflowEditor({
     (event: React.DragEvent) => {
       event.preventDefault();
       const archetype = event.dataTransfer.getData(
-        "application/sigil-node-type"
+        "application/sygil-node-type"
       ) as NodeArchetype;
       if (!archetype) return;
       if (!rfInstance) return;
@@ -837,7 +844,8 @@ export function WorkflowEditor({
           onPaneContextMenu={isMonitor ? undefined : (e) => { e.preventDefault(); const menuWidth = 160; const menuHeight = 50; const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8); const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8); setContextMenu({ x, y, type: "canvas" }); }}
           onEdgeContextMenu={isMonitor ? undefined : (e, edge) => { e.preventDefault(); const menuWidth = 160; const menuHeight = 50; const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8); const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8); setContextMenu({ x, y, type: "edge", edgeId: edge.id }); }}
           isValidConnection={(connection) => {
-            if (connection.source === connection.target) return false;
+            // Self-loops are valid: the scheduler handles `source === target`
+            // correctly, and the Ralph template depends on it.
             return !editor.edges.some(
               e => e.source === connection.source && e.target === connection.target
             );
@@ -858,7 +866,7 @@ export function WorkflowEditor({
           style={{ background: "transparent" }}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{
-            type: "sigil",
+            type: "sygil",
             markerEnd: {
               type: MarkerType.ArrowClosed,
               width: 14,

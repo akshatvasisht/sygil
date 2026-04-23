@@ -35,7 +35,7 @@ export function NavBar() {
             <SigilLogo size={18} color="#71717a" />
           </span>
           <span className="font-mono font-semibold text-bright text-sm tracking-tight">
-            sigil
+            sygil
           </span>
           <span className="version-badge font-mono text-[10px] text-dim border border-white/[0.08] px-1.5 py-0.5 rounded leading-none hidden sm:inline">
             v0.1
@@ -44,7 +44,7 @@ export function NavBar() {
 
         <div className="flex items-center gap-1">
           <Link
-            href="https://github.com/akshatvasisht/sigil"
+            href="https://github.com/akshatvasisht/sygil"
             target="_blank"
             rel="noopener noreferrer"
             className="nav-link hidden sm:inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-dim hover:text-body transition-colors duration-200 px-3 min-h-[44px] rounded-md hover:bg-white/[0.03]"
@@ -53,7 +53,7 @@ export function NavBar() {
             GitHub
           </Link>
           <Link
-            href="https://github.com/akshatvasisht/sigil#readme"
+            href="https://github.com/akshatvasisht/sygil#readme"
             target="_blank"
             rel="noopener noreferrer"
             className="nav-link hidden sm:inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-dim hover:text-body transition-colors duration-200 px-3 min-h-[44px] rounded-md hover:bg-white/[0.03]"

@@ -1,4 +1,4 @@
-import type { WsServerEvent, WorkflowRunState } from "@sigil/shared";
+import type { WsServerEvent, WorkflowRunState } from "@sygil/shared";
 
 export function exportAsJson(state: WorkflowRunState | null, events: WsServerEvent[]): string {
   return JSON.stringify({ state, events, exportedAt: new Date().toISOString() }, null, 2);

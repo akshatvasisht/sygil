@@ -16,12 +16,19 @@ import {
   type EdgeMarkerType,
 } from "@xyflow/react";
 import dagre from "@dagrejs/dagre";
-import { WorkflowGraphSchema, type NodeConfig, type EdgeConfig, type WorkflowGraph, type AdapterType } from "@sigil/shared";
+import {
+  WorkflowGraphSchema,
+  NodeConfigSchema,
+  type NodeConfig,
+  type EdgeConfig,
+  type WorkflowGraph,
+  type AdapterType,
+} from "@sygil/shared";
 import type { NodeCardData } from "@/components/editor/NodeCard";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const DRAFT_STORAGE_KEY = "sigil-editor-draft";
+const DRAFT_STORAGE_KEY = "sygil-editor-draft";
 
 /** Node dimensions used for dagre layout (w-44 = 176px, h = 64px). */
 const TIDY_NODE_WIDTH = 176;
@@ -34,7 +41,7 @@ export type NodeArchetype = "planner" | "implementer" | "reviewer" | "custom";
 const ARCHETYPE_DEFAULTS: Record<NodeArchetype, Partial<NodeConfig> & { role: string; adapter: AdapterType; model: string; tools: string[] }> = {
   planner: {
     adapter: "claude-sdk",
-    model: "claude-opus-4-6",
+    model: "claude-opus-4-7",
     tools: ["Read", "Grep", "Glob", "LS"],
     role: "Planner",
     prompt: "",
@@ -121,7 +128,26 @@ export interface UseWorkflowEditorReturn {
 
 const HISTORY_LIMIT = 50;
 
+// Schema-driven allowlist for node-config patches. Any new field added
+// to `NodeConfigSchema` in @sygil/shared automatically propagates here, so the
+// editor stops silently dropping new fields on updateNode.
+const NODE_CONFIG_FIELDS = NodeConfigSchema.keyof().options as readonly (keyof NodeConfig)[];
+
+function sanitizeNodeConfigPatch(patch: Partial<NodeConfig>): Partial<NodeConfig> {
+  const out: Record<string, unknown> = {};
+  for (const key of NODE_CONFIG_FIELDS) {
+    if (key in patch) {
+      out[key as string] = (patch as Record<string, unknown>)[key as string];
+    }
+  }
+  return out as Partial<NodeConfig>;
+}
+
 function makeNodeCardData(id: string, config: Partial<NodeConfig>): NodeCardData {
+  // Store the full NodeConfig on `raw` so round-trips preserve every field,
+  // including providers / retryPolicy / modelTier / writesContext / readsContext
+  // / expectedOutputs / outputSchema — fields the UI does not yet surface.
+  const raw: Partial<NodeConfig> = { ...config };
   return {
     nodeId: id,
     adapter: (config.adapter ?? "claude-sdk") as AdapterType,
@@ -129,7 +155,7 @@ function makeNodeCardData(id: string, config: Partial<NodeConfig>): NodeCardData
     role: config.role ?? "Agent",
     tools: config.tools ?? [],
     status: "idle",
-    // Store full NodeConfig fields alongside so we can round-trip them
+    // Display-side mirrors kept in sync with raw for existing renderers
     prompt: config.prompt ?? "",
     outputDir: config.outputDir,
     timeoutMs: config.timeoutMs,
@@ -138,6 +164,7 @@ function makeNodeCardData(id: string, config: Partial<NodeConfig>): NodeCardData
     maxTurns: config.maxTurns,
     sandbox: config.sandbox,
     disallowedTools: config.disallowedTools,
+    raw,
   };
 }
 
@@ -148,7 +175,7 @@ const EDGE_COLOR_FORWARD = "var(--border-bright)";
 const EDGE_COLOR_LOOPBACK = "var(--warning)";
 
 const EDGE_DEFAULTS: Partial<Edge> = {
-  type: "sigil",
+  type: "sygil",
   markerEnd: {
     type: MarkerType.ArrowClosed,
     width: 14,
@@ -200,7 +227,14 @@ function flowToWorkflow(
   const workflowNodes: Record<string, NodeConfig> = {};
   for (const n of nodes) {
     const d = n.data as NodeCardData;
+    // `raw` holds the full NodeConfig preserved through round-trips.
+    // Display mirrors overlay raw so recent edits win, but raw supplies
+    // advanced fields (providers, retryPolicy, modelTier, writesContext,
+    // readsContext, expectedOutputs, outputSchema) that the panel does not
+    // yet render.
+    const raw = (d.raw as Partial<NodeConfig> | undefined) ?? {};
     workflowNodes[n.id] = {
+      ...raw,
       adapter: d.adapter,
       model: d.model,
       role: d.role,
@@ -213,7 +247,7 @@ function flowToWorkflow(
       maxBudgetUsd: d.maxBudgetUsd as number | undefined,
       maxTurns: d.maxTurns as number | undefined,
       sandbox: d.sandbox as "read-only" | "workspace-write" | "full-access" | undefined,
-    };
+    } as NodeConfig;
   }
 
   const workflowEdges: EdgeConfig[] = edges.map((e) => {
@@ -366,20 +400,16 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
       if (!source) return;
       const sourceData = source.data as NodeCardData;
       const newId = `${id}-copy-${Math.random().toString(36).slice(2, 6)}`;
-      const clonedData = makeNodeCardData(newId, {
-        adapter: sourceData.adapter,
-        model: sourceData.model,
-        role: sourceData.role,
-        tools: [...sourceData.tools],
-        prompt: sourceData.prompt as string | undefined,
-        outputDir: sourceData.outputDir as string | undefined,
-        timeoutMs: sourceData.timeoutMs as number | undefined,
-        idleTimeoutMs: sourceData.idleTimeoutMs as number | undefined,
-        maxBudgetUsd: sourceData.maxBudgetUsd as number | undefined,
-        maxTurns: sourceData.maxTurns as number | undefined,
-        sandbox: sourceData.sandbox as "read-only" | "workspace-write" | "full-access" | undefined,
-        disallowedTools: sourceData.disallowedTools as string[] | undefined,
-      });
+      // Clone from `raw` — the schema-complete NodeConfig — so advanced fields
+      // (providers, retryPolicy, modelTier, writesContext, readsContext,
+      // expectedOutputs, outputSchema) survive the duplicate. Enumerating
+      // display-mirror fields here is the same class of drop bug the export
+      // path fixes; structuredClone breaks array/object aliasing.
+      const sourceRaw = (sourceData.raw ?? {}) as Partial<NodeConfig>;
+      const clonedData = makeNodeCardData(
+        newId,
+        structuredClone(sourceRaw),
+      );
       const newNode: Node = {
         id: newId,
         type: "nodeCard",
@@ -399,23 +429,32 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
 
   const updateNode = useCallback(
     (id: string, patch: Partial<NodeConfig>) => {
+      // Sanitize the incoming patch against the schema-derived allowlist so
+      // any new NodeConfig field (providers, retryPolicy, modelTier,
+      // writesContext, readsContext, expectedOutputs, outputSchema, ...)
+      // propagates automatically without hand-editing this action.
+      const sanitized = sanitizeNodeConfigPatch(patch);
       setNodes((nds) => {
         const next = nds.map((n) => {
           if (n.id !== id) return n;
           const prev = n.data as NodeCardData;
+          const prevRaw = (prev.raw as Partial<NodeConfig> | undefined) ?? {};
+          const nextRaw: Partial<NodeConfig> = { ...prevRaw, ...sanitized };
           const merged: NodeCardData = {
             ...prev,
-            adapter: patch.adapter !== undefined ? patch.adapter : prev.adapter,
-            model: patch.model !== undefined ? patch.model : prev.model,
-            role: patch.role !== undefined ? patch.role : prev.role,
-            tools: patch.tools !== undefined ? patch.tools : prev.tools,
-            prompt: patch.prompt !== undefined ? patch.prompt : (prev.prompt as string | undefined) ?? "",
-            outputDir: patch.outputDir !== undefined ? patch.outputDir : (prev.outputDir as string | undefined),
-            timeoutMs: patch.timeoutMs !== undefined ? patch.timeoutMs : (prev.timeoutMs as number | undefined),
-            idleTimeoutMs: patch.idleTimeoutMs !== undefined ? patch.idleTimeoutMs : (prev.idleTimeoutMs as number | undefined),
-            maxBudgetUsd: patch.maxBudgetUsd !== undefined ? patch.maxBudgetUsd : (prev.maxBudgetUsd as number | undefined),
-            maxTurns: patch.maxTurns !== undefined ? patch.maxTurns : (prev.maxTurns as number | undefined),
-            sandbox: patch.sandbox !== undefined ? patch.sandbox : (prev.sandbox as "read-only" | "workspace-write" | "full-access" | undefined),
+            adapter: sanitized.adapter !== undefined ? sanitized.adapter : prev.adapter,
+            model: sanitized.model !== undefined ? sanitized.model : prev.model,
+            role: sanitized.role !== undefined ? sanitized.role : prev.role,
+            tools: sanitized.tools !== undefined ? sanitized.tools : prev.tools,
+            prompt: sanitized.prompt !== undefined ? sanitized.prompt : (prev.prompt as string | undefined) ?? "",
+            outputDir: sanitized.outputDir !== undefined ? sanitized.outputDir : (prev.outputDir as string | undefined),
+            timeoutMs: sanitized.timeoutMs !== undefined ? sanitized.timeoutMs : (prev.timeoutMs as number | undefined),
+            idleTimeoutMs: sanitized.idleTimeoutMs !== undefined ? sanitized.idleTimeoutMs : (prev.idleTimeoutMs as number | undefined),
+            maxBudgetUsd: sanitized.maxBudgetUsd !== undefined ? sanitized.maxBudgetUsd : (prev.maxBudgetUsd as number | undefined),
+            maxTurns: sanitized.maxTurns !== undefined ? sanitized.maxTurns : (prev.maxTurns as number | undefined),
+            sandbox: sanitized.sandbox !== undefined ? sanitized.sandbox : (prev.sandbox as "read-only" | "workspace-write" | "full-access" | undefined),
+            disallowedTools: sanitized.disallowedTools !== undefined ? sanitized.disallowedTools : (prev.disallowedTools as string[] | undefined),
+            raw: nextRaw,
           };
           return { ...n, data: merged as unknown as Record<string, unknown> };
         });
@@ -431,6 +470,9 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
   const onConnect: OnConnect = useCallback(
     (params) => {
       const newEdgeId = genEdgeId(params.source ?? "src", params.target ?? "tgt");
+      // A self-loop only executes under a loop-back gate — a forward self-edge
+      // has no scheduler meaning — so set `isLoopBack: true` up front.
+      const isSelfLoop = params.source !== null && params.source === params.target;
       const newEdge: Edge = {
         ...EDGE_DEFAULTS,
         ...params,
@@ -440,6 +482,7 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
             id: newEdgeId,
             from: params.source ?? "",
             to: params.target ?? "",
+            ...(isSelfLoop ? { isLoopBack: true } : {}),
           },
         } as unknown as Record<string, unknown>,
       };

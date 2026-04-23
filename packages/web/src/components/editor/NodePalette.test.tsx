@@ -58,7 +58,7 @@ describe("NodePalette", () => {
     event.dataTransfer = { setData, effectAllowed: "" };
 
     fireEvent(planner, event);
-    expect(setData).toHaveBeenCalledWith("application/sigil-node-type", "planner");
+    expect(setData).toHaveBeenCalledWith("application/sygil-node-type", "planner");
   });
 
   it("renders the header text", () => {

@@ -15,12 +15,21 @@ import {
   XCircle,
   Eye,
   CheckSquare,
+  Zap,
+  Database,
+  Webhook,
 } from "lucide-react";
-import type { WsServerEvent } from "@sigil/shared";
+import type { WsServerEvent } from "@sygil/shared";
 
 interface EventStreamProps {
   events: WsServerEvent[];
   autoScroll?: boolean;
+  /**
+   * Count of events dropped off the oldest end of the client-side buffer.
+   * When > 0, a "N events truncated" banner is rendered at the top of the scrollable
+   * list so operators know the view is not complete.
+   */
+  truncatedCount?: number;
 }
 
 function formatTimestamp(iso: string): string {
@@ -185,6 +194,67 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
               </div>
             </div>
           );
+        case "adapter_failover":
+          return (
+            <div className={`${baseClass} bg-accent-amber/5`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <AlertTriangle size={12} className="text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-amber">adapter_failover</span>
+                <span className="text-dim ml-2">
+                  {inner.fromAdapter} → {inner.toAdapter}
+                </span>
+                <span className="text-accent-amber/70 ml-2">({inner.reason})</span>
+              </div>
+            </div>
+          );
+        case "retry_scheduled":
+          return (
+            <div className={`${baseClass} bg-accent-amber/5`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <AlertTriangle size={12} className="text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-amber">retry_scheduled</span>
+                <span className="text-dim ml-2">
+                  attempt {inner.attempt}→{inner.nextAttempt}
+                </span>
+                <span className="text-accent-amber/70 ml-2">
+                  in {inner.delayMs}ms ({inner.reason})
+                </span>
+              </div>
+            </div>
+          );
+        case "context_set":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <Database size={12} className="text-accent-cyan shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-cyan">context_set</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+                <span className="text-dim ml-2 text-[11px]">
+                  = {truncate(JSON.stringify(inner.value), 80)}
+                </span>
+              </div>
+            </div>
+          );
+        case "hook_result":
+          return (
+            <div className={`${baseClass} ${inner.exitCode !== 0 ? "bg-accent-red/5" : ""}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <Webhook size={12} className={inner.exitCode !== 0 ? "text-accent-red shrink-0 mt-0.5" : "text-accent-cyan shrink-0 mt-0.5"} />
+              <div>
+                <span className={inner.exitCode !== 0 ? "text-accent-red" : "text-accent-cyan"}>
+                  hook {inner.hook}
+                </span>
+                <span className="text-dim ml-2">
+                  → exit={inner.exitCode} ({inner.durationMs}ms)
+                </span>
+              </div>
+            </div>
+          );
         default:
           return null;
       }
@@ -293,12 +363,42 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
         </div>
       );
 
+    case "circuit_breaker": {
+      const bg =
+        event.state === "open" ? "bg-accent-red/8" :
+        event.state === "half_open" ? "bg-accent-amber/5" :
+        "bg-accent-green/5";
+      const color =
+        event.state === "open" ? "text-accent-red" :
+        event.state === "half_open" ? "text-accent-amber" :
+        "text-accent-green";
+      return (
+        <div className={`${baseClass} ${bg}`} role="status" aria-live={event.state === "open" ? "assertive" : "polite"}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Zap size={12} className={`${color} shrink-0 mt-0.5`} />
+          <div>
+            <span className={color}>circuit_breaker</span>
+            <span className="text-dim ml-2">{event.adapterType}</span>
+            <span className={`${color} ml-2`}>→ {event.state}</span>
+            {event.reason && (
+              <span className="text-dim ml-2">({event.reason})</span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    case "metrics_tick":
+      // Metrics ticks arrive ~1Hz and drive MetricsStrip directly; surfacing
+      // them inline would drown out node events.
+      return null;
+
     default:
       return null;
   }
 }
 
-export function EventStream({ events, autoScroll = true }: EventStreamProps) {
+export function EventStream({ events, autoScroll = true, truncatedCount = 0 }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<string>("all");
 
@@ -357,6 +457,18 @@ export function EventStream({ events, autoScroll = true }: EventStreamProps) {
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
       >
+        {truncatedCount > 0 && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-2 px-4 py-1.5 bg-accent-amber/5 border-b border-accent-amber/20 font-mono text-[10px] text-accent-amber uppercase tracking-widest"
+          >
+            <AlertTriangle size={10} className="shrink-0" />
+            <span>
+              {truncatedCount.toLocaleString()} events truncated · oldest dropped
+            </span>
+          </div>
+        )}
         {filteredEvents.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <span className="text-dim text-xs font-mono">

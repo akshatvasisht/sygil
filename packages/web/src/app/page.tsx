@@ -42,7 +42,7 @@ export default function HomePage() {
               <ArrowRight size={15} strokeWidth={2.5} />
             </Link>
             <Link
-              href="https://github.com/akshatvasisht/sigil"
+              href="https://github.com/akshatvasisht/sygil"
               target="_blank"
               rel="noopener noreferrer"
               className="view-source-btn inline-flex items-center justify-center gap-2 font-mono text-sm uppercase tracking-wider text-dim hover:text-body border border-white/[0.1] hover:border-white/[0.15] px-8 py-4 min-h-[52px] w-full sm:w-auto rounded-lg transition-all duration-200 hover:bg-white/[0.03]"
@@ -61,14 +61,14 @@ export default function HomePage() {
         <ScrollReveal className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3 footer-logo">
             <SigilLogo size={14} color="#3f3f46" />
-            <span className="font-mono font-semibold text-dim text-sm tracking-tight">sigil</span>
+            <span className="font-mono font-semibold text-dim text-sm tracking-tight">sygil</span>
             <span className="hidden sm:inline font-mono text-[10px] text-dim">
               deterministic orchestration for probabilistic agents
             </span>
           </div>
           <div className="flex items-center gap-4">
             <Link
-              href="https://github.com/akshatvasisht/sigil"
+              href="https://github.com/akshatvasisht/sygil"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 font-mono text-xs text-dim hover:text-body uppercase tracking-wider transition-colors duration-200 min-h-[44px] px-2"

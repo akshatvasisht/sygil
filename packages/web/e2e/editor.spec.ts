@@ -22,9 +22,7 @@ test.describe("Workflow Editor", () => {
   });
 
   test("clicking a node opens the property panel", async ({ page }) => {
-    // The canvas starts empty — drag a node from the palette onto the canvas first
-    const plannerEntry = page.locator(".react-flow").locator("..").locator("..").getByText("Planner").first();
-
+    // The canvas starts empty — drag a node from the palette onto the canvas first.
     // Use the palette entry (draggable div) to drag onto the canvas
     const paletteItem = page
       .locator('[draggable="true"]')
@@ -85,5 +83,38 @@ test.describe("Workflow Editor", () => {
         .locator("[aria-label='Undo'], [title='Undo'], [title='Undo (Ctrl+Z)'], button:has-text('Undo')")
         .first()
     ).toBeVisible();
+  });
+
+  // Ctrl+D fired while focus is on a toolbar button used to
+  // preventDefault the bookmark shortcut even though the canvas wasn't the
+  // target — and the handler had no isContentEditable guard. Focus the Export
+  // button and confirm Ctrl+D neither duplicates a node nor swallows the event.
+  test("Ctrl+D on a focused button does not duplicate a node", async ({ page }) => {
+    // Add a node, select it so duplicate would have something to act on.
+    const paletteItem = page
+      .locator('[draggable="true"]')
+      .filter({ hasText: "Planner" })
+      .first();
+    const canvas = page.locator(".react-flow__pane");
+    const canvasBounds = await canvas.boundingBox();
+    if (!canvasBounds) throw new Error("Canvas not found");
+    await paletteItem.dragTo(canvas, {
+      targetPosition: { x: canvasBounds.width / 2, y: canvasBounds.height / 2 },
+    });
+    await page.waitForSelector(".react-flow__node", { timeout: 5_000 });
+    await page.locator(".react-flow__node").first().click();
+
+    const nodeCountBefore = await page.locator(".react-flow__node").count();
+    expect(nodeCountBefore).toBe(1);
+
+    // Focus a toolbar button (Export).
+    const exportBtn = page.getByRole("button", { name: /export/i });
+    await exportBtn.focus();
+
+    // Fire Ctrl+D while the button owns focus. Expect no new node to appear.
+    await page.keyboard.press("Control+d");
+
+    const nodeCountAfter = await page.locator(".react-flow__node").count();
+    expect(nodeCountAfter).toBe(nodeCountBefore);
   });
 });

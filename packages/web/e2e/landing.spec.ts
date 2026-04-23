@@ -22,7 +22,7 @@ test.describe("Landing Page", () => {
   });
 
   test("hero section is visible", async ({ page }) => {
-    // Hero contains the main heading with "Sigil" or orchestration text
+    // Hero contains the main heading with "Sygil" or orchestration text
     const hero = page.locator("main").first();
     await expect(hero).toBeVisible();
   });

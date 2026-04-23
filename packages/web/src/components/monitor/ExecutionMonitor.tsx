@@ -4,9 +4,10 @@ import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { Wifi, WifiOff, DollarSign, Clock, Layers, Pause, Play, X, Loader2, Download, ChevronDown, Clock3, CheckCircle, XCircle, ChevronUp, Terminal } from "lucide-react";
 import { NodeTimeline, type NodeTimelineEntry, type HumanReviewTimelineEntry } from "./NodeTimeline";
 import { EventStream } from "./EventStream";
+import { MetricsStrip } from "./MetricsStrip";
 import { WorkflowEditor } from "@/components/editor/WorkflowEditor";
 import { useWorkflowMonitor } from "@/hooks/useWorkflowMonitor";
-import type { WsServerEvent, WorkflowRunState, WorkflowGraph, NodeExecutionStatus } from "@sigil/shared";
+import type { WsServerEvent, WorkflowRunState, WorkflowGraph, NodeExecutionStatus, MetricsSnapshot } from "@sygil/shared";
 import { exportAsJson, exportAsMarkdown, triggerDownload } from "@/utils/exportLog";
 
 // ── NodeExecutionStatus (re-exported for consumers) ───────────────────────────
@@ -101,19 +102,35 @@ export function buildTimelineEntries(
         if (entry && entry.adapter !== "human-review") {
           entries.set(key, {
             ...entry,
-            status: "completed",
+            // distinguish cache hits from fresh completions
+            status: ev.result.cacheHit ? "cached" : "completed",
             durationMs: ev.result.durationMs,
             costUsd: ev.result.costUsd,
             tokenUsage: ev.result.tokenUsage,
           });
         }
       }
-    } else if (ev.type === "workflow_error" && ev.nodeId) {
-      const key = currentAttemptKey.get(ev.nodeId);
-      if (key) {
-        const entry = entries.get(key);
-        if (entry) {
-          entries.set(key, { ...entry, status: "failed" } as NodeTimelineEntry);
+    } else if (ev.type === "workflow_error") {
+      // a "Workflow cancelled" abort leaves in-flight nodes in an
+      // ambiguous state — label them cancelled, not failed, so operators can
+      // tell user-intent aborts apart from adapter errors.
+      const isCancellation = ev.message === "Workflow cancelled";
+      if (ev.nodeId) {
+        const key = currentAttemptKey.get(ev.nodeId);
+        if (key) {
+          const entry = entries.get(key);
+          if (entry) {
+            const status = isCancellation ? "cancelled" : "failed";
+            entries.set(key, { ...entry, status } as NodeTimelineEntry);
+          }
+        }
+      }
+      if (isCancellation) {
+        // Sweep any other in-flight entries — cancellation is workflow-wide.
+        for (const [k, entry] of entries) {
+          if (entry.adapter !== "human-review" && entry.status === "running") {
+            entries.set(k, { ...entry, status: "cancelled" } as NodeTimelineEntry);
+          }
         }
       }
     } else if (ev.type === "loop_back") {
@@ -206,7 +223,7 @@ function ConnectionBanner({ status, workflowId, reconnectAttempt, onReconnect }:
         <span className="font-mono text-[11px] text-dim">
           No workflow connected — run{" "}
           <code className="font-mono bg-panel border border-border px-1 rounded">
-            sigil run workflow.json
+            sygil run workflow.json
           </code>{" "}
           and open the monitor URL it prints
         </span>
@@ -219,7 +236,7 @@ function ConnectionBanner({ status, workflowId, reconnectAttempt, onReconnect }:
       <div className="flex items-center gap-2 px-4 py-2.5 bg-accent-blue/10 border-b border-accent-blue/20 shrink-0">
         <Loader2 size={12} className="text-accent-blue shrink-0 animate-spin" />
         <span className="font-mono text-[11px] text-accent-blue">
-          Connecting to Sigil monitor…
+          Connecting to Sygil monitor…
         </span>
         <div className="ml-auto flex items-center gap-1.5">
           <div className="w-8 h-1.5 rounded-full bg-accent-blue/20 animate-pulse" />
@@ -249,7 +266,7 @@ function ConnectionBanner({ status, workflowId, reconnectAttempt, onReconnect }:
       <WifiOff size={12} className="text-accent-red shrink-0" />
       <span className="font-mono text-[11px] text-accent-red">
         {maxed
-          ? "Could not connect to Sigil monitor server — is `sigil run` still active?"
+          ? "Could not connect to Sygil monitor server — is `sygil run` still active?"
           : `Disconnected — attempting to reconnect (attempt ${reconnectAttempt}/3)…`}
       </span>
       {maxed && onReconnect && (
@@ -284,7 +301,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
   const approveRef = useRef<HTMLButtonElement>(null);
   const rejectRef = useRef<HTMLButtonElement>(null);
 
-  const { status, workflowState, events, reconnectAttempt, sendControl, reconnect } =
+  const { status, workflowState, events, truncatedCount, reconnectAttempt, sendControl, reconnect } =
     useWorkflowMonitor(wsUrl, workflowId);
 
   useEffect(() => {
@@ -321,6 +338,15 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
   const executionState = useMemo(() => {
     return buildExecutionStateMap(events, workflowState);
   }, [events, workflowState]);
+
+  // Latest metrics snapshot from the most recent metrics_tick event
+  const latestMetrics = useMemo((): MetricsSnapshot | null => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev?.type === "metrics_tick") return ev.data;
+    }
+    return null;
+  }, [events]);
 
   const isRunning = workflowState?.status === "running";
 
@@ -465,7 +491,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
                       aria-label="Dismiss cancel"
                       className="flex items-center gap-1 font-mono text-[10px] text-dim hover:text-body px-2 min-h-[44px] rounded hover:bg-surface transition-colors duration-200"
                     >
-                      Nevermind
+                      Dismiss
                     </button>
                   </div>
                 ) : (
@@ -590,6 +616,9 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
         </div>
       </div>
 
+      {/* Metrics strip — hidden until first metrics_tick arrives */}
+      <MetricsStrip metrics={latestMetrics} />
+
       {/* Main split pane */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Node timeline */}
@@ -662,7 +691,11 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
             {/* Event stream — visible when open */}
             {eventLogOpen && (
               <div className="flex-1 overflow-hidden">
-                <EventStream events={streamEvents} autoScroll={status === "connected"} />
+                <EventStream
+                  events={streamEvents}
+                  autoScroll={status === "connected"}
+                  truncatedCount={truncatedCount}
+                />
               </div>
             )}
           </div>

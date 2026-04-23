@@ -7,43 +7,11 @@ test.describe("Execution Monitor", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("shows demo mode banner when no ws param is provided", async ({ page }) => {
-    // The connection banner shows "Demo mode" text when no ?ws= param is present
-    await expect(page.getByText(/demo mode/i)).toBeVisible({ timeout: 5_000 });
-  });
-
-  test("renders the React Flow canvas in monitor mode", async ({ page }) => {
-    // The unified surface renders WorkflowEditor in monitor mode once the mock
-    // workflow graph is available — wait for React Flow to initialise
-    await expect(page.locator(".react-flow")).toBeVisible({ timeout: 10_000 });
-    // Monitor mode pre-populates nodes from MOCK_WORKFLOW_GRAPH (planner /
-    // implementer / reviewer), so there must be at least one node card
-    await expect(page.locator(".react-flow__node").first()).toBeVisible({
-      timeout: 10_000,
-    });
-  });
-
-  test("renders the NodeTimeline left pane", async ({ page }) => {
-    // The NodeTimeline header renders the static label "Node timeline".
-    // The pane itself has no data-testid so we locate it via the header text.
-    const timelineHeader = page
-      .locator(
-        "[data-testid='node-timeline'], .node-timeline, [class*='node-timeline']"
-      )
-      .or(page.getByText(/node timeline/i))
-      .first();
-
-    await expect(timelineHeader).toBeVisible({ timeout: 5_000 });
-
-    // The mock data has three nodes: planner, implementer, reviewer.
-    // At least one of them should appear in the timeline pane.
-    await expect(
-      page
-        .getByText("planner")
-        .or(page.getByText("implementer"))
-        .or(page.getByText("reviewer"))
-        .first()
-    ).toBeVisible({ timeout: 5_000 });
+  test("monitor page loads without the retired demo-mode banner", async ({ page }) => {
+    // Demo mode was retired — the banner must not appear on a fresh load.
+    await expect(page.getByText(/demo mode/i)).toHaveCount(0);
+    // The top bar still renders the sygil brand, confirming the shell loaded.
+    await expect(page.getByText("sygil")).toBeVisible({ timeout: 5_000 });
   });
 
   test("shows the event log drawer toggle", async ({ page }) => {

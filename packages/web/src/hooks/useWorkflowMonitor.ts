@@ -1,12 +1,30 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { WsServerEvent, WsClientEvent, WorkflowRunState } from "@sigil/shared";
+import type { WsServerEvent, WsClientEvent, WorkflowRunState } from "@sygil/shared";
+
+/**
+ * Last-known state per adapter-type circuit breaker. Driven by the
+ * `circuit_breaker` `WsServerEvent` transition stream — not a cumulative view
+ * (that lives in `MetricsSnapshot.circuitBreakers` from `metrics_tick`).
+ * The UI can render this as a badge + `aria-live` assertive announcement on
+ * `state === "open"` without reaching back into the events array.
+ */
+export interface CircuitBreakerState {
+  state: "closed" | "open" | "half_open";
+  reason?: string;
+  /** ISO timestamp of the last observed transition. */
+  at?: string;
+}
 
 export interface MonitorState {
   status: "connecting" | "connected" | "disconnected" | "mock";
   workflowState: WorkflowRunState | null;
   events: WsServerEvent[];
+  /** Count of events dropped off the oldest end because the cap was exceeded. */
+  truncatedCount: number;
+  /** Per-adapter-type circuit breaker transition state. Empty before the first transition. */
+  circuitBreakers: Record<string, CircuitBreakerState>;
   error: string | null;
   reconnectAttempt: number;
 }
@@ -14,11 +32,25 @@ export interface MonitorState {
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 3000;
 
+/**
+ * Hard cap on the monitor's in-memory event buffer. Long runs that emit
+ * `text_delta` / `metrics_tick` at a steady cadence accumulate tens of thousands
+ * of entries; each append used to trigger a full re-render over an ever-growing
+ * array. We keep the most recent MAX_MONITOR_EVENTS entries and surface the
+ * drop count via `truncatedCount` so the UI can render a "N events truncated"
+ * banner. The authoritative buffer lives in the CLI's fanout ring (see CLAUDE.md
+ * — WebSocket ring buffer 1024 events/client); this cap exists purely to bound
+ * client memory and render cost.
+ */
+const MAX_MONITOR_EVENTS = 2000;
+
 export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | null) {
   const [state, setState] = useState<MonitorState>({
     status: wsUrl === null ? "mock" : "connecting",
     workflowState: null,
     events: [],
+    truncatedCount: 0,
+    circuitBreakers: {},
     error: null,
     reconnectAttempt: 0,
   });
@@ -86,9 +118,33 @@ export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | nu
       }
 
       setState((prev) => {
-        const events = [...prev.events, event];
+        // Cap the buffer at MAX_MONITOR_EVENTS. When the cap is reached,
+        // drop the oldest entry and bump `truncatedCount` so the UI can render
+        // a banner. The array reference changes on every event either way —
+        // consumers that care about render cost should memoize over the tail.
+        let events: WsServerEvent[];
+        let truncatedCount = prev.truncatedCount;
+        if (prev.events.length >= MAX_MONITOR_EVENTS) {
+          events = [...prev.events.slice(prev.events.length - MAX_MONITOR_EVENTS + 1), event];
+          truncatedCount += 1;
+        } else {
+          events = [...prev.events, event];
+        }
         const workflowState = applyEvent(prev.workflowState, event);
-        return { ...prev, events, workflowState };
+        // Track circuit breaker transitions in a separate slice so the UI can
+        // render a badge without scanning the events array.
+        let circuitBreakers = prev.circuitBreakers;
+        if (event.type === "circuit_breaker") {
+          circuitBreakers = {
+            ...prev.circuitBreakers,
+            [event.adapterType]: {
+              state: event.state,
+              ...(event.reason !== undefined ? { reason: event.reason } : {}),
+              ...(event.timestamp !== undefined ? { at: event.timestamp } : {}),
+            },
+          };
+        }
+        return { ...prev, events, truncatedCount, workflowState, circuitBreakers };
       });
     };
 
@@ -113,7 +169,7 @@ export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | nu
           ...prev,
           status: "disconnected",
           reconnectAttempt: attempt,
-          error: "Could not connect to Sigil monitor server",
+          error: "Could not connect to Sygil monitor server",
         }));
       }
     };
@@ -139,6 +195,8 @@ export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | nu
         status: "mock",
         workflowState: null,
         events: [],
+        truncatedCount: 0,
+        circuitBreakers: {},
         error: null,
         reconnectAttempt: 0,
       });
@@ -197,6 +255,7 @@ function applyEvent(
         nodeResults: {},
         totalCostUsd: 0,
         retryCounters: {},
+        sharedContext: {},
       };
 
     case "node_start": {
@@ -252,12 +311,26 @@ function applyEvent(
       };
     }
 
+    case "node_event": {
+      // Mirror context_set writes into the client's sharedContext view so the
+      // monitor UI can render them without re-reading the checkpoint. The
+      // server has already enforced the writesContext allowlist; the client
+      // trusts the broadcast sequence.
+      if (event.event.type === "context_set" && prev) {
+        return {
+          ...prev,
+          sharedContext: { ...prev.sharedContext, [event.event.key]: event.event.value },
+        };
+      }
+      return prev;
+    }
+
     case "human_review_request":
     case "human_review_response":
     case "gate_eval":
     case "rate_limit":
-    case "node_event":
-      // These events update the timeline but not WorkflowRunState
+    case "metrics_tick":
+      // These events update the timeline / metrics strip but not WorkflowRunState
       return prev;
 
     default:

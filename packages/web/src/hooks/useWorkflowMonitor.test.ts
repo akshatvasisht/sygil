@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkflowMonitor } from "./useWorkflowMonitor";
-import type { WsServerEvent } from "@sigil/shared";
+import type { WsServerEvent } from "@sygil/shared";
 
 // ── WebSocket mock ────────────────────────────────────────────────────────────
 
@@ -219,5 +219,185 @@ describe("useWorkflowMonitor", () => {
     );
 
     expect(result.current.workflowState?.status).toBe("failed");
+  });
+
+  // The events array used to grow without bound. Long runs with
+  // frequent text_delta / metrics_tick broadcasts accumulated tens of thousands
+  // of entries and re-rendered the whole list on every message. Now capped at
+  // MAX_MONITOR_EVENTS (2000) with a `truncatedCount` on state.
+  describe("event buffer bound", () => {
+    it("caps events at MAX_MONITOR_EVENTS when the feed is long-running", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      const TOTAL = 5000;
+      act(() => {
+        for (let i = 0; i < TOTAL; i++) {
+          ws.simulateMessage({
+            type: "rate_limit",
+            workflowId: "wf-1",
+            nodeId: "n",
+            retryAfterMs: i,
+          });
+        }
+      });
+
+      expect(result.current.events.length).toBe(2000);
+      // Oldest entries were evicted, not the newest
+      const last = result.current.events[result.current.events.length - 1]!;
+      expect(last.type).toBe("rate_limit");
+      if (last.type === "rate_limit") {
+        expect(last.retryAfterMs).toBe(TOTAL - 1);
+      }
+    });
+
+    it("tracks how many events were dropped in `truncatedCount`", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      const TOTAL = 3500;
+      act(() => {
+        for (let i = 0; i < TOTAL; i++) {
+          ws.simulateMessage({
+            type: "rate_limit",
+            workflowId: "wf-1",
+            nodeId: "n",
+            retryAfterMs: i,
+          });
+        }
+      });
+
+      // total - cap = truncated
+      expect(result.current.truncatedCount).toBe(TOTAL - 2000);
+    });
+
+    it("stays at truncatedCount=0 below the cap", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      act(() => {
+        for (let i = 0; i < 100; i++) {
+          ws.simulateMessage({
+            type: "rate_limit",
+            workflowId: "wf-1",
+            nodeId: "n",
+            retryAfterMs: i,
+          });
+        }
+      });
+
+      expect(result.current.events.length).toBe(100);
+      expect(result.current.truncatedCount).toBe(0);
+    });
+  });
+
+  // applyEvent used to have no `circuit_breaker` case — the
+  // event fell through `default: return prev`, so the UI had no way to render
+  // a "closed → open" transition beyond tailing NDJSON.
+  describe("circuit_breaker state tracking", () => {
+    it("initializes circuitBreakers to an empty object", () => {
+      const { result } = renderHook(() => useWorkflowMonitor(null, null));
+      expect(result.current.circuitBreakers).toEqual({});
+    });
+
+    it("records the latest transition per adapter", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "open",
+          reason: "5 failures in 30s",
+          timestamp: "2026-04-20T10:00:00Z",
+        })
+      );
+
+      expect(result.current.circuitBreakers["claude-sdk"]).toEqual({
+        state: "open",
+        reason: "5 failures in 30s",
+        at: "2026-04-20T10:00:00Z",
+      });
+      // Event also appears in the events log — this is the rendering path for circuit_breaker events.
+      const last = result.current.events[result.current.events.length - 1]!;
+      expect(last.type).toBe("circuit_breaker");
+    });
+
+    it("overwrites per-adapter state on subsequent transitions", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "open",
+        })
+      );
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "half_open",
+        })
+      );
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "closed",
+        })
+      );
+
+      expect(result.current.circuitBreakers["claude-sdk"]?.state).toBe("closed");
+    });
+
+    it("tracks multiple adapters independently", () => {
+      const { result } = renderHook(() =>
+        useWorkflowMonitor("ws://localhost:9000", "wf-1")
+      );
+      const ws = MockWebSocket.instances[0]!;
+      act(() => ws.simulateOpen());
+
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "open",
+        })
+      );
+      act(() =>
+        ws.simulateMessage({
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "codex",
+          state: "half_open",
+        })
+      );
+
+      expect(result.current.circuitBreakers["claude-sdk"]?.state).toBe("open");
+      expect(result.current.circuitBreakers["codex"]?.state).toBe("half_open");
+    });
   });
 });

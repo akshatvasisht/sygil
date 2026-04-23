@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { EventStream } from "./EventStream";
-import type { WsServerEvent } from "@sigil/shared";
+import type { WsServerEvent } from "@sygil/shared";
 
 // Mock lucide-react icons to simple spans
 vi.mock("lucide-react", () => {
@@ -21,6 +21,12 @@ vi.mock("lucide-react", () => {
     GitBranch: icon("git-branch"),
     Play: icon("play"),
     CheckCircle2: icon("check-circle"),
+    XCircle: icon("x-circle"),
+    Eye: icon("eye"),
+    CheckSquare: icon("check-square"),
+    Zap: icon("zap"),
+    Database: icon("database"),
+    Webhook: icon("webhook"),
   };
 });
 
@@ -190,5 +196,123 @@ describe("EventStream", () => {
     // With no events, none of the event-specific content should render
     expect(screen.queryByText(/tool_call/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/text_delta/i)).not.toBeInTheDocument();
+  });
+
+  // Four event variants used to fall to the default `return
+  // null` branch — every circuit-breaker transition, metrics tick, shared-
+  // context write, and hook result was invisible in the monitor UI.
+  describe("event variant coverage", () => {
+    it("renders circuit_breaker top-level event", () => {
+      const events: WsServerEvent[] = [
+        {
+          type: "circuit_breaker",
+          workflowId: "wf-1",
+          adapterType: "claude-sdk",
+          state: "open",
+          reason: "5 failures in 30s",
+        },
+      ];
+      render(<EventStream events={events} />);
+      expect(screen.getByText("circuit_breaker")).toBeInTheDocument();
+      expect(screen.getByText("claude-sdk")).toBeInTheDocument();
+      expect(screen.getByText(/→ open/)).toBeInTheDocument();
+    });
+
+    it("metrics_tick renders nothing (intentional — drives MetricsStrip separately)", () => {
+      const events: WsServerEvent[] = [
+        {
+          type: "metrics_tick",
+          workflowId: "wf-1",
+          data: {
+            adapters: {},
+            pool: null,
+            gates: { passed: 0, failed: 0 },
+            inFlightNodes: 0,
+          },
+        },
+      ];
+      render(<EventStream events={events} />);
+      expect(screen.queryByText(/metrics_tick/)).not.toBeInTheDocument();
+    });
+
+    it("renders context_set inner event with key and truncated value", () => {
+      const events: WsServerEvent[] = [
+        {
+          type: "node_event",
+          workflowId: "wf-1",
+          nodeId: "planner",
+          event: {
+            type: "context_set",
+            key: "plan_approved",
+            value: { approved: true, reviewer: "human" },
+          },
+        },
+      ];
+      render(<EventStream events={events} />);
+      expect(screen.getByText("context_set")).toBeInTheDocument();
+      expect(screen.getByText("plan_approved")).toBeInTheDocument();
+      expect(screen.getByText(/"reviewer":"human"/)).toBeInTheDocument();
+    });
+
+    it("renders hook_result inner event with exit code and duration", () => {
+      const events: WsServerEvent[] = [
+        {
+          type: "node_event",
+          workflowId: "wf-1",
+          nodeId: "planner",
+          event: {
+            type: "hook_result",
+            hook: "preNode",
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            durationMs: 42,
+          },
+        },
+      ];
+      render(<EventStream events={events} />);
+      expect(screen.getByText("hook preNode")).toBeInTheDocument();
+      expect(screen.getByText(/exit=0/)).toBeInTheDocument();
+      expect(screen.getByText(/42ms/)).toBeInTheDocument();
+    });
+
+    // The hook tracks `truncatedCount` when the 2000-event cap is exceeded,
+    // but without surfacing it the operator has no way to know the view is
+    // not complete. Banner renders only when > 0.
+    it("renders truncation banner when truncatedCount > 0", () => {
+      render(<EventStream events={[]} truncatedCount={1500} />);
+      expect(screen.getByText(/1,500 events truncated/)).toBeInTheDocument();
+    });
+
+    it("hides truncation banner when truncatedCount is 0", () => {
+      render(<EventStream events={[]} truncatedCount={0} />);
+      expect(screen.queryByText(/events truncated/)).not.toBeInTheDocument();
+    });
+
+    it("hides truncation banner when truncatedCount is omitted", () => {
+      render(<EventStream events={[]} />);
+      expect(screen.queryByText(/events truncated/)).not.toBeInTheDocument();
+    });
+
+    it("renders hook_result in red on non-zero exit", () => {
+      const events: WsServerEvent[] = [
+        {
+          type: "node_event",
+          workflowId: "wf-1",
+          nodeId: "planner",
+          event: {
+            type: "hook_result",
+            hook: "postNode",
+            exitCode: 1,
+            stdout: "",
+            stderr: "boom",
+            durationMs: 17,
+          },
+        },
+      ];
+      render(<EventStream events={events} />);
+      const label = screen.getByText("hook postNode");
+      expect(label).toHaveClass("text-accent-red");
+    });
   });
 });

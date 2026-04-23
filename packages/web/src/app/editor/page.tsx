@@ -9,8 +9,8 @@ export default function EditorPage() {
       <div className="flex items-center justify-between px-4 h-11 border-b border-border bg-canvas shrink-0">
         <Link href="/" className="flex items-center gap-2 group">
           <SigilLogo size={16} color="var(--dim)" className="group-hover:[&]:opacity-100 transition-opacity duration-200" />
-          <span className="font-display font-semibold text-sm text-subtle group-hover:text-dim transition-colors duration-200">
-            sigil
+          <span className="font-display font-semibold text-sm text-dim group-hover:text-body transition-colors duration-200">
+            sygil
           </span>
         </Link>
       </div>

@@ -13,7 +13,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@sigil/shared": path.resolve(__dirname, "../shared/src/index.ts"),
+      "@sygil/shared": path.resolve(__dirname, "../shared/src/index.ts"),
     },
   },
 });

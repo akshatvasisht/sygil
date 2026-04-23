@@ -1,11 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { resolve } from "node:path";
-import { startSigilRun } from "./helpers/sigil-runner";
+import { startSygilRun } from "./helpers/sigil-runner";
 
 // Fixture paths — relative to this spec file
 const FIXTURES = resolve(__dirname, "../../cli/test-fixtures/workflows");
 
-test.describe("Live monitor — real sigil subprocess", () => {
+test.describe("Live monitor — real sygil subprocess", () => {
   // Give each test extra time: subprocess startup + browser connection + assertions
   test.setTimeout(30_000);
 
@@ -13,7 +13,7 @@ test.describe("Live monitor — real sigil subprocess", () => {
     const workflowPath = resolve(FIXTURES, "single-node.json");
     // ECHO_DURATION_MS=3000 keeps the echo adapter alive long enough for the
     // browser to connect and observe at least the node_start event.
-    const run = await startSigilRun(workflowPath, {
+    const run = await startSygilRun(workflowPath, {
       env: { ECHO_DURATION_MS: "3000", ECHO_DELAY_MS: "200" },
     });
 
@@ -43,7 +43,7 @@ test.describe("Live monitor — real sigil subprocess", () => {
 
   test("shows multiple nodes in diamond workflow", async ({ page }) => {
     const workflowPath = resolve(FIXTURES, "parallel-diamond.json");
-    const run = await startSigilRun(workflowPath, {
+    const run = await startSygilRun(workflowPath, {
       env: { ECHO_DURATION_MS: "2000", ECHO_DELAY_MS: "200" },
     });
 
@@ -65,7 +65,7 @@ test.describe("Live monitor — real sigil subprocess", () => {
 
   test("event stream shows events as they arrive", async ({ page }) => {
     const workflowPath = resolve(FIXTURES, "linear-gate.json");
-    const run = await startSigilRun(workflowPath, {
+    const run = await startSygilRun(workflowPath, {
       env: { ECHO_DURATION_MS: "2000", ECHO_DELAY_MS: "200" },
     });
 
@@ -101,7 +101,7 @@ test.describe("Live monitor — real sigil subprocess", () => {
   test("shows workflow completed state", async ({ page }) => {
     const workflowPath = resolve(FIXTURES, "single-node.json");
     // Shorter echo so the workflow finishes promptly and we verify the terminal state
-    const run = await startSigilRun(workflowPath, {
+    const run = await startSygilRun(workflowPath, {
       env: { ECHO_DURATION_MS: "1000", ECHO_DELAY_MS: "100" },
     });
 
@@ -131,7 +131,7 @@ test.describe("Live monitor — real sigil subprocess", () => {
   test("human review approval flow", async ({ page }) => {
     const workflowPath = resolve(FIXTURES, "human-review.json");
     // impl completes quickly; gate blocks until browser approves
-    const run = await startSigilRun(workflowPath, {
+    const run = await startSygilRun(workflowPath, {
       env: { ECHO_DURATION_MS: "500", ECHO_DELAY_MS: "50" },
     });
 

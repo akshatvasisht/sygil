@@ -1,5 +1,5 @@
 {
-  "name": "@sigil/web",
+  "name": "@sygil/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -17,7 +17,7 @@
     "@dagrejs/dagre": "^1.1.4",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
-    "@sigil/shared": "*",
+    "@sygil/shared": "*",
     "@xyflow/react": "^12.3.6",
     "lucide-react": "^0.468.0",
     "next": "14.2.35",

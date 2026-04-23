@@ -12,7 +12,7 @@ const FEATURES = [
       "Claude SDK, Codex CLI, Claude CLI. Per-node adapter selection — mix runtimes in a single workflow. Add a Cursor node to the same graph as a Codex node without changing anything else.",
     tags: ["claude-sdk", "codex", "claude-cli", "cursor"],
     tagColors: ["text-accent-blue", "text-accent-green", "text-subtle", "text-accent-purple"],
-    code: `nodes:\n  planner:\n    adapter: claude-sdk\n    model: claude-opus-4-5\n  implementer:\n    adapter: codex\n    model: o3`,
+    code: `nodes:\n  planner:\n    adapter: claude-sdk\n    model: claude-opus-4-7\n  implementer:\n    adapter: codex\n    model: o3`,
   },
   {
     icon: Shield,

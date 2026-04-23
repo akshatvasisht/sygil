@@ -202,7 +202,7 @@ const STEPS = [
   "nodes": {
     "planner": {
       "adapter": "claude-sdk",
-      "model": "claude-opus-4-5",
+      "model": "claude-opus-4-7",
       "role": "TDD planner",
       "prompt": "Write failing tests for {{goal}}",
       "tools": ["Read", "Grep", "Write"]
@@ -216,7 +216,7 @@ const STEPS = [
     },
     "reviewer": {
       "adapter": "claude-sdk",
-      "model": "claude-opus-4-5",
+      "model": "claude-opus-4-7",
       "role": "Code reviewer",
       "prompt": "Review the implementation"
     }
@@ -249,28 +249,28 @@ const STEPS = [
     number: "02",
     title: "Preflight check",
     description:
-      "Sigil probes installed adapters \u2014 API keys, CLI binaries, model access. Misconfigurations surface before a single token is spent.",
-    code: `$ sigil init
+      "Sygil probes installed adapters \u2014 API keys, CLI binaries, model access. Misconfigurations surface before a single token is spent.",
+    code: `$ sygil init
 
   Detecting adapters...
 
   \u2713  claude-sdk    ANTHROPIC_API_KEY set
-                   claude-opus-4-5 available
+                   claude-opus-4-7 available
   \u2713  codex         /usr/local/bin/codex found
                    o3 available
   \u2713  claude-cli    /usr/local/bin/claude found
   \u2717  cursor        not found (Phase 2)
 
   All required adapters ready.
-  Run \`sigil run tdd-feature <goal>\` to start.`,
+  Run \`sygil run tdd-feature <goal>\` to start.`,
     lang: "bash",
   },
   {
     number: "03",
     title: "Execute",
     description:
-      "Pass a goal. Sigil traverses the graph, evaluating gates after each node \u2014 exit codes, file existence, regex matches. Loop-back edges trigger automatic retries.",
-    code: `$ sigil run tdd-feature "add OAuth2 login"
+      "Pass a goal. Sygil traverses the graph, evaluating gates after each node \u2014 exit codes, file existence, regex matches. Loop-back edges trigger automatic retries.",
+    code: `$ sygil run tdd-feature "add OAuth2 login"
 
   \u2713 Loaded workflow: tdd-feature
   \u279C  Web monitor available at: http://localhost:4891/...
@@ -291,7 +291,7 @@ const STEPS = [
     title: "Monitor live",
     description:
       "Attach from another terminal or open the web dashboard with --web. Tool calls, file writes, gate evaluations, and cumulative cost stream in real time.",
-    code: `$ sigil monitor r_8x92kf
+    code: `$ sygil monitor r_8x92kf
 
   \u250C\u2500 planner      \u2713 completed   4.2s   $0.014
   \u2502    Write("tests/test_oauth.py")
@@ -473,7 +473,7 @@ export function HowItWorks() {
                     <div className={`w-1.5 h-1.5 rounded-full ${
                       active.lang === "json" ? "bg-accent-blue/60" : "bg-accent/60"
                     }`} />
-                    <span className="font-mono text-[9px] text-subtle uppercase tracking-wider">
+                    <span className="font-mono text-[9px] text-dim uppercase tracking-wider">
                       {active.lang}
                     </span>
                   </div>

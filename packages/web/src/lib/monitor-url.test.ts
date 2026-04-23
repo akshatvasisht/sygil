@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveMonitorWsUrl } from "./monitor-url.js";
+import { resolveMonitorWsUrl, classifyMonitorWsParam } from "./monitor-url.js";
 
 const HOST = "localhost";
 const PORT = "4321";
@@ -38,7 +38,7 @@ describe("resolveMonitorWsUrl", () => {
     });
   });
 
-  describe("dev mode (SIGIL_UI_DEV=1, ?ws=<port> provided)", () => {
+  describe("dev mode (SYGIL_UI_DEV=1, ?ws=<port> provided)", () => {
     it("uses ?ws= param port, overriding locationPort", () => {
       const url = resolveMonitorWsUrl({
         wsParam: "9999",
@@ -81,6 +81,57 @@ describe("resolveMonitorWsUrl", () => {
       });
       // Empty token is falsy — treated as no token → null
       expect(url).toBeNull();
+    });
+  });
+
+  describe("wsParam validation", () => {
+    it.each([
+      ["abc"],
+      ["4891/path"],
+      ["-1"],
+      ["0"],
+      ["65536"],
+      ["99999"],
+      [" 4321"],
+      ["4321 "],
+      ["4321a"],
+    ])("returns null when wsParam is invalid: %s", (bad) => {
+      const url = resolveMonitorWsUrl({
+        wsParam: bad,
+        token: TOKEN,
+        locationPort: PORT,
+        locationHostname: HOST,
+      });
+      expect(url).toBeNull();
+    });
+
+    it.each([["1"], ["80"], ["4321"], ["65535"]])(
+      "accepts valid port %s",
+      (good) => {
+        const url = resolveMonitorWsUrl({
+          wsParam: good,
+          token: TOKEN,
+          locationPort: null,
+          locationHostname: HOST,
+        });
+        expect(url).toBe(`ws://${HOST}:${good}/?token=${TOKEN}`);
+      },
+    );
+
+    it("classifyMonitorWsParam returns 'empty' for null and empty string", () => {
+      expect(classifyMonitorWsParam(null)).toBe("empty");
+      expect(classifyMonitorWsParam("")).toBe("empty");
+    });
+
+    it("classifyMonitorWsParam returns 'valid' for a port in range", () => {
+      expect(classifyMonitorWsParam("4321")).toBe("valid");
+    });
+
+    it("classifyMonitorWsParam returns 'invalid_port' for garbage", () => {
+      expect(classifyMonitorWsParam("abc")).toBe("invalid_port");
+      expect(classifyMonitorWsParam("65536")).toBe("invalid_port");
+      expect(classifyMonitorWsParam("-1")).toBe("invalid_port");
+      expect(classifyMonitorWsParam("4891/path")).toBe("invalid_port");
     });
   });
 

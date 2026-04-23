@@ -14,8 +14,14 @@ import {
   AlertTriangle,
   DollarSign,
   Clock3,
+  Snowflake,
+  Ban,
+  Clock,
+  ArrowRight,
+  Database,
+  Webhook,
 } from "lucide-react";
-import type { AgentEvent } from "@sigil/shared";
+import type { AgentEvent } from "@sygil/shared";
 
 export interface HumanReviewTimelineEntry {
   nodeId: string; // synthetic key (e.g. "human-review-<edgeId>")
@@ -28,7 +34,22 @@ export interface HumanReviewTimelineEntry {
   events: never[];
 }
 
-export type NodeTimelineStatus = "idle" | "running" | "completed" | "failed";
+/**
+ * Visible status for a node in the monitor timeline.
+ *
+ * - `cached` — `NodeResult.cacheHit === true`; node was served from
+ *   `NodeCache` without running the adapter. Distinct from `completed` so
+ *   audits can tell real runs from memoized ones.
+ * - `cancelled` — observed a `workflow_error` with message "Workflow
+ *   cancelled" while this entry was still in-flight (from `AbortTree`).
+ */
+export type NodeTimelineStatus =
+  | "idle"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cached"
+  | "cancelled";
 
 export interface NodeTimelineEntry {
   nodeId: string;
@@ -59,6 +80,10 @@ function StatusIcon({ status }: { status: NodeTimelineStatus }) {
       return <Loader2 size={16} className="text-accent-blue shrink-0 animate-spin" />;
     case "failed":
       return <XCircle size={16} className="text-accent-red shrink-0" />;
+    case "cached":
+      return <Snowflake size={16} className="text-accent-cyan shrink-0" />;
+    case "cancelled":
+      return <Ban size={16} className="text-dim shrink-0" />;
     default:
       return <Circle size={16} className="text-dim shrink-0" />;
   }
@@ -105,6 +130,60 @@ function EventBadge({ event }: { event: AgentEvent }) {
         <div className="flex items-center gap-1.5 font-mono text-[10px] text-dim">
           <DollarSign size={9} className="text-accent-green shrink-0" />
           <span>${event.totalCostUsd.toFixed(4)}</span>
+        </div>
+      );
+    case "stall":
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-accent-amber">
+          <AlertTriangle size={9} className="shrink-0" />
+          <span className="truncate">stalled: {event.reason}</span>
+        </div>
+      );
+    case "adapter_failover":
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-accent-amber">
+          <ArrowRight size={9} className="shrink-0" />
+          <span className="truncate">
+            adapter {event.fromAdapter} → {event.toAdapter}
+          </span>
+          <span className="text-dim shrink-0">({event.reason})</span>
+        </div>
+      );
+    case "retry_scheduled":
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-accent-amber">
+          <Clock size={9} className="shrink-0" />
+          <span>
+            retry {event.nextAttempt} in {event.delayMs}ms
+          </span>
+          <span className="text-dim shrink-0">({event.reason})</span>
+        </div>
+      );
+    case "context_set":
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-dim">
+          <Database size={9} className="text-accent-cyan shrink-0" />
+          <span className="text-accent-cyan">{event.key}</span>
+          <span className="truncate max-w-[180px]">
+            = {JSON.stringify(event.value).slice(0, 40)}
+          </span>
+        </div>
+      );
+    case "hook_result":
+      return (
+        <div
+          className={`flex items-center gap-1.5 font-mono text-[10px] ${
+            event.exitCode !== 0 ? "text-accent-red" : "text-dim"
+          }`}
+        >
+          <Webhook
+            size={9}
+            className={`shrink-0 ${event.exitCode !== 0 ? "text-accent-red" : "text-accent-cyan"}`}
+          />
+          <span>hook {event.hook}</span>
+          <span className="text-dim">
+            → exit={event.exitCode} ({event.durationMs}ms)
+          </span>
         </div>
       );
     default:
@@ -218,6 +297,8 @@ export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTime
                           nodeEntry.status === "completed" ? "text-bright" :
                           nodeEntry.status === "running" ? "text-accent-blue" :
                           nodeEntry.status === "failed" ? "text-accent-red" :
+                          nodeEntry.status === "cached" ? "text-accent-cyan" :
+                          nodeEntry.status === "cancelled" ? "text-dim line-through" :
                           "text-dim"
                         }`}>
                           {nodeEntry.nodeId}

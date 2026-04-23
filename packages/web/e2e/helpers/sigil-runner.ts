@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 const CLI_PATH = resolve(__dirname, "../../../cli/dist/index.js");
 
-export interface SigilRun {
+export interface SygilRun {
   process: ChildProcess;
   wsPort: number;
   authToken: string;
@@ -13,7 +13,7 @@ export interface SigilRun {
 }
 
 /**
- * Start `sigil run <workflowPath>` as a child process.
+ * Start `sygil run <workflowPath>` as a child process.
  * Resolves once the WebSocket monitor URL is printed to stdout.
  *
  * The CLI prints:
@@ -21,7 +21,7 @@ export interface SigilRun {
  *
  * Rejects if the monitor URL is not seen within `timeout` ms (default 10 000).
  */
-export async function startSigilRun(
+export async function startSygilRun(
   workflowPath: string,
   options?: {
     cwd?: string;
@@ -29,7 +29,7 @@ export async function startSigilRun(
     args?: string[];
     timeout?: number;
   }
-): Promise<SigilRun> {
+): Promise<SygilRun> {
   const timeout = options?.timeout ?? 10_000;
   const extraArgs = options?.args ?? [];
 
@@ -76,7 +76,7 @@ export async function startSigilRun(
         child.kill("SIGKILL");
         reject(
           new Error(
-            `sigil run did not print a WebSocket monitor URL within ${timeout}ms.\n` +
+            `sygil run did not print a WebSocket monitor URL within ${timeout}ms.\n` +
               `stdout so far:\n${stdoutBuffer}\n` +
               `stderr so far:\n${stderrBuffer}`
           )
@@ -105,7 +105,7 @@ export async function startSigilRun(
         clearTimeout(timeoutId);
         reject(
           new Error(
-            `sigil run exited (code ${code}) before printing a WebSocket monitor URL.\n` +
+            `sygil run exited (code ${code}) before printing a WebSocket monitor URL.\n` +
               `stdout:\n${stdoutBuffer}\n` +
               `stderr:\n${stderrBuffer}`
           )
