@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventFanOut } from "./event-fanout.js";
-import type { WsServerEvent } from "@sigil/shared";
+import type { WsServerEvent } from "@sygil/shared";
 
 /** Minimal mock WebSocket that records sent messages and exposes readyState/bufferedAmount. */
 function makeMockWs(overrides?: { bufferedAmount?: number }) {

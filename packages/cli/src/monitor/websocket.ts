@@ -5,14 +5,36 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import sirv from "sirv";
-import type { WsServerEvent, WsClientEvent } from "@sigil/shared";
+import type { WsServerEvent, WsClientEvent } from "@sygil/shared";
+import { WsClientEventSchema } from "@sygil/shared";
+import { logger } from "../utils/logger.js";
 import { EventFanOut } from "./event-fanout.js";
+import { MetricsAggregator } from "./metrics-aggregator.js";
+import type { PrometheusMetrics } from "./prometheus-metrics.js";
+import type { AdapterPool } from "../adapters/adapter-pool.js";
+import { constantTimeEquals } from "../utils/ct-equals.js";
 
 interface SubscriberInfo {
   ws: WebSocket;
   workflowIds: Set<string>;
   authenticated: boolean;
+  /** Refreshed on every pong; the next heartbeat tick terminates dead clients. */
+  isAlive: boolean;
 }
+
+/**
+ * Heartbeat interval. Every tick, we ping every client and terminate
+ * anyone who hasn't ponged since the previous tick. 30s matches the canonical
+ * `ws` pattern and is fast enough to reap a suspended laptop within a minute.
+ */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Upper bound for `drain()` on graceful shutdown. A client whose
+ * `bufferedAmount` hasn't hit zero by this deadline gets `terminate()`-d —
+ * we do not block the CLI's exit on an unresponsive TCP peer.
+ */
+const DEFAULT_DRAIN_TIMEOUT_MS = 2_000;
 
 /**
  * WsMonitorServer — WebSocket server for real-time workflow monitoring.
@@ -21,13 +43,29 @@ interface SubscriberInfo {
  * receive events for a specific workflow run. The scheduler calls `emit()` to
  * broadcast events to all subscribed clients.
  */
+export interface WsMonitorServerConfig {
+  /**
+   * Override the heartbeat cadence. Defaults to `HEARTBEAT_INTERVAL_MS` (30s).
+   * Intended for tests that need sub-second liveness reaping.
+   */
+  heartbeatIntervalMs?: number;
+}
+
 export class WsMonitorServer {
   private wss: WebSocketServer | null = null;
   private server: ReturnType<typeof createServer> | null = null;
   private subscribers = new Map<WebSocket, SubscriberInfo>();
   private port: number | null = null;
   private fanOut = new EventFanOut();
+  private metrics = new MetricsAggregator();
+  private prometheusMetrics: PrometheusMetrics | null = null;
   private clientIdCounter = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatIntervalMs: number;
+
+  constructor(config: WsMonitorServerConfig = {}) {
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+  }
 
   /** Per-run auth token required for control events (pause/cancel/human_review). */
   private authToken: string = randomUUID();
@@ -44,13 +82,13 @@ export class WsMonitorServer {
   async start(): Promise<number> {
     return new Promise((resolve, reject) => {
       // Serve the pre-built monitor UI from dist-ui/ when available.
-      // Skipped in dev mode (SIGIL_UI_DEV=1) so the Next.js dev server handles it.
+      // Skipped in dev mode (SYGIL_UI_DEV=1) so the Next.js dev server handles it.
       const distUiPath = path.join(
         path.dirname(fileURLToPath(import.meta.url)),
         "../../dist-ui"
       );
       const serveUi =
-        process.env["SIGIL_UI_DEV"] !== "1" && existsSync(distUiPath);
+        process.env["SYGIL_UI_DEV"] !== "1" && existsSync(distUiPath);
 
       // Build the static file handler once. dist-ui may not exist when
       // running directly from source without a prior `next build` — guard
@@ -77,10 +115,14 @@ export class WsMonitorServer {
         // Check auth token from query string: ws://host:port/?token=<uuid>
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
         const token = url.searchParams.get("token");
-        const authenticated = token === this.authToken;
+        const authenticated = token !== null && constantTimeEquals(token, this.authToken);
 
-        const info: SubscriberInfo = { ws, workflowIds: new Set(), authenticated };
+        const info: SubscriberInfo = { ws, workflowIds: new Set(), authenticated, isAlive: true };
         this.subscribers.set(ws, info);
+
+        // Refresh liveness on every pong — the heartbeat tick reads this flag
+        // to reap clients that never responded.
+        ws.on("pong", () => { info.isAlive = true; });
 
         // Register with fan-out using a filter that checks workflowId subscription
         this.fanOut.addClient(clientId, ws, (event: unknown) => {
@@ -91,12 +133,19 @@ export class WsMonitorServer {
         });
 
         ws.on("message", (data) => {
-          let event: WsClientEvent;
+          let raw: unknown;
           try {
-            event = JSON.parse(data.toString()) as WsClientEvent;
+            raw = JSON.parse(data.toString());
           } catch {
             return;
           }
+
+          const parsed = WsClientEventSchema.safeParse(raw);
+          if (!parsed.success) {
+            logger.warn(`[monitor] rejected malformed client event: ${parsed.error.message}`);
+            return;
+          }
+          const event: WsClientEvent = parsed.data;
 
           switch (event.type) {
             case "subscribe":
@@ -142,6 +191,10 @@ export class WsMonitorServer {
         this.wss = wss;
         this.server = httpServer;
         this.fanOut.start();
+        // Feed aggregator-emitted metrics_tick events back through the
+        // server's own emit path so subscribers see them in the same fanout.
+        this.metrics.start((evt) => this.emit(evt));
+        this.startHeartbeat();
         resolve(this.port);
       });
 
@@ -156,9 +209,32 @@ export class WsMonitorServer {
    * A periodic flush timer batches and sends events to each WebSocket client.
    */
   emit(event: WsServerEvent): void {
+    // Prometheus observation runs even in headless (`--no-monitor`) mode so
+    // `--metrics-port` can be combined with a disabled WS monitor.
+    this.prometheusMetrics?.observe(event);
     if (!this.wss) return;
     const eventWithTimestamp = { timestamp: new Date().toISOString(), ...event };
+    // Observe before fanout so aggregates are consistent with what clients see.
+    this.metrics.observe(event);
     this.fanOut.emit(eventWithTimestamp);
+  }
+
+  /**
+   * Attach the Prometheus exporter so `/metrics` stays in lock-step with the
+   * same event stream that the WebSocket fanout sees. Passing
+   * `null` detaches — used in tests.
+   */
+  setPrometheusMetrics(metrics: PrometheusMetrics | null): void {
+    this.prometheusMetrics = metrics;
+  }
+
+  /**
+   * Attach (or detach with `null`) the adapter pool so the aggregator can
+   * include pool occupancy + acquire-wait percentiles in each tick.
+   * Scheduler calls this once after constructing its pool.
+   */
+  setAdapterPool(pool: AdapterPool | null): void {
+    this.metrics.setAdapterPool(pool);
   }
 
   /**
@@ -172,8 +248,62 @@ export class WsMonitorServer {
     return this.port;
   }
 
+  /**
+   * Drain outbound buffers and close connections gracefully. Waits up
+   * to `timeoutMs` for every client's `bufferedAmount` to reach zero, then
+   * calls `stop()` to hard-close. Designed to be called from a SIGINT/SIGTERM
+   * handler BEFORE the scheduler's final `workflow_end` event would otherwise
+   * race the process exit.
+   */
+  async drain(timeoutMs: number = DEFAULT_DRAIN_TIMEOUT_MS): Promise<void> {
+    if (!this.wss) return;
+    const deadline = Date.now() + timeoutMs;
+    // Stop the fanout flush loop AFTER waiting so in-flight events still drain.
+    const allFlushed = (): boolean => {
+      for (const [ws] of this.subscribers) {
+        if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > 0) return false;
+      }
+      return true;
+    };
+    while (!allFlushed() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await this.stop();
+  }
+
+  /**
+   * Ping every connected client on a 30s cadence and terminate any that
+   * didn't pong between ticks. Without this, a suspended laptop or
+   * silently-dropped connection keeps its per-client ring buffer allocated
+   * in `EventFanOut` indefinitely.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer !== null) return;
+    const tick = (): void => {
+      if (!this.wss) return;
+      for (const [ws, info] of this.subscribers) {
+        if (info.isAlive === false) {
+          // Missed the prior ping — reap. `close`/`error` handlers remove
+          // from the subscriber map and fanout.
+          ws.terminate();
+          continue;
+        }
+        info.isAlive = false;
+        try { ws.ping(); } catch { /* ignore — terminate on next tick */ }
+      }
+    };
+    this.heartbeatTimer = setInterval(tick, this.heartbeatIntervalMs);
+    // Don't keep the process alive just to run heartbeats (matches fanOut).
+    this.heartbeatTimer.unref?.();
+  }
+
   /** Stop the server and close all connections. */
   async stop(): Promise<void> {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.metrics.stop();
     await this.fanOut.stop();
     return new Promise((resolve) => {
       if (!this.wss || !this.server) {

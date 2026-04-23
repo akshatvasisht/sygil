@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import type { AgentEvent } from "@sigil/shared";
+import type { AgentEvent } from "@sygil/shared";
 
 export type NodeStatus = "waiting" | "running" | "completed" | "failed";
 
@@ -236,6 +236,28 @@ export function formatEventSummary(event: AgentEvent): { type: string; summary: 
       return { type: "stall", summary: event.reason };
     case "error":
       return { type: "error", summary: event.message };
+    case "adapter_failover":
+      return {
+        type: "adapter_failover",
+        summary: `${event.fromAdapter} → ${event.toAdapter} (${event.reason})`,
+      };
+    case "context_set":
+      return {
+        type: "context_set",
+        summary: `${event.key} = ${truncate(JSON.stringify(event.value) ?? "undefined", 40)}`,
+      };
+    case "hook_result": {
+      const icon = event.exitCode === 0 ? "✓" : "✗";
+      return {
+        type: "hook_result",
+        summary: `${event.hook} ${icon} exit:${event.exitCode} (${event.durationMs}ms)`,
+      };
+    }
+    case "retry_scheduled":
+      return {
+        type: "retry_scheduled",
+        summary: `retry ${event.attempt}→${event.nextAttempt} in ${event.delayMs}ms (${event.reason})`,
+      };
   }
 }
 

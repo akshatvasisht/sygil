@@ -76,6 +76,11 @@ export class EventFanOut {
   start(): void {
     if (this.timer !== null) return;
     this.timer = setInterval(() => this.flush(), this.config.flushIntervalMs);
+    // Don't keep the process alive just to flush an empty fanout — matches the
+    // WsMonitorServer heartbeat timer and MetricsAggregator tick. Without this,
+    // a clean workflow end still holds the event loop for up to flushIntervalMs
+    // on a quiet monitor.
+    this.timer.unref?.();
   }
 
   /** Stop the flush timer, performing one final flush of remaining events. */

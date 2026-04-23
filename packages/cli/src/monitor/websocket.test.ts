@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { WebSocket } from "ws";
 import { WsMonitorServer } from "./websocket.js";
-import type { WsClientEvent } from "@sigil/shared";
+import type { WsClientEvent } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -379,6 +379,42 @@ describe("WsMonitorServer — edge cases", () => {
     client.close();
   });
 
+  it("rejects malformed-shape control events without dispatching", async () => {
+    // Valid JSON but fails the Zod discriminated-union — the old cast-path
+    // would have dispatched these to onClientControl / subscribe maps. The
+    // safeParse guard must reject them silently.
+    const server = await createServer();
+    const token = server.getAuthToken();
+    const received: WsClientEvent[] = [];
+    server.onClientControl = (event) => {
+      received.push(event);
+    };
+
+    const authed = await connectClient(server, token);
+
+    // Unknown discriminator
+    authed.send(JSON.stringify({ type: "drop_tables", workflowId: "wf-1" }));
+    // Wrong field type on a known discriminator
+    authed.send(JSON.stringify({ type: "pause", workflowId: { evil: true } }));
+    // Missing required field
+    authed.send(JSON.stringify({ type: "human_review_approve", workflowId: "wf-1" }));
+    // Non-object payload
+    authed.send(JSON.stringify("just a string"));
+
+    await tick();
+
+    expect(received).toHaveLength(0);
+    expect(server.getPort()).not.toBeNull();
+
+    // Sanity: after the rejections, a well-formed event still dispatches.
+    sendEvent(authed, { type: "pause", workflowId: "wf-1" });
+    await tick();
+    expect(received).toHaveLength(1);
+    expect(received[0]!.type).toBe("pause");
+
+    authed.close();
+  });
+
   it("resume_workflow control event requires auth", async () => {
     const server = await createServer();
     const token = server.getAuthToken();
@@ -452,5 +488,65 @@ describe("WsMonitorServer — edge cases", () => {
     expect(msg.type).toBe("node_start");
 
     client.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Heartbeat + graceful drain
+// ---------------------------------------------------------------------------
+
+describe("WsMonitorServer — heartbeat + drain", () => {
+  it("terminates clients that fail to pong between ticks", async () => {
+    // Aggressive 60ms cadence so the test runs fast — in production this is 30s.
+    const server = new WsMonitorServer({ heartbeatIntervalMs: 60 });
+    servers.push(server);
+    await server.start();
+
+    const port = server.getPort()!;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`);
+    await new Promise<void>((r) => ws.on("open", () => r()));
+
+    // Stub the client so it never responds to pings. `ws.pong` is the
+    // library-level auto-reply; replacing it with a no-op simulates a
+    // suspended laptop / dead TCP peer.
+    (ws as unknown as { pong: () => void }).pong = () => {};
+
+    // Wait for the heartbeat ticks to reap the client via `terminate()`.
+    const closedPromise = new Promise<void>((resolve) =>
+      ws.on("close", () => resolve())
+    );
+    await closedPromise;
+
+    // A subsequent emit should still be a safe no-op after the reap.
+    expect(() => {
+      server.emit({
+        type: "node_start",
+        workflowId: "wf-1",
+        nodeId: "n1",
+        config: {} as never,
+        attempt: 1,
+      });
+    }).not.toThrow();
+  });
+
+  it("drain() closes connections gracefully after flushing buffers", async () => {
+    const server = await createServer();
+    const client = await connectClient(server);
+    sendEvent(client, { type: "subscribe", workflowId: "wf-1" });
+    await tick();
+
+    const closedPromise = new Promise<void>((r) => client.on("close", () => r()));
+    await server.drain(500);
+    await closedPromise;
+
+    // Subsequent emits should be harmless no-ops after drain->stop.
+    expect(() => {
+      server.emit({
+        type: "workflow_end",
+        workflowId: "wf-1",
+        success: true,
+        durationMs: 0,
+      });
+    }).not.toThrow();
   });
 });
