@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { listCommand } from "./list.js";
-import type { WorkflowRunState } from "@sigil/shared";
+import type { WorkflowRunState } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -45,6 +45,7 @@ function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunSta
     nodeResults: {},
     totalCostUsd: 0.0042,
     retryCounters: {},
+    sharedContext: {},
     ...overrides,
   };
 }
@@ -123,7 +124,7 @@ describe("listCommand", () => {
     expect(output).toContain("my-workflow");
   });
 
-  it("shows run ID prefix in output", async () => {
+  it("shows the full run ID in output (so `sygil resume` gets a copyable exact ID)", async () => {
     const state = makeRunState({ id: "run-abc12345-uniqueid" });
 
     mockReaddir.mockImplementation((dir: string) => {
@@ -142,9 +143,10 @@ describe("listCommand", () => {
 
     await listCommand();
 
-    // The command displays first 8 chars of id
+    // The command must display the complete id — `sygil resume` requires an exact
+    // match (cli-program.ts help text explicitly points users at `sygil list`).
     const output = consoleLogSpy.mock.calls.flat().join("\n");
-    expect(output).toContain("run-abc1");
+    expect(output).toContain("run-abc12345-uniqueid");
   });
 
   it("skips unparseable run files gracefully", async () => {

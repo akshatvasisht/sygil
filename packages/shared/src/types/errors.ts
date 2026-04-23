@@ -1,5 +1,5 @@
-// Structured error codes for programmatic error handling across Sigil.
-export const SigilErrorCode = {
+// Structured error codes for programmatic error handling across Sygil.
+export const SygilErrorCode = {
   // Gate errors
   GATE_TIMEOUT: "GATE_TIMEOUT",
   GATE_SCRIPT_FAILED: "GATE_SCRIPT_FAILED",
@@ -27,10 +27,10 @@ export const SigilErrorCode = {
   CHECKPOINT_LOAD_FAILED: "CHECKPOINT_LOAD_FAILED",
 } as const;
 
-export type SigilErrorCode = (typeof SigilErrorCode)[keyof typeof SigilErrorCode];
+export type SygilErrorCode = (typeof SygilErrorCode)[keyof typeof SygilErrorCode];
 
-export interface SigilError {
-  code: SigilErrorCode;
+export interface SygilError {
+  code: SygilErrorCode;
   message: string;
   nodeId?: string;
   edgeId?: string;

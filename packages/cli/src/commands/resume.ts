@@ -3,27 +3,56 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ora from "ora";
 import { loadWorkflow } from "../utils/workflow.js";
-import { getAdapter } from "../adapters/index.js";
-import { WorkflowScheduler } from "../scheduler/index.js";
-import { WsMonitorServer } from "../monitor/websocket.js";
-import type { WorkflowRunState, AgentEvent } from "@sigil/shared";
+import { readConfigSafe } from "../utils/config.js";
+import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
+import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
+import { pruneWorktrees } from "../worktree/index.js";
+import type { WorkflowRunState, AgentEvent } from "@sygil/shared";
+import { WorkflowRunStateSchema } from "@sygil/shared";
 
 export async function resumeCommand(runId: string): Promise<void> {
+  // Reap orphan `.git/worktrees/` entries from prior SIGINT'd runs.
+  // Cheap, idempotent, and silent on non-git directories.
+  await pruneWorktrees();
+
   const spinner = ora(`Loading run ${chalk.cyan(runId)}...`).start();
 
   // Load the persisted run state
-  const configDir = process.env["SIGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sigil");
+  const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
   const stateFile = join(configDir, "runs", `${runId}.json`);
   let state: WorkflowRunState;
 
+  let raw: string;
   try {
-    const raw = await readFile(stateFile, "utf8");
-    state = JSON.parse(raw) as WorkflowRunState;
-    spinner.succeed(`Loaded run: ${chalk.cyan(state.workflowName)} (${state.status})`);
+    raw = await readFile(stateFile, "utf8");
   } catch {
     spinner.fail(`Could not load run state from ${stateFile}`);
     process.exit(1);
   }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch (err) {
+    spinner.fail(
+      `Checkpoint at ${stateFile} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  }
+
+  const parseResult = WorkflowRunStateSchema.safeParse(parsedJson);
+  if (!parseResult.success) {
+    const firstIssue = parseResult.error.issues[0];
+    const issueMsg = firstIssue
+      ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+      : parseResult.error.message;
+    spinner.fail(
+      `Checkpoint at ${stateFile} is corrupt or from an incompatible version: ${issueMsg}`,
+    );
+    process.exit(1);
+  }
+  state = parseResult.data as WorkflowRunState;
+  spinner.succeed(`Loaded run: ${chalk.cyan(state.workflowName)} (${state.status})`);
 
   if (state.status === "completed") {
     console.log(chalk.yellow("This run has already completed — nothing to resume."));
@@ -49,7 +78,7 @@ export async function resumeCommand(runId: string): Promise<void> {
     const workflowSearchPaths = [
       join(process.cwd(), `${state.workflowName}.json`),
       join(process.cwd(), "workflow.json"),
-      join(process.cwd(), ".sigil", "runs", `${runId}.workflow.json`),
+      join(process.cwd(), ".sygil", "runs", `${runId}.workflow.json`),
     ];
 
     for (const p of workflowSearchPaths) {
@@ -83,18 +112,26 @@ export async function resumeCommand(runId: string): Promise<void> {
     process.exit(1);
   }
 
-  // Start monitor
-  const monitor = new WsMonitorServer();
-  const port = await monitor.start();
-  console.log(
-    chalk.dim(`WebSocket monitor running on `) + chalk.cyan(`ws://localhost:${port}\n`)
-  );
+  // Resolve static model tiers against the current project config
+  // so resumed runs see the same override logic the original run used.
+  const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
+  workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
 
-  // Build scheduler and inject the existing state for resume
-  const scheduler = new WorkflowScheduler(workflow, getAdapter, monitor);
+  // Build scheduler context (monitor + scheduler) via the shared bootstrap.
+  const ctx = await buildSchedulerContext({
+    workflow,
+    ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+  });
+  const { scheduler } = ctx;
+  if (ctx.monitorPort !== null) {
+    console.log(
+      chalk.dim(`WebSocket monitor running on `) +
+        chalk.cyan(`ws://localhost:${ctx.monitorPort}\n`),
+    );
+  }
 
   scheduler.on("node_start", (nodeId: string) => {
-    console.log(chalk.cyan(`  ▶ ${nodeId} starting...`));
+    console.log(chalk.cyan(`  ${nodeId} starting...`));
   });
 
   scheduler.on("node_event", (_nodeId: string, event: AgentEvent) => {
@@ -109,7 +146,8 @@ export async function resumeCommand(runId: string): Promise<void> {
   });
 
   try {
-    const result = await scheduler.resume(state);
+    const resumeOpts = tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {};
+    const result = await scheduler.resume(state, resumeOpts);
 
     if (result.success) {
       console.log(
@@ -131,6 +169,6 @@ export async function resumeCommand(runId: string): Promise<void> {
     );
     process.exit(1);
   } finally {
-    await monitor.stop();
+    await ctx.teardown();
   }
 }

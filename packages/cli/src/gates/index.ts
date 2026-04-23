@@ -1,11 +1,11 @@
 import { readFile, access, stat } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { join, isAbsolute, resolve as pathResolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import type { GateConfig, GateCondition, NodeResult } from "@sigil/shared";
+import type { GateConfig, GateCondition, NodeResult, WsClientEvent } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 
 const execFileAsync = promisify(execFile);
@@ -25,7 +25,7 @@ export const HUMAN_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
 // Script path injection guard
 // ---------------------------------------------------------------------------
 
-function isContainedIn(child: string, parent: string): boolean {
+export function isContainedIn(child: string, parent: string): boolean {
   // Use realpathSync to follow symlinks — prevents symlink escape attacks
   // where a symlink inside the allowed dir points outside it.
   const realParent = (() => { try { return realpathSync(parent); } catch { return pathResolve(parent); } })() + sep;
@@ -33,11 +33,13 @@ function isContainedIn(child: string, parent: string): boolean {
   return realChild.startsWith(realParent);
 }
 
+function bundledTemplatesDir(): string {
+  return pathResolve(fileURLToPath(new URL("../../templates", import.meta.url)));
+}
+
 function validateScriptPath(scriptPath: string, workingDir: string): void {
   const resolved = pathResolve(workingDir, scriptPath);
-  const templatesGatesDir = pathResolve(
-    fileURLToPath(new URL("../../templates/gates", import.meta.url))
-  );
+  const templatesGatesDir = pathResolve(bundledTemplatesDir(), "gates");
 
   if (!isContainedIn(resolved, workingDir) && !isContainedIn(resolved, templatesGatesDir)) {
     throw new Error(
@@ -45,6 +47,44 @@ function validateScriptPath(scriptPath: string, workingDir: string): void {
       `Script paths must be relative to the workflow's working directory.`
     );
   }
+}
+
+/**
+ * Resolve a gate script path. Order: absolute → workingDir-relative (if the
+ * file exists there) → bundled `templates/<scriptPath>` fallback. The bundled
+ * fallback lets workflows like `templates/ralph.json` reference
+ * `gates/ralph-done.sh` without requiring users to copy the gates/ directory
+ * into their run dir — a usability gap the original design left unfilled for
+ * bundled-template script gates (same pattern applies to `optimize.json`'s
+ * `gates/check-budget.sh`).
+ */
+function resolveGateScriptPath(scriptPath: string, workingDir: string): string {
+  if (isAbsolute(scriptPath)) return scriptPath;
+  const local = join(workingDir, scriptPath);
+  if (existsSync(local)) return local;
+  const bundled = join(bundledTemplatesDir(), scriptPath);
+  if (existsSync(bundled)) return bundled;
+  return local; // fall back to local path so the execFile error message stays clear
+}
+
+function normalizeLines(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim();
+    if (trimmed.length > 0) out.push(trimmed);
+  }
+  return out;
+}
+
+function resolveSpecPath(specPath: string, workingDir: string): string | null {
+  const resolved = isAbsolute(specPath) ? specPath : pathResolve(workingDir, specPath);
+  const templatesSpecsDir = pathResolve(
+    fileURLToPath(new URL("../../templates/specs", import.meta.url))
+  );
+  if (!isContainedIn(resolved, workingDir) && !isContainedIn(resolved, templatesSpecsDir)) {
+    return null;
+  }
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +157,14 @@ export class GateEvaluator {
 
       case "human_review":
         return this.evaluateHumanReview(condition.prompt, nodeId, edgeId, signal);
+
+      case "spec_compliance":
+        return this.evaluateSpecCompliance(
+          condition.specPath,
+          condition.mode,
+          nodeResult,
+          outputDir
+        );
 
       default: {
         const _exhaustive: never = condition;
@@ -220,21 +268,18 @@ export class GateEvaluator {
     // Reject any script path that escapes the workflow output directory (path traversal guard)
     validateScriptPath(scriptPath, outputDir);
 
-    const resolved = isAbsolute(scriptPath)
-      ? scriptPath
-      : join(outputDir, scriptPath);
+    const resolved = resolveGateScriptPath(scriptPath, outputDir);
 
     // Whitelist environment variables passed to gate scripts.
     // We never leak the full parent env (which may contain API keys, SSH creds, etc.).
+    // Do NOT forward arbitrary SYGIL_* vars — those can carry secrets or
+    // stale values from nested runs. The fresh-set block below assigns exactly
+    // the documented contract (SYGIL_EXIT_CODE, SYGIL_OUTPUT_DIR, SYGIL_OUTPUT).
     const ALLOWED_ENV_KEYS = ["PATH", "HOME", "SHELL", "TERM", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP"];
     const safeEnv: Record<string, string> = {};
     for (const key of ALLOWED_ENV_KEYS) {
       const val = process.env[key];
       if (val !== undefined) safeEnv[key] = val;
-    }
-    // Also pass through any SIGIL_* vars from the parent environment
-    for (const [key, val] of Object.entries(process.env)) {
-      if (key.startsWith("SIGIL_") && val !== undefined) safeEnv[key] = val;
     }
 
     try {
@@ -242,9 +287,9 @@ export class GateEvaluator {
         cwd: outputDir,
         env: {
           ...safeEnv,
-          SIGIL_EXIT_CODE: String(nodeResult.exitCode),
-          SIGIL_OUTPUT_DIR: outputDir,
-          SIGIL_OUTPUT: nodeResult.output,
+          SYGIL_EXIT_CODE: String(nodeResult.exitCode),
+          SYGIL_OUTPUT_DIR: outputDir,
+          SYGIL_OUTPUT: nodeResult.output,
         },
         timeout: GATE_SCRIPT_TIMEOUT_MS,
         signal,
@@ -258,6 +303,82 @@ export class GateEvaluator {
         reason: `script ${resolved} failed (exit ${code})`,
       };
     }
+  }
+
+  /**
+   * Text-based diff gate. Compares a node's text output against a
+   * checked-in spec file. Two modes:
+   *   - "exact":   normalized content equality (trimmed lines, trailing ws stripped, blank lines dropped)
+   *   - "superset": every non-empty normalized line from the spec appears as a
+   *                 non-empty normalized line in the output
+   *
+   * No LLM-based comparison — the gate is pure text, so replay from the
+   * NDJSON event log is bit-for-bit deterministic. The spec file must live
+   * inside the output directory or the bundled templates/specs/ directory;
+   * any path that escapes both is rejected.
+   */
+  private async evaluateSpecCompliance(
+    specPath: string,
+    mode: "exact" | "superset",
+    nodeResult: NodeResult,
+    outputDir: string
+  ): Promise<GateResult> {
+    const resolved = resolveSpecPath(specPath, outputDir);
+    if (resolved === null) {
+      return {
+        passed: false,
+        reason: `spec_compliance gate: path "${specPath}" resolves outside the output directory`,
+      };
+    }
+
+    const MAX_SPEC_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — match regex gate
+    try {
+      const info = await stat(resolved);
+      if (info.size > MAX_SPEC_FILE_BYTES) {
+        return {
+          passed: false,
+          reason: `spec_compliance gate: spec ${resolved} is too large (${(info.size / 1024 / 1024).toFixed(1)} MB > 10 MB limit)`,
+        };
+      }
+    } catch {
+      return { passed: false, reason: `spec_compliance gate: cannot stat spec ${resolved}` };
+    }
+
+    let spec: string;
+    try {
+      spec = await readFile(resolved, "utf8");
+    } catch {
+      return { passed: false, reason: `spec_compliance gate: cannot read spec ${resolved}` };
+    }
+
+    const specLines = normalizeLines(spec);
+    const outLines = normalizeLines(nodeResult.output);
+
+    if (mode === "exact") {
+      const passed = specLines.length === outLines.length
+        && specLines.every((line, i) => line === outLines[i]);
+      return {
+        passed,
+        reason: passed
+          ? `spec_compliance (exact) matched ${resolved}`
+          : `spec_compliance (exact) differs from ${resolved}`,
+      };
+    }
+
+    const outSet = new Set(outLines);
+    const missing: string[] = [];
+    for (const line of specLines) {
+      if (!outSet.has(line)) missing.push(line);
+    }
+    if (missing.length === 0) {
+      return { passed: true, reason: `spec_compliance (superset) covers all ${specLines.length} spec line(s) from ${resolved}` };
+    }
+    const preview = missing.slice(0, 3).map((l) => JSON.stringify(l)).join(", ");
+    const suffix = missing.length > 3 ? ` (+${missing.length - 3} more)` : "";
+    return {
+      passed: false,
+      reason: `spec_compliance (superset) missing ${missing.length} line(s) from ${resolved}: ${preview}${suffix}`,
+    };
   }
 
   private async evaluateHumanReview(
@@ -283,63 +404,86 @@ export class GateEvaluator {
         prompt: reviewPrompt,
       });
 
-      // Save any existing onClientControl handler so we can chain it and restore it
+      // Save any existing onClientControl handler so we can chain it and restore it.
+      // Concurrent human_review gates layer via a LIFO chain: gate B captures
+      // gate A's handler as its prevHandler. Restore-on-resolve must NOT blindly
+      // reassign prevHandler — if a newer gate is now top-of-chain, that would
+      // wipe the newer gate's listener. We therefore (a) guard each restore with
+      // `if (monitor.onClientControl === myHandler)`, and (b) latch `closed` so
+      // our handler is a no-op if it's still reachable via an outer gate's
+      // closure after we resolve.
       const prevHandler = monitor.onClientControl;
+      let closed = false;
 
-      const approvalPromise = new Promise<boolean>((resolve, reject) => {
-        if (signal?.aborted) {
+      const detach = (): void => {
+        closed = true;
+        if (monitor.onClientControl === myHandler) {
           monitor.onClientControl = prevHandler;
+        }
+      };
+
+      const myHandler = (event: WsClientEvent): void => {
+        // Always chain to prior handler so outer gates still receive events.
+        prevHandler?.(event);
+        if (closed) return;
+
+        if (
+          (event.type === "human_review_approve" || event.type === "human_review_reject") &&
+          "edgeId" in event &&
+          event.edgeId === edgeId &&
+          event.workflowId === workflowId
+        ) {
+          const approved = event.type === "human_review_approve";
+          detach();
+          resolveApproval(approved);
+        }
+      };
+
+      let resolveApproval!: (value: boolean) => void;
+      let rejectApproval!: (reason: Error) => void;
+      const approvalPromise = new Promise<boolean>((resolve, reject) => {
+        resolveApproval = resolve;
+        rejectApproval = reject;
+        if (signal?.aborted) {
+          detach();
           reject(new Error("Gate evaluation cancelled"));
           return;
         }
-
-        monitor.onClientControl = (event) => {
-          // Chain existing handler
-          prevHandler?.(event);
-
-          if (
-            (event.type === "human_review_approve" || event.type === "human_review_reject") &&
-            "edgeId" in event &&
-            event.edgeId === edgeId &&
-            event.workflowId === workflowId
-          ) {
-            // Restore previous handler and resolve
-            monitor.onClientControl = prevHandler;
-            resolve(event.type === "human_review_approve");
-          }
-        };
+        monitor.onClientControl = myHandler;
 
         signal?.addEventListener(
           "abort",
           () => {
-            monitor.onClientControl = prevHandler;
-            reject(new Error("Gate evaluation cancelled"));
+            detach();
+            rejectApproval(new Error("Gate evaluation cancelled"));
           },
           { once: true }
         );
       });
 
-      const timeoutPromise = new Promise<boolean>((_, reject) =>
-        setTimeout(() => {
-          // Ensure handler is restored on timeout
-          monitor.onClientControl = prevHandler;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<boolean>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          detach();
           reject(new Error(`Human review timed out after ${timeoutMs}ms`));
-        }, timeoutMs)
-      );
+        }, timeoutMs);
+      });
 
       let approved: boolean;
       try {
         approved = await Promise.race([approvalPromise, timeoutPromise]);
       } catch (err) {
-        // timeout or abort — always ensure handler is restored (idempotent)
-        monitor.onClientControl = prevHandler;
+        detach();
         return {
           passed: false,
           reason: err instanceof Error ? err.message : "Human review failed",
         };
       } finally {
-        // Always restore handler (idempotent safety net)
-        monitor.onClientControl = prevHandler;
+        // Clear the timer so the event loop can exit promptly once the race
+        // has resolved; without this, an early approval still keeps a 5-min
+        // timer pinned until it fires harmlessly.
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        detach();
       }
 
       monitor.emit({
@@ -367,12 +511,13 @@ export class GateEvaluator {
       );
     });
 
-    const timeoutPromise = new Promise<string>((_, reject) =>
-      setTimeout(
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<string>((_, reject) => {
+      timeoutHandle = setTimeout(
         () => reject(new Error(`Human review timed out after ${timeoutMs}ms`)),
         timeoutMs
-      )
-    );
+      );
+    });
 
     let answer: string;
     try {
@@ -381,6 +526,9 @@ export class GateEvaluator {
       rl.close();
       return { passed: false, reason: "Human review timed out" };
     } finally {
+      // Clear the timer so an early CLI answer doesn't keep a 5-minute handle
+      // pinned in the event loop.
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       rl.close();
     }
 

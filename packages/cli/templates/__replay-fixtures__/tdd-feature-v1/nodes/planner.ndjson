@@ -1,0 +1,7 @@
+{"timestamp":1700000000100,"nodeId":"planner","event":{"type":"text_delta","text":"Analyzing task requirements."}}
+{"timestamp":1700000000200,"nodeId":"planner","event":{"type":"tool_call","tool":"Read","input":{"path":"src/existing.ts"}}}
+{"timestamp":1700000000300,"nodeId":"planner","event":{"type":"tool_result","tool":"Read","output":"ok","success":true}}
+{"timestamp":1700000000400,"nodeId":"planner","event":{"type":"tool_call","tool":"Write","input":{"path":"planning/plan.md"}}}
+{"timestamp":1700000000500,"nodeId":"planner","event":{"type":"tool_result","tool":"Write","output":"ok","success":true}}
+{"timestamp":1700000000600,"nodeId":"planner","event":{"type":"text_delta","text":"Plan written to planning/plan.md."}}
+{"timestamp":1700000000700,"nodeId":"planner","event":{"type":"cost_update","totalCostUsd":0.001}}

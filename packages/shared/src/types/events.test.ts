@@ -5,6 +5,7 @@ import type {
   RecordedEvent,
   WorkflowRunState,
 } from "./events.js";
+import { WsClientEventSchema } from "./events.js";
 import type {
   AgentAdapter,
   AgentSession,
@@ -70,6 +71,49 @@ describe("AgentEvent discriminated union", () => {
   it("covers error event", () => {
     const event: AgentEvent = { type: "error", message: "crash" };
     expect(event.type).toBe("error");
+  });
+
+  it("covers context_set event", () => {
+    const event: AgentEvent = { type: "context_set", key: "summary", value: { count: 2 } };
+    expect(event.type).toBe("context_set");
+    if (event.type === "context_set") {
+      expect(event.key).toBe("summary");
+      expect(event.value).toEqual({ count: 2 });
+    }
+  });
+
+  it("covers hook_result event", () => {
+    const event: AgentEvent = {
+      type: "hook_result",
+      hook: "preNode",
+      exitCode: 0,
+      stdout: "ok\n",
+      stderr: "",
+      durationMs: 12,
+    };
+    expect(event.type).toBe("hook_result");
+    if (event.type === "hook_result") {
+      expect(event.hook).toBe("preNode");
+      expect(event.exitCode).toBe(0);
+      expect(event.durationMs).toBe(12);
+    }
+  });
+
+  it("covers retry_scheduled event", () => {
+    const event: AgentEvent = {
+      type: "retry_scheduled",
+      attempt: 1,
+      nextAttempt: 2,
+      delayMs: 237,
+      reason: "transport",
+    };
+    expect(event.type).toBe("retry_scheduled");
+    if (event.type === "retry_scheduled") {
+      expect(event.attempt).toBe(1);
+      expect(event.nextAttempt).toBe(2);
+      expect(event.delayMs).toBe(237);
+      expect(event.reason).toBe("transport");
+    }
   });
 });
 
@@ -246,6 +290,22 @@ describe("WsServerEvent discriminated union", () => {
     };
     expect(event.type).toBe("human_review_response");
   });
+
+  it("covers circuit_breaker event", () => {
+    const event: WsServerEvent = {
+      type: "circuit_breaker",
+      workflowId: "wf-1",
+      adapterType: "claude-cli",
+      state: "open",
+      reason: "transport",
+      openUntil: Date.now() + 60_000,
+    };
+    expect(event.type).toBe("circuit_breaker");
+    if (event.type === "circuit_breaker") {
+      expect(event.state).toBe("open");
+      expect(event.adapterType).toBe("claude-cli");
+    }
+  });
 });
 
 describe("WsClientEvent discriminated union", () => {
@@ -285,6 +345,56 @@ describe("WsClientEvent discriminated union", () => {
   });
 });
 
+describe("WsClientEventSchema", () => {
+  it("accepts every valid variant", () => {
+    const cases: WsClientEvent[] = [
+      { type: "subscribe", workflowId: "wf-1" },
+      { type: "unsubscribe", workflowId: "wf-1" },
+      { type: "pause", workflowId: "wf-1" },
+      { type: "resume_workflow", workflowId: "wf-1" },
+      { type: "cancel", workflowId: "wf-1" },
+      { type: "human_review_approve", workflowId: "wf-1", edgeId: "e1" },
+      { type: "human_review_reject", workflowId: "wf-1", edgeId: "e1" },
+    ];
+    for (const c of cases) {
+      expect(WsClientEventSchema.safeParse(c).success).toBe(true);
+    }
+  });
+
+  it("rejects missing type", () => {
+    expect(WsClientEventSchema.safeParse({ workflowId: "wf-1" }).success).toBe(false);
+  });
+
+  it("rejects unknown type", () => {
+    expect(WsClientEventSchema.safeParse({ type: "delete_run", workflowId: "wf-1" }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects non-string workflowId", () => {
+    expect(
+      WsClientEventSchema.safeParse({ type: "pause", workflowId: { hax: true } }).success,
+    ).toBe(false);
+    expect(WsClientEventSchema.safeParse({ type: "pause", workflowId: 42 }).success).toBe(false);
+    expect(WsClientEventSchema.safeParse({ type: "pause" }).success).toBe(false);
+  });
+
+  it("rejects human_review_* missing edgeId", () => {
+    expect(
+      WsClientEventSchema.safeParse({ type: "human_review_approve", workflowId: "wf-1" }).success,
+    ).toBe(false);
+    expect(
+      WsClientEventSchema.safeParse({ type: "human_review_reject", workflowId: "wf-1" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects top-level non-objects", () => {
+    expect(WsClientEventSchema.safeParse(null).success).toBe(false);
+    expect(WsClientEventSchema.safeParse("pause").success).toBe(false);
+    expect(WsClientEventSchema.safeParse([1, 2, 3]).success).toBe(false);
+  });
+});
+
 describe("RecordedEvent type", () => {
   it("accepts a valid recorded event", () => {
     const recorded: RecordedEvent = {
@@ -308,6 +418,7 @@ describe("WorkflowRunState type", () => {
       nodeResults: {},
       totalCostUsd: 0,
       retryCounters: {},
+      sharedContext: {},
     };
     expect(state.status).toBe("running");
     expect(state.completedNodes).toHaveLength(0);
@@ -330,6 +441,7 @@ describe("WorkflowRunState type", () => {
       },
       totalCostUsd: 0.15,
       retryCounters: { "loop-edge": 2 },
+      sharedContext: {},
     };
     expect(state.status).toBe("completed");
     expect(state.completedNodes).toHaveLength(3);

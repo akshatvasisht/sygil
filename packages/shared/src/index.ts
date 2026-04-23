@@ -3,3 +3,5 @@ export * from "./types/adapter.js";
 export * from "./types/events.js";
 export * from "./types/errors.js";
 export * from "./utils/contract-validator.js";
+export * from "./utils/zod-to-json-schema.js";
+export * from "./validators/tool-validator.js";

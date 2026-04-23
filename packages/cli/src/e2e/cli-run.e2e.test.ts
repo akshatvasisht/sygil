@@ -1,5 +1,5 @@
 /**
- * CLI E2E tests for `sigil run`.
+ * CLI E2E tests for `sygil run`.
  *
  * Spawns the real CLI binary as a child process and asserts on exit codes,
  * stdout content, and files written to disk. Uses the `echo` adapter via
@@ -25,7 +25,7 @@ const CLI_PATH = resolve(__dirname, "../../dist/index.js");
 const FIXTURES_DIR = resolve(__dirname, "../../test-fixtures/workflows");
 
 // ---------------------------------------------------------------------------
-// Helper: spawn sigil run and collect output
+// Helper: spawn sygil run and collect output
 // ---------------------------------------------------------------------------
 
 interface RunResult {
@@ -79,30 +79,30 @@ function runSigil(
 // Helpers: filesystem
 // ---------------------------------------------------------------------------
 
-/** Read all files under `.sigil/runs/` and return the first checkpoint JSON. */
+/** Read all files under `.sygil/runs/` and return the first checkpoint JSON. */
 async function readCheckpoint(cwd: string): Promise<Record<string, unknown>> {
-  const runsDir = join(cwd, ".sigil", "runs");
+  const runsDir = join(cwd, ".sygil", "runs");
   const entries = await readdir(runsDir);
   // Find the first .json file (the run checkpoint)
   const checkpointFile = entries.find((e) => e.endsWith(".json"));
-  if (!checkpointFile) throw new Error("No checkpoint file found in .sigil/runs/");
+  if (!checkpointFile) throw new Error("No checkpoint file found in .sygil/runs/");
   const raw = await readFile(join(runsDir, checkpointFile), "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
 /** Return the run ID from the checkpoint directory (the first UUID directory). */
 async function getRunId(cwd: string): Promise<string> {
-  const runsDir = join(cwd, ".sigil", "runs");
+  const runsDir = join(cwd, ".sygil", "runs");
   const entries = await readdir(runsDir);
   const runId = entries.find((e) => !e.endsWith(".json"));
-  if (!runId) throw new Error("No run directory found in .sigil/runs/");
+  if (!runId) throw new Error("No run directory found in .sygil/runs/");
   return runId;
 }
 
 /** Read the NDJSON event file for a given nodeId. */
 async function readNodeEvents(cwd: string, nodeId: string): Promise<string> {
   const runId = await getRunId(cwd);
-  const eventsFile = join(cwd, ".sigil", "runs", runId, "events", `${nodeId}.ndjson`);
+  const eventsFile = join(cwd, ".sygil", "runs", runId, "events", `${nodeId}.ndjson`);
   return readFile(eventsFile, "utf-8");
 }
 
@@ -113,7 +113,7 @@ async function readNodeEvents(cwd: string, nodeId: string): Promise<string> {
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "sigil-e2e-"));
+  testDir = await mkdtemp(join(tmpdir(), "sygil-e2e-"));
 });
 
 afterEach(async () => {
@@ -124,7 +124,7 @@ afterEach(async () => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("CLI E2E: sigil run", () => {
+describe("CLI E2E: sygil run", () => {
   it("single-node workflow completes with exit 0", async () => {
     const result = await runSigil(
       join(FIXTURES_DIR, "single-node.json"),

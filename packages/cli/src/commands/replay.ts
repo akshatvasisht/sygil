@@ -2,13 +2,42 @@ import chalk from "chalk";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { replayEvents } from "../scheduler/event-replay.js";
-import type { RecordedEvent } from "@sigil/shared";
+import { isContainedIn } from "../gates/index.js";
+import type { RecordedEvent } from "@sygil/shared";
+
+const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
+const NODE_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
 export async function replayCommand(
   runId: string,
   options: { node?: string; speed?: string }
 ): Promise<void> {
-  const runDir = join(process.cwd(), ".sigil", "runs", runId);
+  if (!RUN_ID_RE.test(runId)) {
+    console.error(chalk.red("Invalid runId: must be alphanumeric/_/-"));
+    process.exit(1);
+  }
+
+  if (options.node !== undefined && !NODE_ID_RE.test(options.node)) {
+    console.error(chalk.red("Invalid --node: must be alphanumeric/_/-"));
+    process.exit(1);
+  }
+
+  const runsRoot = join(process.cwd(), ".sygil", "runs");
+  const runDir = join(runsRoot, runId);
+
+  if (!isContainedIn(runDir, runsRoot)) {
+    console.error(chalk.red("Invalid runId: path escapes the runs directory"));
+    process.exit(1);
+  }
+
+  if (options.node !== undefined) {
+    const eventsRoot = join(runDir, "events");
+    const eventFile = join(eventsRoot, `${options.node}.ndjson`);
+    if (!isContainedIn(eventFile, eventsRoot)) {
+      console.error(chalk.red("Invalid --node: path escapes the events directory"));
+      process.exit(1);
+    }
+  }
 
   if (!existsSync(runDir)) {
     console.error(chalk.red(`Run directory not found: ${runDir}`));

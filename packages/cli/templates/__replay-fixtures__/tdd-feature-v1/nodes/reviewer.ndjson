@@ -1,0 +1,7 @@
+{"timestamp":1700000002000,"nodeId":"reviewer","event":{"type":"text_delta","text":"Reviewing implementation."}}
+{"timestamp":1700000002100,"nodeId":"reviewer","event":{"type":"tool_call","tool":"Read","input":{"path":"src/feature.ts"}}}
+{"timestamp":1700000002200,"nodeId":"reviewer","event":{"type":"tool_result","tool":"Read","output":"ok","success":true}}
+{"timestamp":1700000002300,"nodeId":"reviewer","event":{"type":"tool_call","tool":"Write","input":{"path":"review/verdict.txt"}}}
+{"timestamp":1700000002400,"nodeId":"reviewer","event":{"type":"tool_result","tool":"Write","output":"ok","success":true}}
+{"timestamp":1700000002500,"nodeId":"reviewer","event":{"type":"text_delta","text":"APPROVED."}}
+{"timestamp":1700000002600,"nodeId":"reviewer","event":{"type":"cost_update","totalCostUsd":0.001}}

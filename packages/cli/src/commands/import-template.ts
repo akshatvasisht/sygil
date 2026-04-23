@@ -3,13 +3,14 @@ import { readFile, writeFile, mkdir, access, unlink } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { loadWorkflow } from "../utils/workflow.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 import { listUserTemplates, USER_TEMPLATES_DIR } from "../utils/registry.js";
 
 /**
  * Determines how the argument should be resolved:
  *  1. URL (starts with http:// or https://)
  *  2. File path (contains path separators or ends in .json)
- *  3. Template name (bare name, check ~/.sigil/templates/<name>.json)
+ *  3. Template name (bare name, check ~/.sygil/templates/<name>.json)
  */
 function classifyArg(arg: string): "url" | "file" | "name" {
   if (arg.startsWith("http://") || arg.startsWith("https://")) return "url";
@@ -20,7 +21,10 @@ function classifyArg(arg: string): "url" | "file" | "name" {
 async function fetchOrRead(urlOrPath: string): Promise<string> {
   // Check if it's a URL
   if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
-    const res = await fetch(urlOrPath);
+    // 10s timeout — without an AbortSignal, a hung remote would block the
+    // import-template command indefinitely with no user feedback. Matches the
+    // `installTemplate` helper in utils/registry.ts.
+    const res = await fetch(urlOrPath, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) {
       throw new Error(`Failed to fetch "${urlOrPath}": HTTP ${res.status}`);
     }
@@ -43,7 +47,7 @@ async function resolveArg(arg: string): Promise<{ content: string; resolvedPath:
     return { content, resolvedPath: arg };
   }
 
-  // kind === "name" — check ~/.sigil/templates/<name>.json
+  // kind === "name" — check ~/.sygil/templates/<name>.json
   const userTemplatesDir = USER_TEMPLATES_DIR();
   const candidatePath = join(userTemplatesDir, `${arg}.json`);
   try {
@@ -57,7 +61,7 @@ async function resolveArg(arg: string): Promise<{ content: string; resolvedPath:
     const hint =
       names.length > 0
         ? `\nAvailable user templates: ${names.join(", ")}`
-        : "\nNo user templates installed. Run 'sigil registry install <name>' to install one.";
+        : "\nNo user templates installed. Run 'sygil registry install <name>' to install one.";
     throw new Error(
       `Template '${arg}' not found as a URL, file path, or installed template.${hint}`
     );
@@ -85,7 +89,7 @@ export async function importTemplateCommand(urlOrPath: string): Promise<void> {
   const { content, resolvedPath } = resolved;
 
   // Write to a temp file and validate via loadWorkflow
-  const tempFile = join(tmpdir(), `sigil-import-${Date.now()}.json`);
+  const tempFile = join(tmpdir(), `sygil-import-${Date.now()}.json`);
   await writeFile(tempFile, content, "utf8");
 
   let workflow;
@@ -102,7 +106,7 @@ export async function importTemplateCommand(urlOrPath: string): Promise<void> {
     await unlink(tempFile).catch(() => undefined);
   }
 
-  // Save to ~/.sigil/templates/<safe-name>.json
+  // Save to ~/.sygil/templates/<safe-name>.json
   // Sanitize workflow.name to prevent path traversal — strip path separators
   // and reject any name containing '..' segments.
   const rawName = workflow.name ?? deriveTemplateName(resolvedPath);
@@ -110,11 +114,11 @@ export async function importTemplateCommand(urlOrPath: string): Promise<void> {
   if (templateName !== rawName) {
     console.error(chalk.red(`Template name "${rawName}" contains invalid characters and was sanitized to "${templateName}".`));
   }
-  const userTemplatesDir = join(homedir(), ".sigil", "templates");
+  const userTemplatesDir = join(homedir(), ".sygil", "templates");
   await mkdir(userTemplatesDir, { recursive: true });
 
   const destPath = join(userTemplatesDir, `${templateName}.json`);
-  await writeFile(destPath, content, "utf8");
+  await writeFileAtomic(destPath, content);
 
   console.log(chalk.green(`✓ Imported template "${templateName}" → ${destPath}`));
 }

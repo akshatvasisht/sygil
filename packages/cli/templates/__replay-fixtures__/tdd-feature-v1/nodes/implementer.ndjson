@@ -1,0 +1,9 @@
+{"timestamp":1700000001000,"nodeId":"implementer","event":{"type":"text_delta","text":"Reading implementation plan."}}
+{"timestamp":1700000001100,"nodeId":"implementer","event":{"type":"tool_call","tool":"Read","input":{"path":"planning/plan.md"}}}
+{"timestamp":1700000001200,"nodeId":"implementer","event":{"type":"tool_result","tool":"Read","output":"ok","success":true}}
+{"timestamp":1700000001300,"nodeId":"implementer","event":{"type":"tool_call","tool":"Write","input":{"path":"src/feature.test.ts"}}}
+{"timestamp":1700000001400,"nodeId":"implementer","event":{"type":"tool_result","tool":"Write","output":"ok","success":true}}
+{"timestamp":1700000001500,"nodeId":"implementer","event":{"type":"tool_call","tool":"Write","input":{"path":"src/feature.ts"}}}
+{"timestamp":1700000001600,"nodeId":"implementer","event":{"type":"tool_result","tool":"Write","output":"ok","success":true}}
+{"timestamp":1700000001700,"nodeId":"implementer","event":{"type":"text_delta","text":"Implementation complete."}}
+{"timestamp":1700000001800,"nodeId":"implementer","event":{"type":"cost_update","totalCostUsd":0.002}}

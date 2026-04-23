@@ -17,13 +17,21 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+// The destination-path write now goes through our `writeFileAtomic` shim
+// (backed by the `write-file-atomic` npm library, which uses its own tmp+rename
+// scheme bypassing the `node:fs/promises` mocks above). Stub the shim directly
+// so tests don't touch the real FS.
+vi.mock("../utils/atomic-write.js", () => ({
+  writeFileAtomic: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../utils/workflow.js", () => ({
   loadWorkflow: vi.fn(),
 }));
 
 vi.mock("../utils/registry.js", () => ({
   listUserTemplates: vi.fn().mockResolvedValue([]),
-  USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sigil/templates"),
+  USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sygil/templates"),
 }));
 
 import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
@@ -130,7 +138,10 @@ describe("importTemplateCommand", () => {
 
     await importTemplateCommand("https://example.com/template.json");
 
-    expect(mockFetch).toHaveBeenCalledWith("https://example.com/template.json");
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://example.com/template.json",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining("Imported template")
     );

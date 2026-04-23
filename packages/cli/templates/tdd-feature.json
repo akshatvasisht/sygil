@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
   "version": "1",
   "name": "tdd-feature",
   "description": "Test-driven development: plan → implement → review (loops back on failure, max 2 retries)",

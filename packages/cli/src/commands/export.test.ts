@@ -10,14 +10,16 @@ vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(),
   writeFile: vi.fn().mockResolvedValue(undefined),
   mkdir: vi.fn().mockResolvedValue(undefined),
+  access: vi.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
 }));
 
-import { readFile, readdir, writeFile, mkdir } from "node:fs/promises";
+import { readFile, readdir, writeFile, mkdir, access } from "node:fs/promises";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockReaddir = readdir as ReturnType<typeof vi.fn>;
 const mockWriteFile = writeFile as ReturnType<typeof vi.fn>;
 const mockMkdir = mkdir as ReturnType<typeof vi.fn>;
+const mockAccess = access as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -31,7 +33,23 @@ describe("exportCommand", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy return types vary per target
   let processExitSpy: MockInstance<any[], never>;
 
-  const TEMPLATE_CONTENT = JSON.stringify({ name: "my-template", nodes: {} }, null, 2);
+  const TEMPLATE_CONTENT = JSON.stringify(
+    {
+      version: "1",
+      name: "my-template",
+      nodes: {
+        n1: {
+          adapter: "echo",
+          model: "test",
+          role: "tester",
+          prompt: "hi",
+        },
+      },
+      edges: [],
+    },
+    null,
+    2,
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,6 +60,8 @@ describe("exportCommand", () => {
     });
     mockWriteFile.mockResolvedValue(undefined);
     mockMkdir.mockResolvedValue(undefined);
+    // Default: output file does not exist
+    mockAccess.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
   });
 
   afterEach(() => {
@@ -107,16 +127,65 @@ describe("exportCommand", () => {
   });
 
   it("exports template content verbatim to the output file", async () => {
-    const content = '{"version":"1","name":"verbatim"}';
-    mockReadFile.mockResolvedValue(content);
+    mockReadFile.mockResolvedValue(TEMPLATE_CONTENT);
 
     await exportCommand("verbatim-template", "/absolute/output.json");
 
     expect(mockWriteFile).toHaveBeenCalledWith(
       "/absolute/output.json",
-      content,
-      "utf8"
+      TEMPLATE_CONTENT,
+      "utf8",
     );
+  });
+
+  it("refuses to overwrite an existing output file without --force", async () => {
+    mockReadFile.mockResolvedValue(TEMPLATE_CONTENT);
+    mockAccess.mockResolvedValue(undefined); // output file exists
+
+    await expect(exportCommand("my-template", "output.json")).rejects.toThrow(
+      "process.exit(1)",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Refusing to overwrite"),
+    );
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("overwrites an existing output file when --force is passed", async () => {
+    mockReadFile.mockResolvedValue(TEMPLATE_CONTENT);
+    mockAccess.mockResolvedValue(undefined); // output file exists
+
+    await exportCommand("my-template", "output.json", { force: true });
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      "output.json",
+      TEMPLATE_CONTENT,
+      "utf8",
+    );
+  });
+
+  it("rejects a bundled template that fails WorkflowGraphSchema validation", async () => {
+    const broken = JSON.stringify({ name: "broken", nodes: {} }); // missing version, empty nodes
+    mockReadFile.mockResolvedValue(broken);
+
+    await expect(exportCommand("broken", "out.json")).rejects.toThrow(
+      "process.exit(1)",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed schema validation"),
+    );
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bundled template that is invalid JSON", async () => {
+    mockReadFile.mockResolvedValue("{not json");
+
+    await expect(exportCommand("broken", "out.json")).rejects.toThrow(
+      "process.exit(1)",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("not valid JSON"),
+    );
+    expect(mockWriteFile).not.toHaveBeenCalled();
   });
 
   it("does not call mkdir when outputPath is at the current directory level", async () => {

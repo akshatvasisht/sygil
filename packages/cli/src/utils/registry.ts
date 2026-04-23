@@ -19,7 +19,7 @@ export interface RegistryIndex {
 }
 
 export const REGISTRY_INDEX_URL = "https://raw.githubusercontent.com/sigil-dev/registry/main/index.json";
-export const USER_TEMPLATES_DIR = () => join(homedir(), ".sigil", "templates");
+export const USER_TEMPLATES_DIR = () => join(homedir(), ".sygil", "templates");
 
 function validateTemplateUrl(url: string): void {
   const parsed = new URL(url);

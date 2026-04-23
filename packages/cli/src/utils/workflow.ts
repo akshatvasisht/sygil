@@ -1,21 +1,43 @@
 import { readFile } from "node:fs/promises";
-import type { WorkflowGraph } from "@sigil/shared";
-import { WorkflowGraphSchema } from "@sigil/shared";
+import type { WorkflowGraph } from "@sygil/shared";
+import { WorkflowGraphSchema } from "@sygil/shared";
+import {
+  isVerificationEnabled,
+  verifyTemplateSignature,
+} from "./template-signature.js";
 
 // ---------------------------------------------------------------------------
 // Parameter interpolation
 // ---------------------------------------------------------------------------
 
+// Sentinels used by the two-pass `{{{{` / `}}}}` escape mechanism. Unicode
+// control chars that cannot appear inside a JSON string literal, so they
+// cannot collide with legitimate prompt content after JSON.stringify.
+const ESCAPE_OPEN_SENTINEL = "\u0000SYGIL_ESC_OPEN\u0000";
+const ESCAPE_CLOSE_SENTINEL = "\u0000SYGIL_ESC_CLOSE\u0000";
+
 /**
  * Replace all `{{paramName}}` placeholders in a WorkflowGraph with the
  * supplied parameter values. Throws if any referenced parameter is missing.
+ *
+ * Literal `{{` / `}}` can be emitted by doubling the braces: `{{{{foo}}}}`
+ * renders as the string `{{foo}}` after interpolation. This is the only
+ * escape syntax supported — we intentionally avoid a full template engine
+ * (see decisions.md 2026-04-20 "Parameter interpolation stays string-literal-only").
  */
 export function interpolateWorkflow(
   graph: WorkflowGraph,
   params: Record<string, string>
 ): WorkflowGraph {
   const json = JSON.stringify(graph);
-  const interpolated = json.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+
+  // Pass 1: protect doubled braces so pass 2 cannot see them.
+  const protectedSource = json
+    .replaceAll("{{{{", ESCAPE_OPEN_SENTINEL)
+    .replaceAll("}}}}", ESCAPE_CLOSE_SENTINEL);
+
+  // Pass 2: interpolate remaining {{param}} placeholders.
+  const interpolatedRaw = protectedSource.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
     if (!(key in params)) {
       throw new Error(`Missing required parameter: ${key}`);
     }
@@ -24,6 +46,11 @@ export function interpolateWorkflow(
     // slice off the surrounding quotes to get the escaped interior.
     return JSON.stringify(params[key]!).slice(1, -1);
   });
+
+  // Pass 3: restore the escaped braces as literal `{{` / `}}`.
+  const interpolated = interpolatedRaw
+    .replaceAll(ESCAPE_OPEN_SENTINEL, "{{")
+    .replaceAll(ESCAPE_CLOSE_SENTINEL, "}}");
 
   // Re-validate against the schema after interpolation to prevent
   // structural injection via crafted parameter values.
@@ -43,6 +70,23 @@ export function interpolateWorkflow(
 // ---------------------------------------------------------------------------
 
 export async function loadWorkflow(filePath: string): Promise<WorkflowGraph> {
+  // Optional Sigstore sidecar verification. Runs BEFORE JSON parse so
+  // a tampered file is rejected without the scheduler ever seeing its
+  // contents. Silently no-ops unless SYGIL_VERIFY_TEMPLATES=1 is set.
+  if (isVerificationEnabled()) {
+    const outcome = await verifyTemplateSignature(filePath);
+    if (outcome.status === "failed") {
+      throw new Error(
+        `Template signature verification failed for "${filePath}": ${outcome.reason}`,
+      );
+    }
+    if (outcome.status === "verifier-unavailable") {
+      throw new Error(outcome.reason);
+    }
+    // "verified", "no-signature", and "disabled" all allow the load to proceed.
+    // "no-signature" is the fail-open path for user-authored workflows.
+  }
+
   let raw: string;
   try {
     raw = await readFile(filePath, "utf8");

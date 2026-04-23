@@ -1,0 +1,96 @@
+{
+  "$schema": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
+  "version": "1",
+  "name": "optimize",
+  "description": "Outer-loop workflow optimizer. Proposes mutations to a seed workflow, evaluates each candidate via nested sygil run, and maintains a Pareto archive on (gate_pass_rate, cost_usd). See decisions.md 2026-04-20.",
+  "parameters": {
+    "workflow": {
+      "type": "string",
+      "description": "Absolute path to the seed workflow.json to optimize",
+      "required": true
+    },
+    "evalTask": {
+      "type": "string",
+      "description": "Absolute path to an eval-task JSON file with shape { cases: [{ task: string }, ...] }",
+      "required": true
+    },
+    "budget": {
+      "type": "number",
+      "description": "Total USD budget across all candidate evaluations (outer-loop halts when cumulative cost exceeds this)",
+      "required": true
+    }
+  },
+  "nodes": {
+    "propose": {
+      "adapter": "claude-cli",
+      "model": "opus",
+      "role": "You are an LLM-workflow optimizer. You read prior candidates' full NDJSON execution traces and propose ONE deliberate mutation per iteration to move a Sygil workflow along the Pareto frontier of (gate_pass_rate maximized, cost_usd minimized). You reason from evidence in the traces — not intuition. You only touch nodes/edges of the candidate workflow, never project-level config.",
+      "prompt": "You are iterating on a Sygil workflow to improve its Pareto frontier on (gate_pass_rate, cost_usd).\n\nSetup on FIRST iteration ONLY:\n1. If `optimize-config.json` does not exist, write it as:\n   {\"budgetUsd\": {{budget}}, \"evalTaskPath\": \"{{evalTask}}\", \"seedWorkflowPath\": \"{{workflow}}\"}\n2. If no `candidate-*` directory exists:\n   - Read the seed workflow at {{workflow}} (use the Read tool).\n   - Create `candidate-0/` and write the seed verbatim to `candidate-0/workflow.json` — this establishes the baseline.\n   - Write `candidate-0/rationale.md` explaining: \"seed baseline, no mutations\".\n   - Exit. The evaluate node will score it.\n\nOn EVERY OTHER iteration:\n\n1. Determine the next candidate index: run `ls -d candidate-* 2>/dev/null | wc -l` via Bash. Call the result N. The new dir is `candidate-N`.\n\n2. Read `frontier.json` (Pareto archive of non-dominated candidates from prior iterations). Use it plus the fresh candidate-M directories to pick a PARENT to mutate. Favor:\n   - A frontier member with high gatePassRate if recent candidates trend low-pass-rate.\n   - A frontier member with low costUsd if cost is trending up.\n   - Rotate parents across iterations — do not always mutate the same ancestor.\n\n3. INSPECT THE PARENT'S TRACES (this is load-bearing — Meta-Harness Table 3 shows +15 accuracy points when the proposer reads raw traces vs. summaries). For parent `candidate-M`:\n   - Read `candidate-M/workflow.json` (the full workflow graph you're mutating).\n   - Use Glob to list inner-run NDJSON under `candidate-M/.sygil/runs/*/events/*.ndjson`.\n   - Use Read/Grep to look at the actual events — which tools got called, which nodes were slow, which gates failed, which retries happened. Cite specific events in your rationale.\n\n4. Propose ONE mutation. Kinds that are in scope:\n   - Swap a node's `model` (e.g. opus → sonnet, sonnet → haiku) to cut cost.\n   - Tighten a node's `maxTurns` or `timeoutMs` if traces show early convergence.\n   - Remove an unused tool from a node's `tools` list.\n   - Drop a node entirely and re-wire edges, if traces show it is a no-op.\n   - Tighten a gate condition (e.g. add a regex gate that was missing).\n   Out of scope: editing `.sygil/config.json`, editing this optimize template, editing the eval task, or swapping adapters blindly.\n\n5. Write the new candidate:\n   - Create `candidate-N/`.\n   - Write `candidate-N/workflow.json` = parent's workflow with your one mutation applied.\n   - Write `candidate-N/rationale.md`:\n       parent: candidate-M\n       mutation: <one-line summary>\n       evidence: <which trace events support this change — cite file + content>\n       expected effect: <which objective moves, by roughly how much>\n\n6. Validate the new workflow by invoking `sygil validate candidate-N/workflow.json` via Bash. If it fails, fix it or choose a different mutation — do not ship an invalid candidate.\n\nHard rules: one mutation per candidate. Always cite trace evidence. Never regenerate a workflow from scratch — always fork a parent. Do not modify any file outside your cwd.",
+      "tools": ["Read", "Grep", "Glob", "Bash", "Write"],
+      "outputDir": ".",
+      "writesContext": ["candidateId"],
+      "maxTurns": 40,
+      "timeoutMs": 600000,
+      "idleTimeoutMs": 120000
+    },
+    "evaluate": {
+      "adapter": "claude-cli",
+      "model": "sonnet",
+      "role": "You are a deterministic evaluation harness. You run the candidate workflow produced by `propose` against every case in the eval task, capture pass/fail + cost per case, and write a structured eval-results.json. You do not reason about the workflow — you run it and record numbers.",
+      "prompt": "Your job is to evaluate the most recent candidate workflow.\n\n1. Determine the most recent candidate directory: `ls -d candidate-* | sort -V | tail -n 1`. Call this `candidate-N`.\n\n2. Read `optimize-config.json` and parse its `evalTaskPath` field. That file is expected to have shape:\n   {\"cases\": [{\"task\": \"...\"}, {\"task\": \"...\"}, ...]}\n   If it contains only a single case, emit a warning to stderr — pass-rate needs multiple cases to be meaningful.\n\n3. For EACH case in cases[]:\n   a. cd into `candidate-N`.\n   b. Run: `sygil run workflow.json --param task=<case.task> --no-open --no-monitor 2>&1 | tee case-<i>.log`\n   c. Extract the inner run ID from the tail of the log (line matching `Run ID: <id>`). Record it.\n   d. Determine pass/fail:\n      - PASS iff the log contains `Workflow completed`\n      - FAIL if the log contains `Workflow failed` OR if sygil exited non-zero\n   e. Extract cost: parse the `Total cost: $X.XXXX` line from the log (0 if absent).\n   f. cd back out to the outer-loop outputDir.\n\n4. Compute aggregates:\n   - passRate = passedCount / totalCount\n   - costUsd = sum of per-case costs\n   - durationMs = sum of per-case durations (if measurable) else omit\n\n5. Write `candidate-N/eval-results.json` with shape:\n   {\n     \"cases\": [{\"task\": \"...\", \"passed\": true|false, \"costUsd\": 0.0, \"innerRunId\": \"...\"}, ...],\n     \"passRate\": 0.0,\n     \"costUsd\": 0.0\n   }\n\nHard rules: DO NOT modify the candidate's workflow.json. DO NOT run anything outside `candidate-N/`. If `sygil run` returns with rate-limit errors, wait and retry up to 2 times before marking the case failed.",
+      "tools": ["Read", "Bash", "Write"],
+      "outputDir": ".",
+      "expectedOutputs": [],
+      "maxTurns": 100,
+      "timeoutMs": 3600000,
+      "idleTimeoutMs": 300000
+    },
+    "score": {
+      "adapter": "claude-cli",
+      "model": "haiku",
+      "role": "You are a bookkeeper. You run one script and report its output. You do not evaluate or judge — you only record.",
+      "prompt": "Update the Pareto archive.\n\n1. Determine the most recent candidate directory: `ls -d candidate-* | sort -V | tail -n 1`. Call it CAND.\n\n2. Run: `node optimize-scripts/update-frontier.mjs --candidate \"$CAND\" --frontier frontier.json`\n\n   - The script reads <CAND>/eval-results.json, updates frontier.json atomically with Pareto-dominance pruning, and prints a one-line JSON summary to stdout.\n   - If the script exits non-zero, echo the error and exit 1.\n\n3. Print the summary line. That is the entire job.\n\nDo not edit frontier.json directly. Do not touch any other file.",
+      "tools": ["Bash"],
+      "outputDir": ".",
+      "expectedOutputs": ["frontier.json"],
+      "maxTurns": 6,
+      "timeoutMs": 60000,
+      "idleTimeoutMs": 30000
+    }
+  },
+  "edges": [
+    {
+      "id": "propose-to-evaluate",
+      "from": "propose",
+      "to": "evaluate",
+      "gate": {
+        "conditions": [
+          { "type": "exit_code", "value": 0 }
+        ]
+      }
+    },
+    {
+      "id": "evaluate-to-score",
+      "from": "evaluate",
+      "to": "score",
+      "gate": {
+        "conditions": [
+          { "type": "exit_code", "value": 0 }
+        ]
+      }
+    },
+    {
+      "id": "score-loop-back",
+      "from": "score",
+      "to": "propose",
+      "isLoopBack": true,
+      "maxRetries": 50,
+      "gate": {
+        "conditions": [
+          { "type": "file_exists", "path": "frontier.json" },
+          { "type": "script", "path": "gates/check-budget.sh" }
+        ]
+      }
+    }
+  ]
+}

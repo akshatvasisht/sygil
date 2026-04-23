@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { resumeCommand } from "./resume.js";
-import type { WorkflowRunState } from "@sigil/shared";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -39,6 +38,10 @@ vi.mock("../monitor/websocket.js", () => {
   const WsMonitorServer = vi.fn().mockImplementation(() => ({
     start: vi.fn().mockResolvedValue(9876),
     stop: vi.fn().mockResolvedValue(undefined),
+    drain: vi.fn().mockResolvedValue(undefined),
+    getAuthToken: vi.fn().mockReturnValue("test-token"),
+    setPrometheusMetrics: vi.fn(),
+    setAdapterPool: vi.fn(),
   }));
   return { WsMonitorServer };
 });
@@ -51,14 +54,14 @@ import { WsMonitorServer } from "../monitor/websocket.js";
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- WorkflowScheduler is a mock constructor
-const MockScheduler = WorkflowScheduler as unknown as ReturnType<typeof vi.fn>;
+const MockScheduler = WorkflowScheduler as any;
 const MockMonitor = WsMonitorServer as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunState {
+function makeRunState(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: "run-abc12345",
     workflowName: "test-workflow",
@@ -68,6 +71,7 @@ function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunSta
     nodeResults: {},
     totalCostUsd: 0.01,
     retryCounters: {},
+    sharedContext: {},
     ...overrides,
   };
 }
@@ -88,15 +92,18 @@ describe("resumeCommand", () => {
     vi.clearAllMocks();
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    processExitSpy = vi.spyOn(process, "exit").mockImplementation(
-      (_code?: string | number | null | undefined) => {
-        throw new Error(`process.exit(${String(_code)})`);
-      }
-    );
+    processExitSpy = vi.spyOn(process, "exit").mockImplementation((_code?: string | number | null | undefined) => {
+      throw new Error(`process.exit(${String(_code)})`);
+    });
+
     // Re-set constructor mocks after clearAllMocks
     MockMonitor.mockImplementation(() => ({
       start: vi.fn().mockResolvedValue(9876),
       stop: vi.fn().mockResolvedValue(undefined),
+      drain: vi.fn().mockResolvedValue(undefined),
+      getAuthToken: vi.fn().mockReturnValue("test-token"),
+      setPrometheusMetrics: vi.fn(),
+      setAdapterPool: vi.fn(),
     }));
     MockScheduler.mockImplementation(() => ({
       on: vi.fn(),
@@ -114,7 +121,6 @@ describe("resumeCommand", () => {
 
   it("exits 1 when run state file cannot be loaded", async () => {
     mockReadFile.mockRejectedValue(new Error("ENOENT"));
-
     await expect(resumeCommand("nonexistent-run")).rejects.toThrow("process.exit(1)");
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
@@ -122,9 +128,7 @@ describe("resumeCommand", () => {
   it("returns early for completed runs with a warning message", async () => {
     const state = makeRunState({ status: "completed" });
     mockReadFile.mockResolvedValue(JSON.stringify(state));
-
     await resumeCommand("run-abc12345");
-
     const output = consoleLogSpy.mock.calls.flat().join("\n");
     expect(output).toContain("already completed");
     expect(processExitSpy).not.toHaveBeenCalled();
@@ -133,9 +137,7 @@ describe("resumeCommand", () => {
   it("returns early for cancelled runs with a warning message", async () => {
     const state = makeRunState({ status: "cancelled" });
     mockReadFile.mockResolvedValue(JSON.stringify(state));
-
     await resumeCommand("run-abc12345");
-
     const output = consoleLogSpy.mock.calls.flat().join("\n");
     expect(output).toContain("cancelled");
     expect(processExitSpy).not.toHaveBeenCalled();
@@ -153,9 +155,7 @@ describe("resumeCommand", () => {
       nodes: { nodeA: {} },
       edges: [],
     });
-
     await resumeCommand("run-abc12345");
-
     const output = consoleLogSpy.mock.calls.flat().join("\n");
     expect(output).toContain("marked as running");
     expect(output).toContain("crashed");
@@ -173,9 +173,7 @@ describe("resumeCommand", () => {
       nodes: { nodeA: {} },
       edges: [],
     });
-
     await resumeCommand("run-abc12345");
-
     const output = consoleLogSpy.mock.calls.flat().join("\n");
     expect(output).toContain("resumed and completed");
     expect(output).toContain("1.2s");
@@ -193,9 +191,7 @@ describe("resumeCommand", () => {
       nodes: { nodeA: {} },
       edges: [],
     });
-
     await resumeCommand("run-abc12345");
-
     const output = consoleLogSpy.mock.calls.flat().join("\n");
     expect(output).toContain("$0.0500");
   });
@@ -212,7 +208,6 @@ describe("resumeCommand", () => {
       nodes: { nodeA: {} },
       edges: [],
     });
-
     // Override the scheduler mock for this test
     MockScheduler.mockImplementation(() => ({
       on: vi.fn(),
@@ -222,7 +217,6 @@ describe("resumeCommand", () => {
         error: "Node nodeB failed",
       }),
     }));
-
     await expect(resumeCommand("run-abc12345")).rejects.toThrow("process.exit(1)");
   });
 
@@ -230,19 +224,73 @@ describe("resumeCommand", () => {
     // State has no workflowPath, and all heuristic paths fail
     const state = makeRunState({ status: "paused" });
     // Remove workflowPath if it exists
-    delete (state as unknown as Record<string, unknown>)["workflowPath"];
-    mockReadFile.mockImplementation((path: string) => {
+    delete state["workflowPath"];
+    mockReadFile.mockImplementation((path: unknown) => {
       // Only the state file should succeed
       if (String(path).includes("run-abc12345.json")) {
         return Promise.resolve(JSON.stringify(state));
       }
       return Promise.reject(new Error("ENOENT"));
     });
-
     await expect(resumeCommand("run-abc12345")).rejects.toThrow("process.exit(1)");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Could not find the original workflow.json")
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Could not find the original workflow.json"));
+  });
+
+  describe("checkpoint schema validation", () => {
+    it("exits 1 with 'not valid JSON' when the checkpoint isn't JSON", async () => {
+      mockReadFile.mockResolvedValue("{not json");
+      await expect(resumeCommand("run-bad")).rejects.toThrow("process.exit(1)");
+      // The spinner.fail call doesn't show in console.error, but exit was called.
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("exits 1 when checkpoint is an empty object (fails required fields)", async () => {
+      mockReadFile.mockResolvedValue("{}");
+      await expect(resumeCommand("run-empty")).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("exits 1 when retryCounters is missing from the checkpoint", async () => {
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        id: "run-1",
+        workflowName: "test",
+        status: "failed",
+        startedAt: new Date().toISOString(),
+        completedNodes: [],
+        nodeResults: {},
+        totalCostUsd: 0,
+        // retryCounters missing
+      }));
+      await expect(resumeCommand("run-partial")).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("exits 1 when a nodeResults entry is missing required fields", async () => {
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        id: "run-1",
+        workflowName: "test",
+        status: "failed",
+        startedAt: new Date().toISOString(),
+        completedNodes: ["n1"],
+        nodeResults: { n1: { output: "x" } }, // missing exitCode + durationMs
+        totalCostUsd: 0,
+        retryCounters: {},
+      }));
+      await expect(resumeCommand("run-broken-result")).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("accepts a checkpoint with unknown extra fields (passthrough forward-compat)", async () => {
+      const state = makeRunState({
+        status: "completed",
+      });
+      // A status: "completed" run short-circuits before workflow load, so
+      // this exercises the schema acceptance path cleanly.
+      const withExtras = { ...state, futureField: { newThing: true } };
+      mockReadFile.mockResolvedValue(JSON.stringify(withExtras));
+      await resumeCommand("run-future");
+      expect(processExitSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("registers event listeners on the scheduler", async () => {
@@ -257,17 +305,14 @@ describe("resumeCommand", () => {
       nodes: { nodeA: {} },
       edges: [],
     });
-
     const mockOn = vi.fn();
     MockScheduler.mockImplementation(() => ({
       on: mockOn,
       resume: vi.fn().mockResolvedValue({ success: true, durationMs: 100 }),
     }));
-
     await resumeCommand("run-abc12345");
-
     // Should register node_start, node_event, node_end listeners
-    const events = mockOn.mock.calls.map((c) => c[0]!);
+    const events = mockOn.mock.calls.map((c: unknown[]) => c[0]);
     expect(events).toContain("node_start");
     expect(events).toContain("node_event");
     expect(events).toContain("node_end");

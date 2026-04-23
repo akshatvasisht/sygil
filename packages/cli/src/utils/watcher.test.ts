@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WorkflowWatcher } from "./watcher.js";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-watcher-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-watcher-test-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -107,14 +107,4 @@ describe("WorkflowWatcher", () => {
     watcher.stop();
   });
 
-  it("logs a warning when fs.watch fails on a path", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    // Try to watch a file that doesn't exist — it should just skip silently
-    watcher.watch("/definitely/does/not/exist/workflow.json");
-
-    // The watcher skips non-existent paths silently (existsSync returns false)
-    // so no warning should be logged
-    warnSpy.mockRestore();
-  });
 });

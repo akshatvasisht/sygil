@@ -1,5 +1,5 @@
 import type { NodeConfig } from "./workflow.js";
-import type { SigilErrorCode } from "./errors.js";
+import type { SygilErrorCode } from "./errors.js";
 
 export interface AgentAdapter {
   readonly name: string;
@@ -33,7 +33,29 @@ export type AgentEvent =
   | { type: "text_delta"; text: string }
   | { type: "cost_update"; totalCostUsd: number }
   | { type: "stall"; reason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "adapter_failover"; fromAdapter: string; toAdapter: string; reason: string }
+  | { type: "context_set"; key: string; value: unknown }
+  | {
+      type: "hook_result";
+      hook: "preNode" | "postNode" | "preGate" | "postGate";
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      durationMs: number;
+    }
+  | {
+      /**
+       * Per-node retry policy scheduled a backoff before retrying the same
+       * provider. Emitted BEFORE the scheduler sleeps so replay
+       * sees the decision in the same order the original run took.
+       */
+      type: "retry_scheduled";
+      attempt: number;
+      nextAttempt: number;
+      delayMs: number;
+      reason: string;
+    };
 
 export interface NodeResult {
   output: string;
@@ -41,10 +63,17 @@ export interface NodeResult {
   exitCode: number;
   durationMs: number;
   costUsd?: number;
-  errorCode?: SigilErrorCode;
+  errorCode?: SygilErrorCode;
   tokenUsage?: {
     input: number;
     output: number;
     cacheRead?: number;
   };
+  /**
+   * Set by the scheduler when this result was returned from `NodeCache` rather
+   * than produced by a fresh adapter run. The monitor UI uses this to
+   * render a distinct `cached` status; the original durationMs / costUsd from
+   * the recorded run are preserved so audits see the real cost, not 0/0.
+   */
+  cacheHit?: boolean;
 }
