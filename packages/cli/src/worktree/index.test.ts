@@ -27,7 +27,7 @@ const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
 const mockMkdir = mkdir as ReturnType<typeof vi.fn>;
 const mockRm = rm as ReturnType<typeof vi.fn>;
 
-import { WorktreeManager } from "./index.js";
+import { WorktreeManager, pruneWorktrees } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,7 +74,7 @@ function makeExecFileRejectOnce(errorMessage: string, thenStdout = "") {
 describe("WorktreeManager", () => {
   const REPO_ROOT = "/fake/repo";
   const RUN_ID = "run-abc";
-  const BASE_DIR = path.join(REPO_ROOT, ".sigil", "worktrees", RUN_ID);
+  const BASE_DIR = path.join(REPO_ROOT, ".sygil", "worktrees", RUN_ID);
 
   let manager: WorktreeManager;
 
@@ -112,7 +112,7 @@ describe("WorktreeManager", () => {
       expect(args[3]).toBe("add");
       expect(args[4]).toBe("-b");
       // Branch name starts with the expected prefix
-      expect(args[5]).toMatch(/^sigil\/worktree\/node-1-[0-9a-f-]{36}$/);
+      expect(args[5]).toMatch(/^sygil\/worktree\/node-1-[0-9a-f-]{36}$/);
       // Worktree path
       expect(args[6]).toBe(path.join(BASE_DIR, nodeId));
       // Source branch
@@ -256,7 +256,7 @@ describe("WorktreeManager", () => {
       // Branch name should start with the expected prefix
       const branchArgs = branchDeleteCall![1] as string[];
       const branchArg = branchArgs[branchArgs.indexOf("-D") + 1];
-      expect(branchArg).toMatch(/^sigil\/worktree\/node-remove-[0-9a-f-]{36}$/);
+      expect(branchArg).toMatch(/^sygil\/worktree\/node-remove-[0-9a-f-]{36}$/);
     });
   });
 
@@ -292,6 +292,29 @@ describe("WorktreeManager", () => {
       await expect(manager.merge("node-merge-abort", "main", controller.signal)).rejects.toThrow(
         /aborted/i
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("pruneWorktrees()", () => {
+    it("invokes `git -C <repo> worktree prune` at the given repo root", async () => {
+      makeExecFileResolve("");
+
+      await pruneWorktrees(REPO_ROOT);
+
+      expect(mockExecFile).toHaveBeenCalledTimes(1);
+      const call = mockExecFile.mock.calls[0]!;
+      expect(call[0]).toBe("git");
+      expect(call[1]).toEqual(["-C", REPO_ROOT, "worktree", "prune"]);
+    });
+
+    it("swallows errors (non-git directory, git missing, permission denied)", async () => {
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error) => void;
+        cb(new Error("fatal: not a git repository"));
+      });
+
+      await expect(pruneWorktrees(REPO_ROOT)).resolves.toBeUndefined();
     });
   });
 

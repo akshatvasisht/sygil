@@ -13,118 +13,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { WorkflowScheduler } from "../scheduler/index.js";
-import type {
-  AgentAdapter,
-  AgentSession,
-  AgentEvent,
-  NodeConfig,
-  NodeResult,
-  WorkflowGraph,
-  AdapterType,
-} from "@sigil/shared";
+import type { WorkflowGraph } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Build a NodeConfig. Set role equal to the graph node ID so that session
- * routing by session.nodeId works correctly in per-node adapter factories.
- */
-function makeNodeConfig(nodeId: string, overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test",
-    role: nodeId,
-    prompt: `prompt for ${nodeId}`,
-    ...overrides,
-  };
-}
-
-function makeSession(nodeId: string): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter: "mock",
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-interface MockAdapterOptions {
-  result?: Partial<NodeResult>;
-}
-
-function createMockAdapter(options: MockAdapterOptions = {}): AgentAdapter {
-  const result: NodeResult = {
-    output: "mock output",
-    exitCode: 0,
-    durationMs: 1,
-    ...options.result,
-  };
-
-  return {
-    name: "mock",
-    async isAvailable() { return true; },
-    async spawn(config) { return makeSession(config.role); },
-    async resume(_config, session) { return session; },
-    async *stream(_session): AsyncGenerator<AgentEvent> { /* no events */ },
-    async getResult(_session) { return result; },
-    async kill(_session) { /* no-op */ },
-  };
-}
-
-/**
- * Build a routing adapter factory that dispatches per-node adapter calls
- * using session.nodeId (which equals config.role when makeNodeConfig is used).
- */
-function makeRoutingAdapterFactory(
-  adaptersByNodeId: Record<string, AgentAdapter>
-): (_type: AdapterType) => AgentAdapter {
-  return (_type: AdapterType): AgentAdapter => ({
-    name: "mock",
-    async isAvailable() { return true; },
-    async spawn(config) {
-      // config.role == nodeId (per makeNodeConfig convention)
-      const a = adaptersByNodeId[config.role];
-      return a ? a.spawn(config) : makeSession(config.role);
-    },
-    async resume(config, session, feedback) {
-      const a = adaptersByNodeId[session.nodeId];
-      return a ? a.resume(config, session, feedback) : session;
-    },
-    async *stream(session): AsyncGenerator<AgentEvent> {
-      const a = adaptersByNodeId[session.nodeId];
-      if (a) yield* a.stream(session);
-    },
-    async getResult(session) {
-      const a = adaptersByNodeId[session.nodeId];
-      return a
-        ? a.getResult(session)
-        : { output: "", exitCode: 0, durationMs: 1 };
-    },
-    async kill(session) {
-      const a = adaptersByNodeId[session.nodeId];
-      if (a) await a.kill(session);
-    },
-  });
-}
-
-function createMockMonitor(): WsMonitorServer & { events: Array<{ type: string }> } {
-  const events: Array<{ type: string }> = [];
-  return {
-    events,
-    emit(event: { type: string }) { events.push(event); },
-    on() { /* no-op */ },
-    off() { /* no-op */ },
-    async start() { return 0; },
-    async stop() { /* no-op */ },
-    getPort() { return null; },
-    getAuthToken() { return "t"; },
-    onClientControl: undefined,
-  } as unknown as WsMonitorServer & { events: Array<{ type: string }> };
-}
+import {
+  createMockAdapter,
+  createMockMonitor,
+  createNodeRoutingAdapterFactory,
+  makeNodeConfigForNode as makeNodeConfig,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Test setup
@@ -134,7 +30,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-contract-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-contract-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -176,7 +72,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         producer: createMockAdapter({ result: { structuredOutput: { name: "Alice" } } }),
         consumer: createMockAdapter(),
       }),
@@ -215,7 +111,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         producer: createMockAdapter({ result: { structuredOutput: { age: 30 } } }),
         consumer: createMockAdapter(),
       }),
@@ -266,7 +162,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         producer: createMockAdapter({ result: { structuredOutput: { name: 42 } } }),
         consumer: createMockAdapter(),
       }),
@@ -316,7 +212,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         producer: createMockAdapter({ result: { output: "done", exitCode: 0, durationMs: 1 } }),
         consumer: createMockAdapter(),
       }),
@@ -375,7 +271,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         nodeA: createMockAdapter({ result: { output: "A done", exitCode: 0, durationMs: 1 } }),
         nodeB: createMockAdapter({ result: { structuredOutput: { status: "ready" }, exitCode: 0, durationMs: 1 } }),
         nodeC: createMockAdapter(),
@@ -415,7 +311,7 @@ describe("contract validation integration", () => {
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(
       workflow,
-      makeRoutingAdapterFactory({
+      createNodeRoutingAdapterFactory({
         producer: createMockAdapter({ result: { structuredOutput: { unrelated: true } } }),
         consumer: createMockAdapter(),
       }),

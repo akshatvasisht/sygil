@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EventRecorder } from "../scheduler/event-recorder.js";
 import { replayEvents } from "../scheduler/event-replay.js";
-import type { AgentEvent, RecordedEvent } from "@sigil/shared";
+import type { AgentEvent, RecordedEvent } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,7 +21,7 @@ import type { AgentEvent, RecordedEvent } from "@sigil/shared";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-ndjson-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-ndjson-"));
   tempDirs.push(dir);
   return dir;
 }

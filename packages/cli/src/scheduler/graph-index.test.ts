@@ -3,21 +3,8 @@
  */
 import { describe, it, expect } from "vitest";
 import { GraphIndex } from "./graph-index.js";
-import type { WorkflowGraph, EdgeConfig, NodeConfig, AdapterType } from "@sigil/shared";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test-model",
-    role: "test role",
-    prompt: "test prompt",
-    ...overrides,
-  };
-}
+import type { WorkflowGraph } from "@sygil/shared";
+import { makeNodeConfig } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Tests

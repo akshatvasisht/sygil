@@ -1,4 +1,4 @@
-import type { RecordedEvent } from "@sigil/shared";
+import type { RecordedEvent } from "@sygil/shared";
 import { EventRecorder } from "./event-recorder.js";
 
 interface ReplayOptions {

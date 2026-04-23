@@ -1,4 +1,4 @@
-import type { NodeResult } from "@sigil/shared";
+import type { NodeResult } from "@sygil/shared";
 import type { GraphIndex } from "./graph-index.js";
 
 /** Default node weight when no historical duration is available. */
@@ -28,9 +28,21 @@ export function computeCriticalPathWeights(
     return result?.durationMs ?? DEFAULT_NODE_WEIGHT;
   }
 
+  const visiting = new Set<string>();
+
   function compute(nodeId: string): number {
     const cached = weights.get(nodeId);
     if (cached !== undefined) return cached;
+    // Cycle guard: a forward-edge cycle (A→B→A with neither marked
+    // `isLoopBack`) would cause unbounded recursion, crashing with
+    // "Maximum call stack size exceeded" before the scheduler ever gets
+    // to surface the malformed graph. The schema doesn't reject such
+    // cycles today — only the semantic BFS for `{{nodes.<id>}}` refs is
+    // cycle-safe. Treat re-entry as weight 0 so recursion terminates
+    // with a finite (if approximate) priority ordering; the scheduler's
+    // start-node detection then surfaces the empty ready-set as a stall.
+    if (visiting.has(nodeId)) return 0;
+    visiting.add(nodeId);
 
     const outgoing = index.edgesByFrom.get(nodeId) ?? [];
     // Only consider forward edges
@@ -46,6 +58,7 @@ export function computeCriticalPathWeights(
 
     const weight = getNodeWeight(nodeId) + maxSuccessorWeight;
     weights.set(nodeId, weight);
+    visiting.delete(nodeId);
     return weight;
   }
 

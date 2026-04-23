@@ -11,69 +11,19 @@ import { randomUUID } from "node:crypto";
 import { WorkflowScheduler } from "./index.js";
 import type {
   AgentAdapter,
-  AgentSession,
   AgentEvent,
-  NodeConfig,
   WorkflowGraph,
-  AdapterType,
-} from "@sigil/shared";
+} from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
+import {
+  makeNodeConfig,
+  makeSession,
+  createMockMonitor,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
-// Helpers (mirrored from index.test.ts)
+// File-local helpers
 // ---------------------------------------------------------------------------
-
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test-model",
-    role: "test role",
-    prompt: "test prompt",
-    ...overrides,
-  };
-}
-
-function makeSession(nodeId = "node"): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter: "mock",
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-type MonitorEmit = Parameters<WsMonitorServer["emit"]>[0];
-
-function createMockMonitor(): WsMonitorServer & { events: MonitorEmit[] } {
-  const events: MonitorEmit[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- EventEmitter listener map requires any[] for mixed-type event arguments
-  const listeners = new Map<string, Set<(...args: any[]) => void>>();
-
-  return {
-    events,
-    emit(event: MonitorEmit) {
-      events.push(event);
-    },
-    on(eventName: string, listener: (...args: unknown[]) => void) {
-      if (!listeners.has(eventName)) listeners.set(eventName, new Set());
-      listeners.get(eventName)!.add(listener);
-    },
-    off(eventName: string, listener: (...args: unknown[]) => void) {
-      listeners.get(eventName)?.delete(listener);
-    },
-    async start() {
-      return 0;
-    },
-    async stop() {
-      // no-op
-    },
-    getPort() {
-      return null;
-    },
-    onClientControl: undefined as WsMonitorServer["onClientControl"],
-  } as unknown as WsMonitorServer & { events: MonitorEmit[] };
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,7 +37,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-abort-test-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-abort-test-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);

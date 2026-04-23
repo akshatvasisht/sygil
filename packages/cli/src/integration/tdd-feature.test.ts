@@ -23,7 +23,7 @@ import type {
   NodeResult,
   WorkflowGraph,
   AdapterType,
-} from "@sigil/shared";
+} from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 
 // ---------------------------------------------------------------------------
@@ -60,13 +60,14 @@ function createMockMonitor(): WsMonitorServer & { events: Array<{ type: string }
     async start() { return 0; },
     async stop() { /* no-op */ },
     getPort() { return null; },
+    setAdapterPool() {},
     onClientControl: undefined,
   } as unknown as WsMonitorServer & { events: Array<{ type: string }> };
 
   return monitor;
 }
 
-/** Minimal no-op adapter. */
+// Minimal no-op adapter.
 function noopAdapter(resultOverride: Partial<NodeResult> = {}): AgentAdapter {
   return {
     name: "mock",
@@ -89,7 +90,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-int-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-int-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -329,7 +330,7 @@ describe("tdd-feature template integration", () => {
     expect(loopBackEvents[0]?.attempt).toBe(1);
 
     // Final run state is "completed"
-    const stateFile = join(testDir, ".sigil", "runs", `${result.runId}.json`);
+    const stateFile = join(testDir, ".sygil", "runs", `${result.runId}.json`);
     const raw = await readFile(stateFile, "utf8");
     const state = JSON.parse(raw);
     expect(state.status).toBe("completed");

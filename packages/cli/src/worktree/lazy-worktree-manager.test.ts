@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
-import type { NodeConfig } from "@sigil/shared";
+import type { NodeConfig } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -59,7 +59,7 @@ const BASE_CONFIG: NodeConfig = {
 describe("LazyWorktreeManager", () => {
   const REPO_ROOT = "/fake/repo";
   const RUN_ID = "run-lazy";
-  const BASE_DIR = path.join(REPO_ROOT, ".sigil", "worktrees", RUN_ID);
+  const BASE_DIR = path.join(REPO_ROOT, ".sygil", "worktrees", RUN_ID);
 
   let manager: LazyWorktreeManager;
 
@@ -317,6 +317,58 @@ describe("LazyWorktreeManager", () => {
     it("does nothing when the node is not registered", async () => {
       await expect(manager.remove("non-existent")).resolves.toBeUndefined();
       expect(mockExecFile).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("abort signal propagation", () => {
+    it("throws immediately when signal is already aborted before mutex acquire", async () => {
+      // First execFile (rev-parse HEAD) resolves; pre-check should catch abort before worktree add.
+      makeExecFileResolve("main\n");
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        manager.getOrCreate("node-aborted", BASE_CONFIG, controller.signal)
+      ).rejects.toThrow(/Worktree creation aborted/);
+    });
+
+    it("threads the signal to the long-running sparse-checkout set execFile call", async () => {
+      const controller = new AbortController();
+      makeExecFileResolve("main\n");
+
+      await manager.getOrCreate("node-signal", BASE_CONFIG, controller.signal);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+      const sparseCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("sparse-checkout") && args.includes("set");
+      });
+      expect(sparseCall).toBeDefined();
+      // execFile signature: (file, args, options, callback) — options is index 2.
+      const opts = sparseCall![2] as { signal?: AbortSignal };
+      expect(opts?.signal).toBe(controller.signal);
+    });
+
+    it("threads the signal to the merge --no-ff execFile call", async () => {
+      const controller = new AbortController();
+      makeExecFileResolve("main\n");
+      await manager.getOrCreate("node-merge-signal", BASE_CONFIG);
+
+      vi.clearAllMocks();
+      makeExecFileResolve("");
+
+      await manager.merge("node-merge-signal", "main", controller.signal);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+      const mergeCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("merge") && args.includes("--no-ff");
+      });
+      expect(mergeCall).toBeDefined();
+      const opts = mergeCall![2] as { signal?: AbortSignal };
+      expect(opts?.signal).toBe(controller.signal);
     });
   });
 

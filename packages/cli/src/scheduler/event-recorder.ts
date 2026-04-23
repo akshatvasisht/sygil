@@ -1,13 +1,14 @@
 import { mkdir, readFile, readdir, appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentEvent, RecordedEvent } from "@sigil/shared";
+import type { AgentEvent, RecordedEvent } from "@sygil/shared";
+import { logger } from "../utils/logger.js";
 
 const EVENTS_DIR_NAME = "events";
 
 /**
  * EventRecorder — buffers AgentEvents in memory and flushes them as NDJSON files.
  *
- * Storage format: `.sigil/runs/<runId>/events/<nodeId>.ndjson`
+ * Storage format: `.sygil/runs/<runId>/events/<nodeId>.ndjson`
  * One JSON line per RecordedEvent, append-friendly.
  */
 export class EventRecorder {
@@ -43,10 +44,23 @@ export class EventRecorder {
     const eventsDir = join(this.runDir, EVENTS_DIR_NAME);
     await mkdir(eventsDir, { recursive: true });
 
-    const lines = buffer.map((r) => JSON.stringify(r)).join("\n") + "\n";
+    // Snapshot length BEFORE the await so record() calls made during the
+    // appendFile roundtrip (e.g. postNode / postGate hook_result events,
+    // trailing adapter events) aren't silently dropped by the buffer wipe
+    // below. Without this guard, `this.buffers.delete(nodeId)` would throw
+    // away any events that were pushed into the same array reference while
+    // appendFile was in flight, and a subsequent record() would allocate a
+    // fresh buffer that never saw the lost entries.
+    const snapshotLen = buffer.length;
+    const lines = buffer.slice(0, snapshotLen).map((r) => JSON.stringify(r)).join("\n") + "\n";
     await appendFile(join(eventsDir, `${nodeId}.ndjson`), lines, "utf8");
 
-    this.buffers.delete(nodeId);
+    // Remove only the records we actually wrote. If record() pushed more
+    // during the await, they stay queued for the next flushNode / flushAll.
+    buffer.splice(0, snapshotLen);
+    if (buffer.length === 0) {
+      this.buffers.delete(nodeId);
+    }
   }
 
   /** Flush all buffered events for every node. */
@@ -67,11 +81,22 @@ export class EventRecorder {
       return [];
     }
 
-    return content
-      .trim()
-      .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as RecordedEvent);
+    // Per-line try/catch so one malformed NDJSON line (truncation, crash
+    // mid-append, disk-full) does not abort the entire node's replay.
+    const events: RecordedEvent[] = [];
+    for (const line of content.trim().split("\n")) {
+      if (!line) continue;
+      try {
+        events.push(JSON.parse(line) as RecordedEvent);
+      } catch (err) {
+        logger.warn(
+          `Skipping malformed NDJSON line in ${filePath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return events;
   }
 
   /** Read all recorded events for a run, merged and sorted by timestamp. */

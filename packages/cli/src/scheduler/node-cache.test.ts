@@ -9,7 +9,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { EdgeConfig, NodeResult } from "@sigil/shared";
+import type { EdgeConfig, NodeResult } from "@sygil/shared";
 import {
   computeContentHash,
   areGatesDeterministic,
@@ -21,7 +21,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function makeCacheDir(): string {
-  return join(tmpdir(), `sigil-cache-test-${randomUUID()}`);
+  return join(tmpdir(), `sygil-cache-test-${randomUUID()}`);
 }
 
 function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {

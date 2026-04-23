@@ -28,8 +28,8 @@ async function initRepo(dir: string): Promise<void> {
   const g = (args: string[]) => execFileAsync("git", ["-C", dir, ...args]);
 
   await g(["init", "-b", "main"]);
-  await g(["config", "user.email", "test@sigil.test"]);
-  await g(["config", "user.name", "Sigil Test"]);
+  await g(["config", "user.email", "test@sygil.test"]);
+  await g(["config", "user.name", "Sygil Test"]);
 
   // Create an initial commit so HEAD exists
   await writeFile(join(dir, "README.md"), "# test repo\n", "utf8");
@@ -54,7 +54,7 @@ async function exists(p: string): Promise<boolean> {
 let repoDir: string;
 
 beforeEach(async () => {
-  repoDir = join(tmpdir(), `sigil-wt-int-${randomUUID()}`);
+  repoDir = join(tmpdir(), `sygil-wt-int-${randomUUID()}`);
   await execFileAsync("mkdir", ["-p", repoDir]);
   await initRepo(repoDir);
 });
@@ -75,7 +75,7 @@ describe("WorktreeManager integration", () => {
     const worktreePath = await manager.create("nodeA");
 
     // Returned path must equal the canonical location
-    const expectedPath = join(repoDir, ".sigil", "worktrees", runId, "nodeA");
+    const expectedPath = join(repoDir, ".sygil", "worktrees", runId, "nodeA");
     expect(worktreePath).toBe(expectedPath);
 
     // Directory must exist
@@ -185,7 +185,7 @@ describe("WorktreeManager integration", () => {
     const { stdout: listOut } = await execFileAsync("git", ["-C", repoDir, "worktree", "list"]);
     expect(listOut).not.toContain(worktreePath);
 
-    // The sigil branch must have been deleted
+    // The sygil branch must have been deleted
     const { stdout: branchListOut } = await execFileAsync("git", ["-C", repoDir, "branch"]);
     expect(branchListOut).not.toContain(worktreeBranch);
   });
@@ -204,7 +204,7 @@ describe("WorktreeManager integration", () => {
     expect(await exists(pathB)).toBe(false);
 
     // The entire <runId> base directory must be removed
-    const baseDir = join(repoDir, ".sigil", "worktrees", runId);
+    const baseDir = join(repoDir, ".sygil", "worktrees", runId);
     expect(await exists(baseDir)).toBe(false);
   });
 

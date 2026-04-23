@@ -10,56 +10,21 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type {
-  WorkflowGraph,
-  NodeConfig,
-  NodeResult,
-  WorkflowRunState,
-  AgentEvent,
-  AdapterType,
-} from "@sigil/shared";
+import type { WorkflowGraph, AgentEvent } from "@sygil/shared";
 import { GraphIndex } from "../scheduler/graph-index.js";
 import { AbortTree } from "../scheduler/abort-tree.js";
-import { CheckpointManager, CHECKPOINT_DEBOUNCE_MS } from "../scheduler/checkpoint-manager.js";
+import { CheckpointManager } from "../scheduler/checkpoint-manager.js";
 import { computeCriticalPathWeights } from "../scheduler/critical-path.js";
 import { EventRecorder } from "../scheduler/event-recorder.js";
+import {
+  makeNodeConfig,
+  makeNodeResult,
+  makeRunState,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Test-local event factories
 // ---------------------------------------------------------------------------
-
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test",
-    role: "test",
-    prompt: "test",
-    ...overrides,
-  };
-}
-
-function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunState {
-  return {
-    id: randomUUID(),
-    workflowName: "test",
-    status: "running",
-    startedAt: new Date().toISOString(),
-    completedNodes: [],
-    nodeResults: {},
-    totalCostUsd: 0,
-    retryCounters: {},
-    ...overrides,
-  };
-}
-
-function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {
-  return {
-    output: "output",
-    exitCode: 0,
-    durationMs: 100,
-    ...overrides,
-  };
-}
 
 function makeTextDeltaEvent(text = "hello"): AgentEvent {
   return { type: "text_delta", text };
@@ -77,7 +42,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = await mkdtemp(join(tmpdir(), "sigil-perf-integ-"));
+  testDir = await mkdtemp(join(tmpdir(), "sygil-perf-integ-"));
   originalCwd = process.cwd();
   vi.useFakeTimers();
 });
@@ -196,7 +161,7 @@ describe("scheduler perf modules integration", () => {
     process.chdir(testDir);
 
     // Build a run directory structure matching what CheckpointManager uses:
-    // .sigil/runs/<runId>/  — checkpoint dir
+    // .sygil/runs/<runId>/  — checkpoint dir
     // We use testDir as the event recorder's runDir directly (independent of checkpoint path).
     const runDir = testDir;
     const recorder = new EventRecorder(runDir);
@@ -276,7 +241,7 @@ describe("scheduler perf modules integration", () => {
     const runDir = testDir;
     const recorder = new EventRecorder(runDir);
 
-    recorder.record("nodeFirst", makeTextDeltaEvent("thinking…"));
+    recorder.record("nodeFirst", makeTextDeltaEvent("thinking"));
     recorder.record("nodeFirst", makeToolCallEvent());
     await recorder.flushNode("nodeFirst");
 

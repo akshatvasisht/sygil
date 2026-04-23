@@ -13,8 +13,8 @@ import type {
   AdapterType,
   AgentEvent,
   AgentSession,
-} from "@sigil/shared";
-import { validateStructuredOutput, resolveInputMapping, STALL_EXIT_CODE } from "@sigil/shared";
+} from "@sygil/shared";
+import { validateStructuredOutput, resolveInputMapping, STALL_EXIT_CODE } from "@sygil/shared";
 import { GateEvaluator } from "../gates/index.js";
 import { LazyWorktreeManager } from "../worktree/lazy-worktree-manager.js";
 import { needsIsolation } from "../worktree/isolation-check.js";
@@ -22,17 +22,33 @@ import { AbortTree } from "./abort-tree.js";
 import { NodeCache, computeContentHash, areGatesDeterministic } from "./node-cache.js";
 import { AdapterPool } from "../adapters/adapter-pool.js";
 import type { PoolSlot, PoolConfig } from "../adapters/adapter-pool.js";
+import { resolveProviders, classifyError } from "../adapters/provider-router.js";
+import { computeRetryDelay, isRetryableReason, sleepWithAbort } from "./retry-policy.js";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 import { logger } from "../utils/logger.js";
 import { CheckpointManager } from "./checkpoint-manager.js";
 import { GraphIndex } from "./graph-index.js";
 import { computeCriticalPathWeights } from "./critical-path.js";
 import { EventRecorder } from "./event-recorder.js";
+import { HookRunner, hookResultToEvent } from "../hooks/hook-runner.js";
+import type { HookContext, HookType } from "../hooks/hook-runner.js";
+import type { HooksConfig } from "../utils/config.js";
 
 const execFileAsync = promisify(execFile);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Pick a single representative type for a GateConfig. Used as a
+ * label on `sygil_gate_total`. Most gates have a single condition — that
+ * condition's type becomes the label. Gates with multiple conditions are
+ * labelled `mixed` to bound label cardinality.
+ */
+function summarizeGateType(gate: { conditions: Array<{ type: string }> }): string {
+  if (gate.conditions.length === 1) return gate.conditions[0]!.type;
+  return "mixed";
 }
 
 type AdapterFactory = (type: AdapterType) => AgentAdapter;
@@ -48,6 +64,24 @@ interface RunResult {
 export interface RunOptions {
   isolate?: boolean;
   pool?: PoolConfig;
+  /**
+   * Lifecycle hooks. Scripts invoked at preNode / postNode /
+   * preGate / postGate lifecycle points. See `HookRunner`.
+   */
+  hooks?: HooksConfig;
+  /**
+   * Prometheus exporter instance. When set, the scheduler installs
+   * pool acquire-wait and checkpoint-write listeners so `sygil_adapter_acquire_wait_seconds`
+   * and `sygil_checkpoint_write_total` stay populated. Other metrics flow via
+   * `WsMonitorServer.setPrometheusMetrics` from the command layer.
+   */
+  metricsObserver?: MetricsObserver;
+}
+
+/** Minimal interface so the scheduler doesn't depend on the full PrometheusMetrics class. */
+export interface MetricsObserver {
+  recordAcquireWait(adapterType: string, waitMs: number): void;
+  recordCheckpointWrite(): void;
 }
 
 type SchedulerState = "idle" | "running" | "paused" | "cancelled";
@@ -81,7 +115,7 @@ function buildIncomingForwardEdgeIds(graphIndex: GraphIndex): Map<string, string
  * - After each node, evaluate outgoing edge gates
  * - Loop-back edges: on gate failure, re-queue the target node (up to maxRetries)
  * - Forward edges: on gate failure, mark target as failed
- * - State is checkpointed to .sigil/runs/<id>.json after each node
+ * - State is checkpointed to .sygil/runs/<id>.json after each node
  */
 export class WorkflowScheduler extends EventEmitter {
   private state: SchedulerState = "idle";
@@ -98,6 +132,7 @@ export class WorkflowScheduler extends EventEmitter {
   private nodeCache: NodeCache | null = null;
   private contentHashes = new Map<string, string>();
   private adapterPool: AdapterPool | null = null;
+  private hookRunner: HookRunner | null = null;
   /** Mutex to serialize concurrent runState mutations from parallel node completions. */
   private completionMutex: Promise<void> = Promise.resolve();
 
@@ -132,6 +167,7 @@ export class WorkflowScheduler extends EventEmitter {
       nodeResults: {},
       totalCostUsd: 0,
       retryCounters: {},
+      sharedContext: {},
     };
 
     this.state = "running";
@@ -140,15 +176,39 @@ export class WorkflowScheduler extends EventEmitter {
     this.gateFailureReasons.clear();
     this.actualOutputDirs.clear();
     this.checkpointManager = new CheckpointManager(process.cwd());
-    const runDir = join(process.cwd(), ".sigil", "runs", runId);
+    if (options.metricsObserver) {
+      this.checkpointManager.setWriteListener(() => options.metricsObserver!.recordCheckpointWrite());
+    }
+    const runDir = join(process.cwd(), ".sygil", "runs", runId);
     this.eventRecorder = new EventRecorder(runDir);
-    const cacheDir = join(process.cwd(), ".sigil", "cache");
+    const cacheDir = join(process.cwd(), ".sygil", "cache");
     this.nodeCache = new NodeCache(cacheDir);
     this.contentHashes.clear();
     this.monitor.emit({ type: "workflow_start", workflowId, graph: this.workflow });
 
     const worktreeManager = options.isolate ? new LazyWorktreeManager(runId) : undefined;
     this.adapterPool = options.pool ? new AdapterPool(options.pool) : null;
+    this.monitor.setAdapterPool(this.adapterPool);
+    if (this.adapterPool && options.metricsObserver) {
+      this.adapterPool.setWaitObserver((adapterType, waitMs) => {
+        options.metricsObserver!.recordAcquireWait(adapterType, waitMs);
+      });
+    }
+    // Wire circuit-breaker state transitions through to the monitor so UI
+    // clients see `circuit_breaker` WsServerEvents in real time.
+    if (this.adapterPool) {
+      this.adapterPool.setCircuitStateListener((change) => {
+        this.monitor.emit({
+          type: "circuit_breaker",
+          workflowId,
+          adapterType: change.adapterType,
+          state: change.to,
+          ...(change.reason !== undefined ? { reason: change.reason } : {}),
+          ...(change.openUntil !== undefined ? { openUntil: change.openUntil } : {}),
+        });
+      });
+    }
+    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd()) : null;
 
     try {
       await this.executeGraph(workflowId, runState, parameters, false, worktreeManager);
@@ -212,6 +272,7 @@ export class WorkflowScheduler extends EventEmitter {
       if (this.adapterPool) {
         await this.adapterPool.drain().catch(() => undefined);
       }
+      this.monitor.setAdapterPool(null);
       await worktreeManager?.cleanup().catch((e: unknown) => logger.debug(`worktree cleanup failed: ${e}`));
     }
   }
@@ -219,9 +280,20 @@ export class WorkflowScheduler extends EventEmitter {
   /**
    * Resume a workflow from persisted state.
    */
-  async resume(savedState: WorkflowRunState): Promise<RunResult> {
-    const workflowId = savedState.id;
+  async resume(
+    savedState: WorkflowRunState,
+    options: { hooks?: HooksConfig; metricsObserver?: MetricsObserver } = {},
+  ): Promise<RunResult> {
+    // Use workflowName (not the run UUID) as workflowId so monitor fanout
+    // filtering matches the URL slug the web UI subscribes to.
+    const workflowId = savedState.workflowName;
     const startedAt = Date.now();
+
+    // Backfill sharedContext for pre-sharedContext-feature checkpoints
+    // (pre-existing on-disk state has no `sharedContext` field).
+    if (savedState.sharedContext === undefined) {
+      savedState.sharedContext = {};
+    }
 
     savedState.status = "running";
     this.state = "running";
@@ -233,8 +305,12 @@ export class WorkflowScheduler extends EventEmitter {
     // Do NOT clear sessionStore on resume — loop-back retries after resume
     // need to find previous sessions to continue conversation threads.
     this.checkpointManager = new CheckpointManager(process.cwd());
-    const runDir = join(process.cwd(), ".sigil", "runs", savedState.id);
+    if (options.metricsObserver) {
+      this.checkpointManager.setWriteListener(() => options.metricsObserver!.recordCheckpointWrite());
+    }
+    const runDir = join(process.cwd(), ".sygil", "runs", savedState.id);
     this.eventRecorder = new EventRecorder(runDir);
+    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd()) : null;
     this.monitor.emit({ type: "workflow_start", workflowId, graph: this.workflow });
 
     try {
@@ -447,7 +523,7 @@ export class WorkflowScheduler extends EventEmitter {
     try {
       const result = await this.executeNode(workflowId, nodeId, runState, parameters, incomingForwardEdges, worktreeManager, nodeSignal);
 
-      // --- Phase 1: Async work outside the mutex ---
+      // --- Async work outside the mutex ---
       // All async operations (gate eval, contract validation, I/O checks) run here
       // so the mutex only protects synchronous state mutations.
 
@@ -486,7 +562,7 @@ export class WorkflowScheduler extends EventEmitter {
           if (!validationResult.valid) {
             const reason = `Contract v3 validation failed: ${validationResult.errors.join(", ")}`;
             this.emit("gate_eval", edge.id, false, reason);
-            this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: false, reason });
+            this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: false, reason, gateType: "contract" });
             this.completionMutex = this.completionMutex.then(() => {
               running.delete(nodeId);
               failed.add(nodeId);
@@ -507,10 +583,39 @@ export class WorkflowScheduler extends EventEmitter {
         if (!edge.isLoopBack || !edge.gate) continue;
 
         const gateOutputDir = this.workflow.nodes[edge.from]?.outputDir ?? process.cwd();
+
+        // Lifecycle hook: preGate — fires before gate condition
+        // evaluation. Observational; gate pass/fail is unaffected.
+        await this.runHook(
+          "preGate",
+          workflowId,
+          nodeId,
+          { workflowId, nodeId, outputDir: gateOutputDir, edgeId: edge.id },
+          nodeSignal,
+          false,
+        );
+
         const gateResult = await gateEvaluator.evaluate(edge.gate, result, gateOutputDir, nodeId, edge.id, nodeSignal);
 
+        // Lifecycle hook: postGate — gate verdict available via env vars.
+        await this.runHook(
+          "postGate",
+          workflowId,
+          nodeId,
+          {
+            workflowId,
+            nodeId,
+            outputDir: gateOutputDir,
+            edgeId: edge.id,
+            gatePassed: gateResult.passed,
+            gateReason: gateResult.reason,
+          },
+          nodeSignal,
+          false,
+        );
+
         this.emit("gate_eval", edge.id, gateResult.passed, gateResult.reason);
-        this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: gateResult.passed, reason: gateResult.reason });
+        this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: gateResult.passed, reason: gateResult.reason, gateType: summarizeGateType(edge.gate) });
 
         if (!gateResult.passed) {
           const maxRetries = edge.maxRetries ?? 0;
@@ -531,7 +636,7 @@ export class WorkflowScheduler extends EventEmitter {
             }
           }
 
-          // --- Phase 2: Pure state mutations inside mutex ---
+          // --- Pure state mutations inside mutex ---
           this.completionMutex = this.completionMutex.then(() => {
             running.delete(nodeId);
 
@@ -577,17 +682,45 @@ export class WorkflowScheduler extends EventEmitter {
         if (!edge.gate) continue;
 
         const fwdOutputDir = this.workflow.nodes[edge.from]?.outputDir ?? process.cwd();
+
+        // Lifecycle hook: preGate — forward edges.
+        await this.runHook(
+          "preGate",
+          workflowId,
+          nodeId,
+          { workflowId, nodeId, outputDir: fwdOutputDir, edgeId: edge.id },
+          nodeSignal,
+          false,
+        );
+
         const gateResult = await gateEvaluator.evaluate(edge.gate, result, fwdOutputDir, nodeId, edge.id, nodeSignal);
 
+        // Lifecycle hook: postGate — forward edges.
+        await this.runHook(
+          "postGate",
+          workflowId,
+          nodeId,
+          {
+            workflowId,
+            nodeId,
+            outputDir: fwdOutputDir,
+            edgeId: edge.id,
+            gatePassed: gateResult.passed,
+            gateReason: gateResult.reason,
+          },
+          nodeSignal,
+          false,
+        );
+
         this.emit("gate_eval", edge.id, gateResult.passed, gateResult.reason);
-        this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: gateResult.passed, reason: gateResult.reason });
+        this.monitor.emit({ type: "gate_eval", workflowId, edgeId: edge.id, passed: gateResult.passed, reason: gateResult.reason, gateType: summarizeGateType(edge.gate) });
 
         if (!gateResult.passed) {
           forwardGateFailures.push({ edgeId: edge.id, targetNodeId: edge.to, reason: gateResult.reason });
         }
       }
 
-      // --- Phase 2: Pure state mutations inside mutex ---
+      // --- Pure state mutations inside mutex ---
       this.completionMutex = this.completionMutex.then(() => {
         running.delete(nodeId);
 
@@ -655,6 +788,19 @@ export class WorkflowScheduler extends EventEmitter {
     // Input mapping (Contract): resolve {{var}} substitutions from predecessor outputs
     nodeConfig = await this.buildNodeInput(nodeId, incomingForwardEdges, nodeConfig, runState, parameters);
 
+    // Lifecycle hook: preNode. Runs once per node execution,
+    // before the cache check and provider loop. Non-zero exit fails the
+    // node with the hook's stderr as the error message.
+    const preNodeOutputDir = nodeConfig.outputDir ?? process.cwd();
+    await this.runHook(
+      "preNode",
+      workflowId,
+      nodeId,
+      { workflowId, nodeId, outputDir: preNodeOutputDir },
+      signal,
+      /* abortOnFailure */ true,
+    );
+
     // Check node cache — skip execution if we have a cached result with deterministic gates.
     // Skip cache on loop-back retries: the whole point of a retry is to get a different result.
     const isRetry = [...this.retryCounters.entries()].some(([edgeId, count]) => {
@@ -662,7 +808,14 @@ export class WorkflowScheduler extends EventEmitter {
       return edge?.isLoopBack && edge.to === nodeId && count > 0;
     });
     let contentHash: string | undefined;
-    if (this.nodeCache && !isRetry) {
+    // Skip cache for nodes that write to sharedContext. The cache
+    // stores NodeResult only — it does NOT persist the AgentEvent stream, so a
+    // cache hit would bypass the context_set → runState.sharedContext write at
+    // the event-processing loop below. Downstream nodes with readsContext
+    // would then interpolate against stale/empty ctx values, producing
+    // incorrect prompts. Nodes that write context therefore always re-execute.
+    const writesCtx = (nodeConfig.writesContext?.length ?? 0) > 0;
+    if (this.nodeCache && !isRetry && !writesCtx) {
       const outgoingEdges = this.graphIndex.edgesByFrom.get(nodeId) ?? [];
       if (areGatesDeterministic(outgoingEdges)) {
         const upstreamHashes: Record<string, string> = {};
@@ -690,9 +843,29 @@ export class WorkflowScheduler extends EventEmitter {
           this.contentHashes.set(nodeId, hash);
           this.emit("node_start", nodeId);
           this.monitor.emit({ type: "node_start", workflowId, nodeId, config: nodeConfig, attempt });
+          // postNode hook still runs for cache hits — the node's result was
+          // "produced" (from cache), so observers see a complete lifecycle.
+          await this.runHook(
+            "postNode",
+            workflowId,
+            nodeId,
+            {
+              workflowId,
+              nodeId,
+              outputDir: nodeConfig.outputDir ?? process.cwd(),
+              exitCode: cached.exitCode,
+              output: cached.output,
+            },
+            signal,
+            false,
+          );
           this.emit("node_end", nodeId, cached.exitCode === 0);
-          this.monitor.emit({ type: "node_end", workflowId, nodeId, result: cached });
-          return cached;
+          // Flag the result so the monitor can render a `cached` status
+          // distinct from a fresh completion. The original durationMs /
+          // costUsd from the recorded run are preserved.
+          const cachedResult = { ...cached, cacheHit: true };
+          this.monitor.emit({ type: "node_end", workflowId, nodeId, result: cachedResult });
+          return cachedResult;
         }
         contentHash = hash;
       }
@@ -700,7 +873,7 @@ export class WorkflowScheduler extends EventEmitter {
 
     // Worktree isolation: create per-node worktree only if the node needs it
     if (worktreeManager && needsIsolation(nodeConfig)) {
-      const worktreePath = await worktreeManager.getOrCreate(nodeId, nodeConfig);
+      const worktreePath = await worktreeManager.getOrCreate(nodeId, nodeConfig, signal);
       nodeConfig = { ...nodeConfig, outputDir: worktreePath };
     }
 
@@ -719,143 +892,387 @@ export class WorkflowScheduler extends EventEmitter {
       attempt,
     });
 
-    let poolSlot: PoolSlot | undefined;
-    if (this.adapterPool) {
-      poolSlot = await this.adapterPool.acquire(nodeConfig.adapter);
-    }
-
-    const adapter = this.adapterFactory(nodeConfig.adapter);
-
-    // If we have a pre-resumed session, use it; otherwise spawn fresh
-    let session = this.sessionStore.get(nodeId);
-    if (!session) {
-      session = await adapter.spawn(nodeConfig);
-    }
-    this.sessionStore.set(nodeId, session);
-
-    const killAdapter = async (): Promise<void> => {
-      await adapter.kill(session!).catch((e: unknown) => logger.warn(`Failed to kill adapter for node "${nodeId}": ${e}`));
-    };
-
-    // Set up wall-clock and idle timeouts
-    const { clearTimeouts, onEvent, isStalled, markStalled } = this.setupNodeTimeouts(nodeConfig, nodeId, killAdapter);
+    // Resolve provider-failover list. Legacy nodes without
+    // `providers` produce a single-entry list from the top-level adapter/model.
+    const providers = resolveProviders(nodeConfig);
+    let lastFailoverError: unknown = null;
 
     try {
-      // Stream events — re-enter the loop on rate limit (does not count against maxRetries)
-      let rateLimitRetry = true;
-      while (rateLimitRetry) {
-        rateLimitRetry = false;
+      for (let providerIndex = 0; providerIndex < providers.length; providerIndex++) {
+        const provider = providers[providerIndex]!;
+        const hasFallback = providerIndex < providers.length - 1;
+        const effectiveConfig: NodeConfig = {
+          ...nodeConfig,
+          adapter: provider.adapter,
+          model: provider.model,
+        };
 
-        for await (const event of adapter.stream(session)) {
-          onEvent();
+        // On failover iterations, discard any stored session so we spawn fresh
+        // on the new adapter. The first iteration preserves any pre-resumed
+        // session placed into the store by the checkpoint loader.
+        if (providerIndex > 0) {
+          this.sessionStore.delete(nodeId);
+        }
 
-          if (this.state === "cancelled" || signal?.aborted) {
-            await killAdapter();
-            throw new Error("Workflow cancelled");
+        // Retry policy: attempt loop bounded by retryPolicy.maxAttempts.
+        // Absence of retryPolicy keeps legacy behaviour (one attempt per provider).
+        // Retries run against the SAME provider; exhausting them falls through to
+        // the failover check below, which may try the next provider.
+        const retryPolicy = nodeConfig.retryPolicy;
+        const maxAttempts = retryPolicy?.maxAttempts ?? 1;
+        let failoverContinue = false;
+
+        for (let attemptNum = 1; attemptNum <= maxAttempts; attemptNum++) {
+          // Fresh session on retries (session state from the failed attempt is
+          // no longer useful — particularly for transport errors where the
+          // prior session is dead).
+          if (attemptNum > 1) {
+            this.sessionStore.delete(nodeId);
           }
 
-          // Rate limit signal: "rate_limit:<retryAfterMs>"
-          if (event.type === "error" && event.message.startsWith("rate_limit:")) {
-            const retryAfterMs = parseInt(event.message.slice("rate_limit:".length), 10) || 60000;
-            const seconds = Math.ceil(retryAfterMs / 1000);
-            logger.info(`Rate limit hit — waiting ${seconds}s before resuming...`);
-            this.monitor.emit({ type: "rate_limit", workflowId, nodeId, retryAfterMs });
+          let poolSlot: PoolSlot | undefined;
+          let session: AgentSession | undefined;
+          let clearTimeouts: () => void = () => {};
+          // Hoisted so the catch block can call killAdapter on any exception
+          // path — previously scoped inside the try, so a throw from within
+          // stream() / getResult / monitor.emit leaked the child process.
+          let adapter: AgentAdapter | undefined;
+          // Kill-once guard, reset whenever `session` is reassigned to a
+          // fresh one (rate-limit resume/spawn). Keeps adapter.kill
+          // idempotent for mock adapters that don't self-guard on
+          // `internal.done` like the real ones.
+          let adapterKilled = false;
 
-            const prevSession = session;
-            await killAdapter();
-            await sleep(retryAfterMs);
+          const killAdapter = async (): Promise<void> => {
+            if (!session || !adapter || adapterKilled) return;
+            adapterKilled = true;
+            await adapter.kill(session).catch((e: unknown) =>
+              logger.warn(`Failed to kill adapter for node "${nodeId}": ${e}`),
+            );
+          };
 
-            // Try resume first so session-based adapters (claude-sdk) preserve conversation history
-            try {
-              session = await adapter.resume(
-                nodeConfig,
-                prevSession,
-                "Continuing after rate limit pause. Please continue where you left off."
-              );
-            } catch {
-              // resume failed (e.g. no session ID) — fall back to cold start
-              session = await adapter.spawn(nodeConfig);
+          try {
+            if (this.adapterPool) {
+              poolSlot = await this.adapterPool.acquire(effectiveConfig.adapter);
+            }
+
+            adapter = this.adapterFactory(effectiveConfig.adapter);
+
+            session = this.sessionStore.get(nodeId);
+            if (!session) {
+              session = await adapter.spawn(effectiveConfig);
             }
             this.sessionStore.set(nodeId, session);
-            rateLimitRetry = true;
-            break;
-          }
 
-          this.emit("node_event", nodeId, event);
-          this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
-          this.eventRecorder?.record(nodeId, event);
+            const timeouts = this.setupNodeTimeouts(effectiveConfig, nodeId, killAdapter);
+            clearTimeouts = timeouts.clearTimeouts;
+            const { onEvent, isStalled, markStalled } = timeouts;
 
-          // Stall signal from adapter — scheduler decides to kill
-          if (event.type === "stall") {
-            markStalled();
+            // Stream events — re-enter the loop on rate limit (does not count against maxRetries)
+            let rateLimitRetry = true;
+            while (rateLimitRetry) {
+              rateLimitRetry = false;
+
+              for await (const event of adapter.stream(session)) {
+                onEvent();
+
+                if (this.state === "cancelled" || signal?.aborted) {
+                  await killAdapter();
+                  throw new Error("Workflow cancelled");
+                }
+
+                // Rate limit signal: "rate_limit:<retryAfterMs>"
+                if (event.type === "error" && event.message.startsWith("rate_limit:")) {
+                  // With a fallback provider available, escalate to failover
+                  // (classifier recognises the `rate_limit:` sentinel).
+                  if (hasFallback) {
+                    await killAdapter();
+                    throw new Error(event.message);
+                  }
+                  // Clamp to a positive value: a malformed adapter emitting
+                  // `rate_limit:-500` would otherwise pass through `|| 60000`
+                  // (negative is truthy) into `setTimeout(resolve, -500)` which
+                  // Node clamps to 1ms — defeating the rate-limit pause and
+                  // producing a tight retry loop. Also covers `rate_limit:0`
+                  // (same loop) and `rate_limit:NaN`/empty (already handled by
+                  // the `||` default). Upper bound is intentionally uncapped
+                  // since providers legitimately return long retry-afters
+                  // (e.g. quota-exhausted windows of hours).
+                  const parsedRetryMs = parseInt(event.message.slice("rate_limit:".length), 10);
+                  const retryAfterMs = Number.isFinite(parsedRetryMs) && parsedRetryMs > 0 ? parsedRetryMs : 60000;
+                  const seconds = Math.ceil(retryAfterMs / 1000);
+                  logger.info(`Rate limit hit — waiting ${seconds}s before resuming...`);
+                  this.monitor.emit({ type: "rate_limit", workflowId, nodeId, retryAfterMs });
+
+                  const prevSession = session;
+                  await killAdapter();
+                  await sleep(retryAfterMs);
+
+                  // Try resume first so session-based adapters (claude-sdk) preserve conversation history
+                  try {
+                    session = await adapter.resume(
+                      effectiveConfig,
+                      prevSession,
+                      "Continuing after rate limit pause. Please continue where you left off."
+                    );
+                  } catch {
+                    // resume failed (e.g. no session ID) — fall back to cold start
+                    session = await adapter.spawn(effectiveConfig);
+                  }
+                  this.sessionStore.set(nodeId, session);
+                  // Fresh session — allow killAdapter to run again on the
+                  // new child if the catch block later fires.
+                  adapterKilled = false;
+                  rateLimitRetry = true;
+                  break;
+                }
+
+                // sharedContext write. Enforce the node's writesContext
+                // allowlist BEFORE recording the event — a disallowed write is
+                // dropped and a replacement `error` event is recorded instead so
+                // replay sees the same (rejected) sequence the original run saw.
+                if (event.type === "context_set") {
+                  const allowlist = nodeConfig.writesContext ?? [];
+                  if (!allowlist.includes(event.key)) {
+                    const rejection: AgentEvent = {
+                      type: "error",
+                      message: `context_set rejected: node "${nodeId}" is not allowed to write key "${event.key}" (not in writesContext)`,
+                    };
+                    this.emit("node_event", nodeId, rejection);
+                    this.monitor.emit({ type: "node_event", workflowId, nodeId, event: rejection });
+                    this.eventRecorder?.record(nodeId, rejection);
+                    logger.warn(`context_set rejected: node "${nodeId}" attempted to write unlisted key "${event.key}"`);
+                    continue;
+                  }
+                  runState.sharedContext[event.key] = event.value;
+                  this.checkpointManager?.markDirty(runState);
+                }
+
+                this.emit("node_event", nodeId, event);
+                this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
+                this.eventRecorder?.record(nodeId, event);
+
+                // Stall signal from adapter — scheduler decides to kill
+                if (event.type === "stall") {
+                  markStalled();
+                  await killAdapter();
+                  break;
+                }
+              }
+            }
+
+            clearTimeouts();
+
+            if (isStalled()) {
+              // Return a synthetic stall result
+              const stallResult: NodeResult = {
+                output: "",
+                exitCode: STALL_EXIT_CODE,
+                durationMs: Date.now() - session.startedAt.getTime(),
+              };
+              await this.eventRecorder?.flushNode(nodeId);
+              this.emit("node_end", nodeId, false);
+              this.monitor.emit({ type: "node_end", workflowId, nodeId, result: stallResult });
+              return stallResult;
+            }
+
+            const result = await adapter.getResult(session);
+            await this.eventRecorder?.flushNode(nodeId);
+
+            // Circuit breaker: a clean result counts as a success
+            // for the provider. If we were in half_open, this closes the
+            // circuit; if closed, it's a no-op but still exercises the hook
+            // so half_open probes elsewhere can't race.
+            this.adapterPool?.recordSuccess(effectiveConfig.adapter);
+
+            // Store result in cache
+            if (this.nodeCache && contentHash) {
+              this.contentHashes.set(nodeId, contentHash);
+              await this.nodeCache.set(contentHash, result).catch((e: unknown) =>
+                logger.debug(`Cache write failed for node "${nodeId}": ${e}`)
+              );
+            }
+
+            // Worktree fan-in: merge this node's worktree into the main branch at fan-in points
+            if (worktreeManager) {
+              const isFanIn = (incomingForwardEdges.get(nodeId)?.length ?? 0) > 1;
+              if (isFanIn) {
+                const { stdout: branchStdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ({ stdout: "main" }));
+                const currentBranch = branchStdout.trim();
+                const mergeResult = await worktreeManager.merge(nodeId, currentBranch, signal);
+                if (mergeResult.conflicts.length > 0) {
+                  const reason = `Merge conflicts in node "${nodeId}": ${mergeResult.conflicts.join(", ")}`;
+                  this.monitor.emit({ type: "workflow_error", workflowId, nodeId, message: reason });
+                  throw new Error(reason);
+                }
+              }
+            }
+
+            const success = result.exitCode === 0;
+
+            // Lifecycle hook: postNode. Observational — does not
+            // alter control flow, but result is captured in the event log.
+            await this.runHook(
+              "postNode",
+              workflowId,
+              nodeId,
+              {
+                workflowId,
+                nodeId,
+                outputDir: nodeConfig.outputDir ?? process.cwd(),
+                exitCode: result.exitCode,
+                output: result.output,
+              },
+              signal,
+              false,
+            );
+
+            this.emit("node_end", nodeId, success);
+            this.monitor.emit({ type: "node_end", workflowId, nodeId, result });
+
+            return result;
+          } catch (err) {
+            clearTimeouts();
+
+            // Tear down the adapter session on ALL exception paths. A throw
+            // from inside `for await … of adapter.stream(session)` — or from
+            // monitor.emit, eventRecorder.record, getResult, or the worktree
+            // merge — leaves the child process running. killAdapter is
+            // hoisted and kill-once-guarded, so the cancel / stall /
+            // rate-limit-with-fallback paths that already invoked it are
+            // no-ops the second time.
             await killAdapter();
-            break;
+            // Flush buffered NDJSON events so the replay log reflects what ran
+            // before the error, not just what happened to be flushed on the
+            // last debounce. Matches the normal-path flushNode at the success
+            // branch above.
+            await this.eventRecorder?.flushNode(nodeId).catch(() => undefined);
+
+            // Circuit breaker: signal every failure so the pool
+            // can resolve a half_open probe regardless of outcome. The pool
+            // itself decides what counts toward the rolling-window threshold:
+            // retryable transport/5xx → counted; rate_limit (provider-directed
+            // backpressure) and unclassified non-retryable (deterministic bugs)
+            // → probe-flag-cleared-only, not counted. Unconditionally calling
+            // recordFailure is required because a non-retryable throw during a
+            // half_open probe would otherwise leave `halfOpenProbeInFlight=true`
+            // forever, pinning the circuit.
+            {
+              const cbClassified = classifyError(err);
+              this.adapterPool?.recordFailure(effectiveConfig.adapter, cbClassified.reason);
+            }
+
+            // Retry-in-place on whitelisted retryable errors.
+            // Rate-limit is handled by its own bespoke path above — retry
+            // policy must not double-handle it (the server already specified
+            // the exact wait via retryAfterMs).
+            const isRateLimitError =
+              err instanceof Error && err.message.startsWith("rate_limit:");
+            if (retryPolicy && attemptNum < maxAttempts && !isRateLimitError) {
+              const classified = classifyError(err);
+              if (
+                classified.retryable &&
+                isRetryableReason(retryPolicy, classified.reason)
+              ) {
+                const delayMs = computeRetryDelay(
+                  retryPolicy,
+                  attemptNum,
+                  runState.id,
+                  nodeId,
+                );
+                const reasonStr = classified.reason ?? "unknown";
+                const retryEvent: AgentEvent = {
+                  type: "retry_scheduled",
+                  attempt: attemptNum,
+                  nextAttempt: attemptNum + 1,
+                  delayMs,
+                  reason: reasonStr,
+                };
+                this.emit("node_event", nodeId, retryEvent);
+                this.monitor.emit({
+                  type: "node_event",
+                  workflowId,
+                  nodeId,
+                  event: retryEvent,
+                });
+                this.eventRecorder?.record(nodeId, retryEvent);
+                logger.info(
+                  `Retry scheduled for node "${nodeId}" on ${provider.adapter}: attempt ${attemptNum} → ${attemptNum + 1} in ${delayMs}ms (${reasonStr})`,
+                );
+
+                // Release the pool slot while we sleep so the adapter
+                // concurrency budget isn't held during backoff.
+                if (poolSlot && this.adapterPool) {
+                  this.adapterPool.release(poolSlot);
+                  poolSlot = undefined;
+                }
+
+                await sleepWithAbort(delayMs, signal);
+                if ((this.state as string) === "cancelled" || signal?.aborted) {
+                  throw new Error("Workflow cancelled");
+                }
+                continue; // retry same provider
+              }
+            }
+
+            // Retry exhausted or not applicable — try provider failover.
+            if (hasFallback) {
+              const classified = classifyError(err);
+              if (classified.retryable) {
+                lastFailoverError = err;
+                const nextProvider = providers[providerIndex + 1]!;
+                const reasonStr = classified.reason ?? "unknown";
+                const failoverEvent: AgentEvent = {
+                  type: "adapter_failover",
+                  fromAdapter: provider.adapter,
+                  toAdapter: nextProvider.adapter,
+                  reason: reasonStr,
+                };
+                this.emit("node_event", nodeId, failoverEvent);
+                this.monitor.emit({ type: "node_event", workflowId, nodeId, event: failoverEvent });
+                this.eventRecorder?.record(nodeId, failoverEvent);
+                logger.info(
+                  `Provider failover on node "${nodeId}": ${provider.adapter} → ${nextProvider.adapter} (${reasonStr})`,
+                );
+                failoverContinue = true;
+                break; // exit attempt loop, continue provider loop
+              }
+            }
+
+            const errorResult: NodeResult = {
+              output: err instanceof Error ? err.message : String(err),
+              exitCode: 1,
+              durationMs: session ? Date.now() - session.startedAt.getTime() : 0,
+            };
+            this.emit("node_end", nodeId, false);
+            this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult });
+            throw err;
+          } finally {
+            if (poolSlot && this.adapterPool) {
+              this.adapterPool.release(poolSlot);
+            }
           }
         }
+
+        if (failoverContinue) continue;
       }
 
-      clearTimeouts();
-
-      if (isStalled()) {
-        // Return a synthetic stall result
-        const stallResult: NodeResult = {
-          output: "",
-          exitCode: STALL_EXIT_CODE,
-          durationMs: Date.now() - session.startedAt.getTime(),
-        };
-        await this.eventRecorder?.flushNode(nodeId);
-        this.emit("node_end", nodeId, false);
-        this.monitor.emit({ type: "node_end", workflowId, nodeId, result: stallResult });
-        return stallResult;
-      }
-
-      const result = await adapter.getResult(session);
-      await this.eventRecorder?.flushNode(nodeId);
-
-      // Store result in cache
-      if (this.nodeCache && contentHash) {
-        this.contentHashes.set(nodeId, contentHash);
-        await this.nodeCache.set(contentHash, result).catch((e: unknown) =>
-          logger.debug(`Cache write failed for node "${nodeId}": ${e}`)
-        );
-      }
-
-      // Worktree fan-in: merge this node's worktree into the main branch at fan-in points
-      if (worktreeManager) {
-        const isFanIn = (incomingForwardEdges.get(nodeId)?.length ?? 0) > 1;
-        if (isFanIn) {
-          const { stdout: branchStdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ({ stdout: "main" }));
-          const currentBranch = branchStdout.trim();
-          const mergeResult = await worktreeManager.merge(nodeId, currentBranch);
-          if (mergeResult.conflicts.length > 0) {
-            const reason = `Merge conflicts in node "${nodeId}": ${mergeResult.conflicts.join(", ")}`;
-            this.monitor.emit({ type: "workflow_error", workflowId, nodeId, message: reason });
-            throw new Error(reason);
-          }
-        }
-      }
-
-      const success = result.exitCode === 0;
-
-      this.emit("node_end", nodeId, success);
-      this.monitor.emit({ type: "node_end", workflowId, nodeId, result });
-
-      return result;
-    } catch (err) {
-      clearTimeouts();
+      // All providers exhausted with retryable failures — fail the node.
+      const finalErr =
+        lastFailoverError instanceof Error
+          ? lastFailoverError
+          : new Error(String(lastFailoverError ?? "All providers exhausted"));
       const errorResult: NodeResult = {
-        output: err instanceof Error ? err.message : String(err),
+        output: finalErr.message,
         exitCode: 1,
-        durationMs: Date.now() - session.startedAt.getTime(),
+        durationMs: 0,
       };
       this.emit("node_end", nodeId, false);
       this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult });
-      throw err;
+      throw finalErr;
     } finally {
-      if (poolSlot && this.adapterPool) {
-        this.adapterPool.release(poolSlot);
-      }
       // Worktree cleanup: remove this node's temporary worktree after execution
+      // (runs once per node regardless of failover attempts).
       if (worktreeManager) {
         await worktreeManager.remove(nodeId).catch((e: unknown) => logger.debug(`worktree remove failed for node ${nodeId}: ${e}`));
       }
@@ -957,6 +1374,24 @@ export class WorkflowScheduler extends EventEmitter {
       }
     }
 
+    // Pass 3: resolve {{ctx.<key>}} from sharedContext for keys declared in readsContext.
+    // Missing keys interpolate as an empty string — deterministic and matches the replay invariant
+    // (context_set events are written to the NDJSON log before any downstream node spawns).
+    if (nodeConfig.readsContext && nodeConfig.readsContext.length > 0) {
+      for (const key of nodeConfig.readsContext) {
+        const value = runState.sharedContext[key];
+        let serialized: string;
+        if (value === undefined) {
+          serialized = "";
+        } else if (typeof value === "string") {
+          serialized = value;
+        } else {
+          serialized = JSON.stringify(value);
+        }
+        allVars[`ctx.${key}`] = serialized;
+      }
+    }
+
     // Resolve workflow-level parameters (lowest priority — overridden by node outputs and inputMapping)
     for (const [key, value] of Object.entries(parameters)) {
       if (!(key in allVars)) {
@@ -1032,6 +1467,43 @@ export class WorkflowScheduler extends EventEmitter {
       nodeId,
       message: err.message,
     });
+  }
+
+  /**
+   * Run a lifecycle hook and record the outcome to the event log.
+   *
+   * No-ops when no hook runner is configured or the specific hook is absent.
+   * Always emits + records a `hook_result` AgentEvent when a hook runs so
+   * that NDJSON replay observes the same sequence as the live run.
+   *
+   * When `abortOnFailure` is true (only used for preNode) a non-zero exit
+   * throws an Error — mirroring "same semantics as a failed gate" from the
+   * proposed shape.
+   */
+  private async runHook(
+    type: HookType,
+    workflowId: string,
+    nodeId: string,
+    context: HookContext,
+    signal: AbortSignal | undefined,
+    abortOnFailure: boolean,
+  ): Promise<void> {
+    if (!this.hookRunner || !this.hookRunner.has(type)) return;
+
+    const result = await this.hookRunner.run(type, context, signal);
+    if (result === null) return;
+
+    const event = hookResultToEvent(type, result);
+    this.emit("node_event", nodeId, event);
+    this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
+    this.eventRecorder?.record(nodeId, event);
+
+    if (result.exitCode !== 0 && abortOnFailure) {
+      const stderrSnippet = result.stderr.trim().split(/\r?\n/).slice(-3).join(" | ");
+      throw new Error(
+        `${type} hook failed (exit ${result.exitCode})${stderrSnippet ? `: ${stderrSnippet}` : ""}`,
+      );
+    }
   }
 }
 

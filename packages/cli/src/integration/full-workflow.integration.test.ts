@@ -14,77 +14,16 @@ import { randomUUID } from "node:crypto";
 import { WorkflowScheduler } from "../scheduler/index.js";
 import type {
   AgentAdapter,
-  AgentSession,
   AgentEvent,
-  NodeConfig,
-  NodeResult,
   WorkflowGraph,
-  AdapterType,
-  WsServerEvent,
-} from "@sigil/shared";
-import type { WsMonitorServer } from "../monitor/websocket.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeSession(nodeId: string, adapter = "mock"): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter,
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test-model",
-    role: "test-role",
-    prompt: "test prompt",
-    ...overrides,
-  };
-}
-
-function createSimpleAdapter(result: Partial<NodeResult> = {}, events: AgentEvent[] = []): AgentAdapter {
-  return {
-    name: "mock",
-    async isAvailable() { return true; },
-    async spawn(config) { return makeSession(config.prompt.slice(0, 20)); },
-    async resume(_c, prev, _f) { return prev; },
-    async *stream(): AsyncGenerator<AgentEvent> {
-      for (const e of events) yield e;
-    },
-    async getResult() {
-      return { output: "mock output", exitCode: 0, durationMs: 10, ...result };
-    },
-    async kill() {},
-  };
-}
-
-type MockMonitor = WsMonitorServer & { events: WsServerEvent[] };
-
-function createMockMonitor(): MockMonitor {
-  const events: WsServerEvent[] = [];
-  return {
-    events,
-    emit(event: WsServerEvent) { events.push(event); },
-    async start() { return 0; },
-    async stop() {},
-    getPort() { return null; },
-    getAuthToken() { return "test-token"; },
-    onClientControl: undefined,
-  } as unknown as MockMonitor;
-}
-
-function eventsOfType<T extends WsServerEvent["type"]>(
-  events: WsServerEvent[],
-  type: T
-): Extract<WsServerEvent, { type: T }>[] {
-  return events.filter((e): e is Extract<WsServerEvent, { type: T }> => e.type === type);
-}
+} from "@sygil/shared";
+import {
+  createMockMonitor,
+  createScriptedAdapter,
+  makeNodeConfig,
+  makeSession,
+  monitorEventsOfType as eventsOfType,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Test lifecycle — temp dir + process.chdir
@@ -94,7 +33,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-fullwf-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-fullwf-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -121,7 +60,7 @@ describe("full workflow integration", () => {
       edges: [],
     };
 
-    const adapter = createSimpleAdapter({ exitCode: 0 });
+    const adapter = createScriptedAdapter({ result: { exitCode: 0 } });
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor);
 
@@ -164,7 +103,7 @@ describe("full workflow integration", () => {
       ],
     };
 
-    const adapter = createSimpleAdapter({ exitCode: 0 });
+    const adapter = createScriptedAdapter({ result: { exitCode: 0 } });
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor);
 
@@ -203,7 +142,7 @@ describe("full workflow integration", () => {
     };
 
     // nodeA returns exit code 1 — gate expects 0, so it should fail
-    const adapter = createSimpleAdapter({ exitCode: 1 });
+    const adapter = createScriptedAdapter({ result: { exitCode: 1 } });
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor);
 
@@ -242,7 +181,7 @@ describe("full workflow integration", () => {
       ],
     };
 
-    const adapter = createSimpleAdapter({ exitCode: 0 });
+    const adapter = createScriptedAdapter({ result: { exitCode: 0 } });
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor);
 
@@ -551,7 +490,7 @@ describe("full workflow integration", () => {
       edges: [],
     };
 
-    const adapter = createSimpleAdapter({ exitCode: 0 });
+    const adapter = createScriptedAdapter({ result: { exitCode: 0 } });
     const monitor = createMockMonitor();
     const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor);
 
@@ -560,7 +499,7 @@ describe("full workflow integration", () => {
     expect(result.success).toBe(true);
 
     // Read the checkpoint file from disk
-    const checkpointPath = join(testDir, ".sigil", "runs", `${result.runId}.json`);
+    const checkpointPath = join(testDir, ".sygil", "runs", `${result.runId}.json`);
     const raw = await readFile(checkpointPath, "utf8");
     const saved = JSON.parse(raw) as {
       workflowName: string;
