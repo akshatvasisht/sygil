@@ -43,6 +43,12 @@ export type AgentEvent =
       stdout: string;
       stderr: string;
       durationMs: number;
+      /**
+       * Why this run started. `"new"` from `sygil run`, `"resume"` from
+       * `sygil resume`. Optional so replay of NDJSON logs predating this
+       * field continues to parse.
+       */
+      runReason?: "new" | "resume";
     }
   | {
       /**

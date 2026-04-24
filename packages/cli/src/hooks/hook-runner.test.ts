@@ -45,7 +45,7 @@ describe("HOOK_SCRIPT_TIMEOUT_MS", () => {
 
 describe("HookRunner.has", () => {
   it("returns true when hook is configured", () => {
-    const runner = new HookRunner({ preNode: "./hooks/pre.sh" }, "/tmp");
+    const runner = new HookRunner({ preNode: "./hooks/pre.sh" }, "/tmp", "new");
     expect(runner.has("preNode")).toBe(true);
     expect(runner.has("postNode")).toBe(false);
     expect(runner.has("preGate")).toBe(false);
@@ -53,7 +53,7 @@ describe("HookRunner.has", () => {
   });
 
   it("returns false when no hooks are configured", () => {
-    const runner = new HookRunner({}, "/tmp");
+    const runner = new HookRunner({}, "/tmp", "new");
     expect(runner.has("preNode")).toBe(false);
     expect(runner.has("postNode")).toBe(false);
   });
@@ -65,7 +65,7 @@ describe("HookRunner.has", () => {
 
 describe("HookRunner.run — success", () => {
   it("returns null when hook is not configured", async () => {
-    const runner = new HookRunner({}, "/tmp");
+    const runner = new HookRunner({}, "/tmp", "new");
     const result = await runner.run("preNode", {
       workflowId: "wf",
       nodeId: "n1",
@@ -77,7 +77,7 @@ describe("HookRunner.run — success", () => {
   it("runs a successful hook script and captures stdout", async () => {
     const dir = await makeTempDir();
     await writeExecutable(dir, "ok.sh", "echo hello-hook");
-    const runner = new HookRunner({ preNode: "ok.sh" }, dir);
+    const runner = new HookRunner({ preNode: "ok.sh" }, dir, "new");
 
     const result = await runner.run("preNode", {
       workflowId: "wf-1",
@@ -91,14 +91,14 @@ describe("HookRunner.run — success", () => {
     expect(result!.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("injects hook-specific env vars (SYGIL_HOOK_TYPE, SYGIL_NODE_ID, …)", async () => {
+  it("injects hook-specific env vars (SYGIL_HOOK_TYPE, SYGIL_NODE_ID, SYGIL_RUN_REASON, …)", async () => {
     const dir = await makeTempDir();
     await writeExecutable(
       dir,
       "env-dump.sh",
-      'echo "type=$SYGIL_HOOK_TYPE node=$SYGIL_NODE_ID wf=$SYGIL_WORKFLOW_ID outDir=$SYGIL_OUTPUT_DIR"',
+      'echo "type=$SYGIL_HOOK_TYPE node=$SYGIL_NODE_ID wf=$SYGIL_WORKFLOW_ID outDir=$SYGIL_OUTPUT_DIR reason=$SYGIL_RUN_REASON"',
     );
-    const runner = new HookRunner({ postNode: "env-dump.sh" }, dir);
+    const runner = new HookRunner({ postNode: "env-dump.sh" }, dir, "new");
 
     const result = await runner.run("postNode", {
       workflowId: "wf-42",
@@ -113,6 +113,21 @@ describe("HookRunner.run — success", () => {
     expect(result!.stdout).toContain("node=nodeX");
     expect(result!.stdout).toContain("wf=wf-42");
     expect(result!.stdout).toContain(`outDir=${dir}`);
+    expect(result!.stdout).toContain("reason=new");
+  });
+
+  it("SYGIL_RUN_REASON flips to 'resume' when the runner is constructed for a resume flow", async () => {
+    const dir = await makeTempDir();
+    await writeExecutable(dir, "reason.sh", 'echo "reason=$SYGIL_RUN_REASON"');
+    const runner = new HookRunner({ preNode: "reason.sh" }, dir, "resume");
+
+    const result = await runner.run("preNode", {
+      workflowId: "wf",
+      nodeId: "n",
+      outputDir: dir,
+    });
+
+    expect(result!.stdout).toContain("reason=resume");
   });
 
   it("postNode receives SYGIL_EXIT_CODE and SYGIL_OUTPUT", async () => {
@@ -122,7 +137,7 @@ describe("HookRunner.run — success", () => {
       "post.sh",
       'echo "exit=$SYGIL_EXIT_CODE out=$SYGIL_OUTPUT"',
     );
-    const runner = new HookRunner({ postNode: "post.sh" }, dir);
+    const runner = new HookRunner({ postNode: "post.sh" }, dir, "new");
 
     const result = await runner.run("postNode", {
       workflowId: "wf",
@@ -143,7 +158,7 @@ describe("HookRunner.run — success", () => {
       "gate.sh",
       'echo "edge=$SYGIL_EDGE_ID passed=$SYGIL_GATE_PASSED reason=$SYGIL_GATE_REASON"',
     );
-    const runner = new HookRunner({ postGate: "gate.sh" }, dir);
+    const runner = new HookRunner({ postGate: "gate.sh" }, dir, "new");
 
     const result = await runner.run("postGate", {
       workflowId: "wf",
@@ -166,7 +181,7 @@ describe("HookRunner.run — success", () => {
       "leak-check.sh",
       'echo "secret=${SYGIL_SECRET:-UNSET} custom=${SYGIL_CUSTOM_FLAG:-UNSET}"',
     );
-    const runner = new HookRunner({ preNode: "leak-check.sh" }, dir);
+    const runner = new HookRunner({ preNode: "leak-check.sh" }, dir, "new");
 
     const originalSecret = process.env["SYGIL_SECRET"];
     const originalCustom = process.env["SYGIL_CUSTOM_FLAG"];
@@ -199,7 +214,7 @@ describe("HookRunner.run — failure", () => {
   it("returns non-zero exit code without throwing", async () => {
     const dir = await makeTempDir();
     await writeExecutable(dir, "fail.sh", "echo oops >&2\nexit 3");
-    const runner = new HookRunner({ preNode: "fail.sh" }, dir);
+    const runner = new HookRunner({ preNode: "fail.sh" }, dir, "new");
 
     const result = await runner.run("preNode", {
       workflowId: "wf",
@@ -214,7 +229,7 @@ describe("HookRunner.run — failure", () => {
 
   it("throws on path traversal (path outside workingDir)", async () => {
     const dir = await makeTempDir();
-    const runner = new HookRunner({ preNode: "../../etc/passwd" }, dir);
+    const runner = new HookRunner({ preNode: "../../etc/passwd" }, dir, "new");
     await expect(
       runner.run("preNode", { workflowId: "wf", nodeId: "n", outputDir: dir }),
     ).rejects.toThrow(/resolves outside the working directory/);
@@ -222,7 +237,7 @@ describe("HookRunner.run — failure", () => {
 
   it("throws on absolute path outside workingDir", async () => {
     const dir = await makeTempDir();
-    const runner = new HookRunner({ preNode: "/etc/passwd" }, dir);
+    const runner = new HookRunner({ preNode: "/etc/passwd" }, dir, "new");
     await expect(
       runner.run("preNode", { workflowId: "wf", nodeId: "n", outputDir: dir }),
     ).rejects.toThrow(/resolves outside the working directory/);
@@ -238,7 +253,7 @@ describe("HookRunner.run — abort signal", () => {
     const dir = await makeTempDir();
     // Long-running sleep — would easily exceed the test timeout if not aborted
     await writeExecutable(dir, "slow.sh", "sleep 10");
-    const runner = new HookRunner({ preNode: "slow.sh" }, dir);
+    const runner = new HookRunner({ preNode: "slow.sh" }, dir, "new");
 
     const controller = new AbortController();
     controller.abort();
@@ -260,18 +275,29 @@ describe("HookRunner.run — abort signal", () => {
 
 describe("hookResultToEvent", () => {
   it("produces a hook_result AgentEvent carrying all fields", () => {
-    const event = hookResultToEvent("preNode", {
-      exitCode: 0,
-      stdout: "ok\n",
-      stderr: "",
-      durationMs: 42,
-    });
+    const event = hookResultToEvent(
+      "preNode",
+      { exitCode: 0, stdout: "ok\n", stderr: "", durationMs: 42 },
+      "new",
+    );
     expect(event.type).toBe("hook_result");
     if (event.type === "hook_result") {
       expect(event.hook).toBe("preNode");
       expect(event.exitCode).toBe(0);
       expect(event.stdout).toBe("ok\n");
       expect(event.durationMs).toBe(42);
+      expect(event.runReason).toBe("new");
+    }
+  });
+
+  it("stamps runReason onto hook_result events for resume flows", () => {
+    const event = hookResultToEvent(
+      "postNode",
+      { exitCode: 0, stdout: "", stderr: "", durationMs: 1 },
+      "resume",
+    );
+    if (event.type === "hook_result") {
+      expect(event.runReason).toBe("resume");
     }
   });
 });

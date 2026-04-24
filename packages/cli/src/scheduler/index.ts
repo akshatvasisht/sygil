@@ -208,7 +208,7 @@ export class WorkflowScheduler extends EventEmitter {
         });
       });
     }
-    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd()) : null;
+    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd(), "new") : null;
 
     try {
       await this.executeGraph(workflowId, runState, parameters, false, worktreeManager);
@@ -310,7 +310,7 @@ export class WorkflowScheduler extends EventEmitter {
     }
     const runDir = join(process.cwd(), ".sygil", "runs", savedState.id);
     this.eventRecorder = new EventRecorder(runDir);
-    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd()) : null;
+    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd(), "resume") : null;
     this.monitor.emit({ type: "workflow_start", workflowId, graph: this.workflow });
 
     try {
@@ -1493,7 +1493,7 @@ export class WorkflowScheduler extends EventEmitter {
     const result = await this.hookRunner.run(type, context, signal);
     if (result === null) return;
 
-    const event = hookResultToEvent(type, result);
+    const event = hookResultToEvent(type, result, this.hookRunner.getRunReason());
     this.emit("node_event", nodeId, event);
     this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
     this.eventRecorder?.record(nodeId, event);

@@ -17,6 +17,8 @@ export const HOOK_SCRIPT_TIMEOUT_MS = 30_000;
 
 export type HookType = "preNode" | "postNode" | "preGate" | "postGate";
 
+export type RunReason = "new" | "resume";
+
 export interface HookRunResult {
   exitCode: number;
   stdout: string;
@@ -64,10 +66,15 @@ function validateHookPath(hookPath: string, workingDir: string): void {
  *    `templates/hooks/` directory. Any other path is rejected.
  *  - The parent environment is NOT leaked; only a whitelist of variables
  *    (PATH, HOME, SHELL, …) is forwarded. Hook-specific env vars
- *    (`SYGIL_HOOK_TYPE`, `SYGIL_NODE_ID`, etc.) are always set from the
- *    hook-type-specific fresh-set block — no parent `SYGIL_*` passthrough.
+ *    (`SYGIL_HOOK_TYPE`, `SYGIL_NODE_ID`, `SYGIL_RUN_REASON`, etc.) are
+ *    always set from the hook-type-specific fresh-set block — no parent
+ *    `SYGIL_*` passthrough.
  *  - Each hook runs with a hard 30s timeout (`HOOK_SCRIPT_TIMEOUT_MS`) and
  *    propagates a supplied `AbortSignal` for structured cancellation.
+ *
+ * `SYGIL_RUN_REASON` is `"new"` for fresh `sygil run` invocations and
+ * `"resume"` for `sygil resume`. External tooling (cache-warmers, log
+ * truncators) keys off this to fire side-effects only on fresh starts.
  *
  * Semantics (only preNode may abort the node):
  *  - `preNode`:  non-zero exit aborts the node with the hook's stderr as
@@ -80,7 +87,13 @@ export class HookRunner {
   constructor(
     private readonly hooks: HooksConfig,
     private readonly workingDir: string,
+    private readonly runReason: RunReason,
   ) {}
+
+  /** Accessor so the scheduler can stamp `runReason` onto emitted hook_result events. */
+  getRunReason(): RunReason {
+    return this.runReason;
+  }
 
   /** True when the given hook is configured. Cheap; callers can skip event setup. */
   has(type: HookType): boolean {
@@ -111,6 +124,7 @@ export class HookRunner {
       SYGIL_WORKFLOW_ID: context.workflowId,
       SYGIL_NODE_ID: context.nodeId,
       SYGIL_OUTPUT_DIR: context.outputDir,
+      SYGIL_RUN_REASON: this.runReason,
     };
     if (context.exitCode !== undefined) {
       extra["SYGIL_EXIT_CODE"] = String(context.exitCode);
@@ -179,6 +193,7 @@ export class HookRunner {
 export function hookResultToEvent(
   type: HookType,
   result: HookRunResult,
+  runReason: RunReason,
 ): AgentEvent {
   return {
     type: "hook_result",
@@ -187,5 +202,6 @@ export function hookResultToEvent(
     stdout: result.stdout,
     stderr: result.stderr,
     durationMs: result.durationMs,
+    runReason,
   };
 }

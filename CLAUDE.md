@@ -128,6 +128,7 @@ Project scripts in `.sygil/config.json > hooks: { preNode?, postNode?, preGate?,
 
 - Security mirrors `gates/index.ts > evaluateScript` — do not bypass `validateHookPath`. Path containment uses the exported `isContainedIn` from `gates/index.ts`; env whitelist lives in `utils/safe-env.ts`.
 - Parent env is **not** leaked; only the whitelist in `utils/safe-env.ts > ALLOWED_ENV_KEYS` (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR`, `TMP`, `TEMP`) plus fresh `SYGIL_*` vars per hook. Parent `SYGIL_*` vars are not forwarded.
+- Hook env includes `SYGIL_RUN_REASON` — `"new"` for `sygil run`, `"resume"` for `sygil resume`. External tooling (cache-warmers, log truncators) keys off this to fire side-effects only on fresh starts. The same value lands on every emitted `hook_result` AgentEvent as `runReason` (optional for replay back-compat).
 - Every hook emits a `hook_result` AgentEvent → replay sees the same hook sequence.
 
 ---
