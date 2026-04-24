@@ -5,10 +5,10 @@ import type { NodeConfig, WorkflowGraph } from "./workflow.js";
 /** Events emitted by the Sygil server to monitor clients over WebSocket */
 export type WsServerEvent =
   | { type: "workflow_start"; workflowId: string; timestamp?: string; graph: WorkflowGraph }
-  | { type: "node_start"; workflowId: string; timestamp?: string; nodeId: string; config: NodeConfig; attempt: number }
-  | { type: "node_event"; workflowId: string; timestamp?: string; nodeId: string; event: AgentEvent }
-  | { type: "node_end"; workflowId: string; timestamp?: string; nodeId: string; result: NodeResult }
-  | { type: "gate_eval"; workflowId: string; timestamp?: string; edgeId: string; passed: boolean; reason?: string; gateType?: string }
+  | { type: "node_start"; workflowId: string; timestamp?: string; nodeId: string; config: NodeConfig; attempt: number; traceId?: string; spanId?: string }
+  | { type: "node_event"; workflowId: string; timestamp?: string; nodeId: string; event: AgentEvent; traceId?: string; spanId?: string }
+  | { type: "node_end"; workflowId: string; timestamp?: string; nodeId: string; result: NodeResult; traceId?: string; spanId?: string }
+  | { type: "gate_eval"; workflowId: string; timestamp?: string; edgeId: string; passed: boolean; reason?: string; gateType?: string; traceId?: string; spanId?: string }
   | { type: "loop_back"; workflowId: string; timestamp?: string; edgeId: string; attempt: number; maxRetries: number }
   | { type: "rate_limit"; workflowId: string; timestamp?: string; nodeId: string; retryAfterMs: number }
   | { type: "workflow_end"; workflowId: string; timestamp?: string; success: boolean; durationMs: number; totalCostUsd?: number }
@@ -145,6 +145,15 @@ export interface WorkflowRunState {
    * checkpoints so replay reconstructs the same map.
    */
   sharedContext: Record<string, unknown>;
+  /**
+   * Set by `sygil fork` on the child run to reference the parent. `runId` is
+   * the parent's runId; `checkpointIndex` is the number of parent
+   * `completedNodes` retained at the branch point. Absent on fresh runs.
+   */
+  forkedFrom?: {
+    runId: string;
+    checkpointIndex: number;
+  };
 }
 
 const NodeResultSchema = z.object({
@@ -178,10 +187,16 @@ export const WorkflowRunStateSchema = z.object({
   completedAt: z.string().optional(),
   currentNodeId: z.string().optional(),
   completedNodes: z.array(z.string()),
-  nodeResults: z.record(NodeResultSchema),
+  nodeResults: z.record(z.string(), NodeResultSchema),
   totalCostUsd: z.number(),
-  retryCounters: z.record(z.number()),
+  retryCounters: z.record(z.string(), z.number()),
   // sharedContext is backfilled by the scheduler for pre-sharedContext checkpoints —
   // optional at the schema level but always present after resume().
-  sharedContext: z.record(z.unknown()).optional(),
+  sharedContext: z.record(z.string(), z.unknown()).optional(),
+  forkedFrom: z
+    .object({
+      runId: z.string(),
+      checkpointIndex: z.number().int().nonnegative(),
+    })
+    .optional(),
 }).passthrough();

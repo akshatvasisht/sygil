@@ -70,6 +70,32 @@ Already-completed nodes are skipped. The run continues from the first incomplete
 
 ---
 
+## `sygil fork <run-id>`
+
+Branches a run from a checkpoint into a new runId. The child starts with a fresh UUID, inherits the parent's `sharedContext` and the first N retained `completedNodes`, and carries `forkedFrom: { runId, checkpointIndex }` so the lineage is recorded.
+
+```bash
+sygil fork <parent-run-id>                       # branch at the end of parent's completed nodes
+sygil fork <parent-run-id> --at 2                # keep only the first 2 completed nodes
+sygil fork <parent-run-id> --param task=altA     # diverge with different params
+```
+
+**Options**
+
+| Flag | Description |
+|---|---|
+| `--at <n>` | Keep the first `n` completed nodes of the parent; re-execute the rest. Clamped to the parent's completed count. Default: keep all. |
+| `-p, --param <k=v>` | Parameter overrides. Parent params are NOT inherited — re-specify every required parameter. |
+
+**Semantics**
+
+- `totalCostUsd` resets to 0 on the child. Parent cost is not carried over — sum externally if you need the total.
+- Per-node event logs for retained nodes are copied from `<parent>/events/<nodeId>.ndjson` into the child's run dir, so `sygil replay` on the child sees the same prefix history.
+- Hooks see `SYGIL_RUN_REASON=fork`.
+- Worktree isolation is automatic — the child gets a fresh worktree keyed on its own run-id.
+
+---
+
 ## `sygil replay <run-id>`
 
 Replays recorded NDJSON events from a previous workflow run for debugging and review.

@@ -25,13 +25,14 @@ import type { PoolSlot, PoolConfig } from "../adapters/adapter-pool.js";
 import { resolveProviders, classifyError } from "../adapters/provider-router.js";
 import { computeRetryDelay, isRetryableReason, sleepWithAbort } from "./retry-policy.js";
 import type { WsMonitorServer } from "../monitor/websocket.js";
+import { deriveTraceContext } from "../monitor/trace-context.js";
 import { logger } from "../utils/logger.js";
 import { CheckpointManager } from "./checkpoint-manager.js";
 import { GraphIndex } from "./graph-index.js";
 import { computeCriticalPathWeights } from "./critical-path.js";
 import { EventRecorder } from "./event-recorder.js";
 import { HookRunner, hookResultToEvent } from "../hooks/hook-runner.js";
-import type { HookContext, HookType } from "../hooks/hook-runner.js";
+import type { HookContext, HookType, RunReason } from "../hooks/hook-runner.js";
 import type { HooksConfig } from "../utils/config.js";
 
 const execFileAsync = promisify(execFile);
@@ -282,7 +283,7 @@ export class WorkflowScheduler extends EventEmitter {
    */
   async resume(
     savedState: WorkflowRunState,
-    options: { hooks?: HooksConfig; metricsObserver?: MetricsObserver } = {},
+    options: { hooks?: HooksConfig; metricsObserver?: MetricsObserver; runReason?: RunReason } = {},
   ): Promise<RunResult> {
     // Use workflowName (not the run UUID) as workflowId so monitor fanout
     // filtering matches the URL slug the web UI subscribes to.
@@ -310,7 +311,7 @@ export class WorkflowScheduler extends EventEmitter {
     }
     const runDir = join(process.cwd(), ".sygil", "runs", savedState.id);
     this.eventRecorder = new EventRecorder(runDir);
-    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd(), "resume") : null;
+    this.hookRunner = options.hooks ? new HookRunner(options.hooks, process.cwd(), options.runReason ?? "resume") : null;
     this.monitor.emit({ type: "workflow_start", workflowId, graph: this.workflow });
 
     try {
@@ -785,6 +786,13 @@ export class WorkflowScheduler extends EventEmitter {
 
     const attempt = (this.retryCounters.get(nodeId) ?? 0) + 1;
 
+    // Deterministic W3C trace context — stable across retries so span stays
+    // coherent for external tracing backends. Threaded into adapter spawn()
+    // (env / header) and stamped onto emitted per-node WsServerEvents so UI
+    // clients can deep-link to external tracing backends.
+    const traceCtx = deriveTraceContext(runState.id, nodeId);
+    const { traceId, spanId } = traceCtx;
+
     // Input mapping (Contract): resolve {{var}} substitutions from predecessor outputs
     nodeConfig = await this.buildNodeInput(nodeId, incomingForwardEdges, nodeConfig, runState, parameters);
 
@@ -842,7 +850,7 @@ export class WorkflowScheduler extends EventEmitter {
           logger.info(`Cache hit for node "${nodeId}" — skipping execution`);
           this.contentHashes.set(nodeId, hash);
           this.emit("node_start", nodeId);
-          this.monitor.emit({ type: "node_start", workflowId, nodeId, config: nodeConfig, attempt });
+          this.monitor.emit({ type: "node_start", workflowId, nodeId, config: nodeConfig, attempt, traceId, spanId });
           // postNode hook still runs for cache hits — the node's result was
           // "produced" (from cache), so observers see a complete lifecycle.
           await this.runHook(
@@ -864,7 +872,7 @@ export class WorkflowScheduler extends EventEmitter {
           // distinct from a fresh completion. The original durationMs /
           // costUsd from the recorded run are preserved.
           const cachedResult = { ...cached, cacheHit: true };
-          this.monitor.emit({ type: "node_end", workflowId, nodeId, result: cachedResult });
+          this.monitor.emit({ type: "node_end", workflowId, nodeId, result: cachedResult, traceId, spanId });
           return cachedResult;
         }
         contentHash = hash;
@@ -890,6 +898,8 @@ export class WorkflowScheduler extends EventEmitter {
       nodeId,
       config: nodeConfig,
       attempt,
+      traceId,
+      spanId,
     });
 
     // Resolve provider-failover list. Legacy nodes without
@@ -960,7 +970,7 @@ export class WorkflowScheduler extends EventEmitter {
 
             session = this.sessionStore.get(nodeId);
             if (!session) {
-              session = await adapter.spawn(effectiveConfig);
+              session = await adapter.spawn(effectiveConfig, traceCtx);
             }
             this.sessionStore.set(nodeId, session);
 
@@ -1013,11 +1023,12 @@ export class WorkflowScheduler extends EventEmitter {
                     session = await adapter.resume(
                       effectiveConfig,
                       prevSession,
-                      "Continuing after rate limit pause. Please continue where you left off."
+                      "Continuing after rate limit pause. Please continue where you left off.",
+                      traceCtx,
                     );
                   } catch {
                     // resume failed (e.g. no session ID) — fall back to cold start
-                    session = await adapter.spawn(effectiveConfig);
+                    session = await adapter.spawn(effectiveConfig, traceCtx);
                   }
                   this.sessionStore.set(nodeId, session);
                   // Fresh session — allow killAdapter to run again on the
@@ -1039,7 +1050,7 @@ export class WorkflowScheduler extends EventEmitter {
                       message: `context_set rejected: node "${nodeId}" is not allowed to write key "${event.key}" (not in writesContext)`,
                     };
                     this.emit("node_event", nodeId, rejection);
-                    this.monitor.emit({ type: "node_event", workflowId, nodeId, event: rejection });
+                    this.monitor.emit({ type: "node_event", workflowId, nodeId, event: rejection, traceId, spanId });
                     this.eventRecorder?.record(nodeId, rejection);
                     logger.warn(`context_set rejected: node "${nodeId}" attempted to write unlisted key "${event.key}"`);
                     continue;
@@ -1049,7 +1060,7 @@ export class WorkflowScheduler extends EventEmitter {
                 }
 
                 this.emit("node_event", nodeId, event);
-                this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
+                this.monitor.emit({ type: "node_event", workflowId, nodeId, event, traceId, spanId });
                 this.eventRecorder?.record(nodeId, event);
 
                 // Stall signal from adapter — scheduler decides to kill
@@ -1072,7 +1083,7 @@ export class WorkflowScheduler extends EventEmitter {
               };
               await this.eventRecorder?.flushNode(nodeId);
               this.emit("node_end", nodeId, false);
-              this.monitor.emit({ type: "node_end", workflowId, nodeId, result: stallResult });
+              this.monitor.emit({ type: "node_end", workflowId, nodeId, result: stallResult, traceId, spanId });
               return stallResult;
             }
 
@@ -1128,7 +1139,7 @@ export class WorkflowScheduler extends EventEmitter {
             );
 
             this.emit("node_end", nodeId, success);
-            this.monitor.emit({ type: "node_end", workflowId, nodeId, result });
+            this.monitor.emit({ type: "node_end", workflowId, nodeId, result, traceId, spanId });
 
             return result;
           } catch (err) {
@@ -1194,6 +1205,8 @@ export class WorkflowScheduler extends EventEmitter {
                   workflowId,
                   nodeId,
                   event: retryEvent,
+                  traceId,
+                  spanId,
                 });
                 this.eventRecorder?.record(nodeId, retryEvent);
                 logger.info(
@@ -1229,7 +1242,7 @@ export class WorkflowScheduler extends EventEmitter {
                   reason: reasonStr,
                 };
                 this.emit("node_event", nodeId, failoverEvent);
-                this.monitor.emit({ type: "node_event", workflowId, nodeId, event: failoverEvent });
+                this.monitor.emit({ type: "node_event", workflowId, nodeId, event: failoverEvent, traceId, spanId });
                 this.eventRecorder?.record(nodeId, failoverEvent);
                 logger.info(
                   `Provider failover on node "${nodeId}": ${provider.adapter} → ${nextProvider.adapter} (${reasonStr})`,
@@ -1245,7 +1258,7 @@ export class WorkflowScheduler extends EventEmitter {
               durationMs: session ? Date.now() - session.startedAt.getTime() : 0,
             };
             this.emit("node_end", nodeId, false);
-            this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult });
+            this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult, traceId, spanId });
             throw err;
           } finally {
             if (poolSlot && this.adapterPool) {
@@ -1268,7 +1281,7 @@ export class WorkflowScheduler extends EventEmitter {
         durationMs: 0,
       };
       this.emit("node_end", nodeId, false);
-      this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult });
+      this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult, traceId, spanId });
       throw finalErr;
     } finally {
       // Worktree cleanup: remove this node's temporary worktree after execution

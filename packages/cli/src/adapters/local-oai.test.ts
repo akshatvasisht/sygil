@@ -129,6 +129,86 @@ describe("LocalOaiAdapter", () => {
       expect(toolCalls[0]).toMatchObject({ type: "tool_call", tool: "calc", input: { a: 1, b: 2 } });
     });
 
+    it("sends `traceparent` header when SpawnContext is passed", async () => {
+      const body = sseChunks([
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]);
+      const fetchMock = vi.fn(async (_url: string, _opts: unknown) => ({ ok: true, body, status: 200 } as unknown as Response));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const session = await adapter.spawn(
+        { adapter: "local-oai", model: "llama3.2", role: "agent", prompt: "hi" },
+        { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+      );
+      await drain(adapter, session);
+
+      // First call is the chat/completions POST (availability probe is a separate test).
+      const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat/completions"));
+      expect(chatCall).toBeDefined();
+      const opts = chatCall![1] as { headers: Record<string, string> };
+      expect(opts.headers["traceparent"]).toBe("00-abc-def-01");
+    });
+
+    it("includes response_format + parallel_tool_calls:false when outputSchema is set", async () => {
+      const body = sseChunks([
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]);
+      const fetchMock = vi.fn(async (_url: string, _opts: unknown) => ({ ok: true, body, status: 200 } as unknown as Response));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const session = await adapter.spawn({
+        adapter: "local-oai",
+        model: "llama3.2",
+        role: "output schema node",
+        prompt: "emit json",
+        outputSchema: {
+          type: "object",
+          properties: { summary: { type: "string" } },
+          required: ["summary"],
+          additionalProperties: false,
+        },
+      });
+      await drain(adapter, session);
+
+      const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat/completions"));
+      expect(chatCall).toBeDefined();
+      const opts = chatCall![1] as { body: string };
+      const parsed = JSON.parse(opts.body) as Record<string, unknown>;
+      expect(parsed["response_format"]).toMatchObject({
+        type: "json_schema",
+        json_schema: {
+          name: "output_schema_node", // sanitized from "output schema node"
+          strict: true,
+        },
+      });
+      expect(parsed["parallel_tool_calls"]).toBe(false);
+    });
+
+    it("omits response_format when outputSchema is absent", async () => {
+      const body = sseChunks([
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]);
+      const fetchMock = vi.fn(async (_url: string, _opts: unknown) => ({ ok: true, body, status: 200 } as unknown as Response));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const session = await adapter.spawn({
+        adapter: "local-oai",
+        model: "llama3.2",
+        role: "agent",
+        prompt: "hi",
+      });
+      await drain(adapter, session);
+
+      const chatCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat/completions"));
+      const opts = chatCall![1] as { body: string };
+      const parsed = JSON.parse(opts.body) as Record<string, unknown>;
+      expect(parsed["response_format"]).toBeUndefined();
+      expect(parsed["parallel_tool_calls"]).toBeUndefined();
+    });
+
     it("emits error event on non-OK response", async () => {
       vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500, body: null } as unknown as Response)));
 

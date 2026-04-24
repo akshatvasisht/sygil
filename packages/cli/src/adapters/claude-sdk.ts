@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
+  SpawnContext,
 } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 
@@ -72,7 +73,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore -- optional peer dep, may not be installed
     const sdk = await import("@anthropic-ai/claude-agent-sdk").catch(() => null) as ClaudeSDKModule | null;
@@ -89,12 +90,19 @@ export class ClaudeSDKAdapter implements AgentAdapter {
       disallowedTools: config.disallowedTools ?? [],
       permissionMode: "dontAsk",
       cwd: config.outputDir ?? process.cwd(),
+      // Wire outputSchema through to the SDK's native json_schema output-format
+      // so Anthropic enforces structure at generation time. Post-hoc
+      // validation in scheduler/index.ts still runs as a safety net.
       outputFormat: config.outputSchema
         ? { type: "json_schema", schema: config.outputSchema }
         : undefined,
       maxTurns: config.maxTurns ?? 250,
       maxBudgetUsd: config.maxBudgetUsd,
       canUseTool: config.outputDir ? makeCanUseTool(config.outputDir) : undefined,
+      // Propagate W3C trace context so the SDK's internal Anthropic API calls
+      // inherit the per-node span. SDK versions without header support silently
+      // ignore the field.
+      ...(ctx?.traceparent ? { defaultHeaders: { traceparent: ctx.traceparent } } : {}),
     });
 
     await session.send(config.prompt);
@@ -175,12 +183,15 @@ export class ClaudeSDKAdapter implements AgentAdapter {
     };
   }
 
-  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession> {
+  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, _ctx?: SpawnContext): Promise<AgentSession> {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore -- optional peer dep, may not be installed
     const sdk = await import("@anthropic-ai/claude-agent-sdk").catch(() => null);
     if (!sdk) throw new Error("Claude SDK not installed");
     const session = previousSession._internal as ClaudeSDKSession;
+    // The SpawnContext ctx is intentionally unused — the resumed SDK session
+    // inherits the trace headers from its original spawn. Retries preserve
+    // span coherence by design.
     await session.send(feedbackMessage);
     return previousSession;
   }

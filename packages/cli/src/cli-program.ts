@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { runCommand } from "./commands/run.js";
 import { resumeCommand } from "./commands/resume.js";
+import { forkCommand } from "./commands/fork.js";
 import { listCommand } from "./commands/list.js";
 import { validateCommand } from "./commands/validate.js";
 import { exportCommand } from "./commands/export.js";
@@ -80,6 +81,37 @@ The <run-id> must match a checkpoint at .sygil/runs/<id>.json exactly.
 Partial or prefix matching is NOT supported — use \`sygil list\` to copy the full ID.
 `)
     .action(resumeCommand);
+
+  program
+    .command("fork")
+    .description("Branch a run from a checkpoint into a new runId")
+    .argument("<run-id>", "Parent run ID to fork from (see `sygil list`)")
+    .option(
+      "--at <checkpointIndex>",
+      "Keep only the first N completed nodes of the parent. Default: keep all completed nodes.",
+    )
+    .option(
+      "-p, --param <pairs...>",
+      "Parameter overrides for the fork, as key=value. Parent params are NOT inherited — re-specify each required param.",
+    )
+    .addHelpText("after", `
+Examples:
+  $ sygil fork <parent-run-id>                       # branch at the end of parent's completed nodes
+  $ sygil fork <parent-run-id> --at 2                # keep only the first 2 completed nodes
+  $ sygil fork <parent-run-id> --param task="altA"   # diverge with different params
+
+Semantics:
+  - The child receives a fresh run-id (UUID). totalCostUsd resets to 0 — parent's
+    accumulated cost is NOT carried over. Sum totals externally if needed.
+  - sharedContext is inherited from the parent at the branch point.
+  - Per-node event logs for retained nodes are copied from the parent's run dir.
+  - Hooks see SYGIL_RUN_REASON=fork.
+  - Fork v1 does not inherit resolved parameters from the parent checkpoint
+    (they aren't persisted). Supply every required parameter via --param.
+`)
+    .action((parentRunId: string, options: { at?: string; param?: string[] }) =>
+      forkCommand(parentRunId, options),
+    );
 
   program
     .command("list")

@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
+  SpawnContext,
 } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
@@ -12,6 +13,7 @@ import { waitForDoneOrTimeout } from "./await-done.js";
 import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS } from "./constants.js";
 import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
+import { logger } from "../utils/logger.js";
 
 /** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
  * never legitimately exceed this; if it does, force-kill so a hung MCP server
@@ -45,7 +47,13 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
+    if (config.outputSchema) {
+      logger.info(
+        `claude-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
+      );
+    }
+
     const cwd = config.outputDir ?? process.cwd();
     const tools = (config.tools ?? []).join(",");
 
@@ -80,7 +88,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: ClaudeCLIInternal = {
@@ -280,7 +288,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     };
   }
 
-  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession> {
+  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
     const args: string[] = [
@@ -298,7 +306,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: ClaudeCLIInternal = {

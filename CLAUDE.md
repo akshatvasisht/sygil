@@ -91,6 +91,10 @@ Each implements `AgentAdapter` from `@sygil/shared`. Registry and auth in `docs/
 
 **Shared adapter helpers** — the four stream-json CLI adapters (`claude-cli`, `codex-cli`, `cursor-cli`, `gemini-cli`) also share `adapters/constants.ts` (stall/getResult timings), `adapters/ndjson-line-decoder.ts` (UTF-8-safe chunk→line decoder), and `adapters/session.ts` (`makeAgentSession()` outer envelope). New CLI adapters should reuse these before rolling their own.
 
+**`outputSchema` provider strict mode** — `local-oai` passes `response_format: { type: "json_schema", json_schema: { strict: true, schema } }` + `parallel_tool_calls: false` when `NodeConfig.outputSchema` is set. `claude-sdk` forwards the schema as `outputFormat: { type: "json_schema", schema }` to the SDK. All other adapters log an `info` and rely on the post-hoc `validateStructuredOutput` pass in `scheduler/index.ts`. OpenAI's JSON-Schema subset is narrower than full draft-07: no `$ref`, no top-level `allOf`/`anyOf`, every property must be listed in `required`, and objects must set `additionalProperties: false`. Workflow authors who need those features should keep `outputSchema` minimal and rely on post-hoc validation downstream.
+
+**W3C trace context** — `scheduler/index.ts` derives a deterministic `{ traceId (32-hex), spanId (16-hex), traceparent }` from `runState.id` + `nodeId` via `monitor/trace-context.ts > deriveTraceContext` (SHA-256, mirroring the retry-jitter pattern) and passes it as the second argument to every `adapter.spawn()` / `adapter.resume()` call. Process-spawning adapters set `TRACEPARENT` in the child env; `local-oai` sets the `traceparent` HTTP header; `claude-sdk` passes `defaultHeaders: { traceparent }` to `createSession`. `traceId`/`spanId` also ride on every emitted `node_start` / `node_end` / `node_event` `WsServerEvent` (optional fields — replay of older NDJSON still parses). Retries and loop-backs reuse the same `spanId` so spans stay coherent. Trace context is **not** recorded in NDJSON — it's derivable from `runState.id` + `nodeId`.
+
 **Circuit breaker** — opt-in per adapter type via `PoolConfig.circuitBreaker`. Defaults: 5 failures in 30 s → open for 60 s. `rate_limit` failures ignored (backpressure, not outage). Open acquires throw `CircuitOpenError`, classified by `provider-router.ts` as `retryable:circuit_open` so failover kicks in. Transitions broadcast as `circuit_breaker` WsServerEvent; NOT recorded in NDJSON — the driving failures are.
 
 ### Replay determinism
@@ -128,7 +132,7 @@ Project scripts in `.sygil/config.json > hooks: { preNode?, postNode?, preGate?,
 
 - Security mirrors `gates/index.ts > evaluateScript` — do not bypass `validateHookPath`. Path containment uses the exported `isContainedIn` from `gates/index.ts`; env whitelist lives in `utils/safe-env.ts`.
 - Parent env is **not** leaked; only the whitelist in `utils/safe-env.ts > ALLOWED_ENV_KEYS` (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR`, `TMP`, `TEMP`) plus fresh `SYGIL_*` vars per hook. Parent `SYGIL_*` vars are not forwarded.
-- Hook env includes `SYGIL_RUN_REASON` — `"new"` for `sygil run`, `"resume"` for `sygil resume`. External tooling (cache-warmers, log truncators) keys off this to fire side-effects only on fresh starts. The same value lands on every emitted `hook_result` AgentEvent as `runReason` (optional for replay back-compat).
+- Hook env includes `SYGIL_RUN_REASON` — `"new"` for `sygil run`, `"resume"` for `sygil resume`, `"fork"` for `sygil fork`. External tooling (cache-warmers, log truncators) keys off this to fire side-effects only on fresh starts. The same value lands on every emitted `hook_result` AgentEvent as `runReason` (optional for replay back-compat).
 - Every hook emits a `hook_result` AgentEvent → replay sees the same hook sequence.
 
 ---

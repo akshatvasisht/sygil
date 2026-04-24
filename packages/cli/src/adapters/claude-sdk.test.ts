@@ -73,6 +73,45 @@ describe("ClaudeSDKAdapter", () => {
     expect(session._internal).toBeTruthy();
   });
 
+  it("spawn() passes outputSchema to the SDK as outputFormat.json_schema", async () => {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore -- optional peer dep, not installed in test environment
+    const sdkMod = (await import("@anthropic-ai/claude-agent-sdk")) as unknown as {
+      createSession: ReturnType<typeof vi.fn>;
+    };
+    sdkMod.createSession.mockClear();
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+    };
+    await adapter.spawn({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "schema-node",
+      prompt: "emit json",
+      outputSchema: schema,
+    });
+    expect(sdkMod.createSession).toHaveBeenCalledOnce();
+    const opts = sdkMod.createSession.mock.calls[0]![0] as { outputFormat?: { type: string; schema: unknown } };
+    expect(opts.outputFormat).toEqual({ type: "json_schema", schema });
+  });
+
+  it("spawn() threads traceparent as a defaultHeaders entry when SpawnContext is passed", async () => {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore -- optional peer dep, not installed in test environment
+    const sdkMod = (await import("@anthropic-ai/claude-agent-sdk")) as unknown as {
+      createSession: ReturnType<typeof vi.fn>;
+    };
+    sdkMod.createSession.mockClear();
+    await adapter.spawn(
+      { adapter: "claude-sdk", model: "claude-opus-4-5", role: "agent", prompt: "hi" },
+      { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+    );
+    const opts = sdkMod.createSession.mock.calls[0]![0] as { defaultHeaders?: Record<string, string> };
+    expect(opts.defaultHeaders).toEqual({ traceparent: "00-abc-def-01" });
+  });
+
   it("stream() yields text_delta and cost_update events", async () => {
     const session = await adapter.spawn({
       adapter: "claude-sdk",

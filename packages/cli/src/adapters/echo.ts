@@ -16,6 +16,7 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
+  SpawnContext,
 } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
@@ -49,7 +50,7 @@ export class EchoAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
     const proc = spawn("node", [ECHO_SCRIPT], {
@@ -61,6 +62,7 @@ export class EchoAdapter implements AgentAdapter {
         ECHO_ROLE: config.role,
         ECHO_NODE_ID: config.role,
         ECHO_OUTPUT_DIR: cwd,
+        ...(ctx?.traceparent ? { TRACEPARENT: ctx.traceparent } : {}),
       },
     });
 
@@ -224,8 +226,8 @@ export class EchoAdapter implements AgentAdapter {
     };
   }
 
-  async resume(config: NodeConfig, _previousSession: AgentSession, _feedbackMessage: string): Promise<AgentSession> {
-    return this.spawn(config);
+  async resume(config: NodeConfig, _previousSession: AgentSession, _feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
+    return this.spawn(config, ctx);
   }
 
   async kill(session: AgentSession): Promise<void> {

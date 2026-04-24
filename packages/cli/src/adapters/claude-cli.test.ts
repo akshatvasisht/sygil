@@ -405,6 +405,48 @@ describe("ClaudeCLIAdapter", () => {
       expect(session.startedAt).toBeInstanceOf(Date);
       expect(session._internal).toBeTruthy();
     });
+
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        {
+          adapter: "claude-cli",
+          model: "sonnet",
+          role: "agent",
+          prompt: "hi",
+        },
+        {
+          traceparent: "00-abc-def-01",
+          traceId: "abc",
+          spanId: "def",
+        },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
+    it("does not set TRACEPARENT when SpawnContext is omitted", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const prev = process.env["TRACEPARENT"];
+      delete process.env["TRACEPARENT"];
+      try {
+        await adapter.spawn({
+          adapter: "claude-cli",
+          model: "sonnet",
+          role: "agent",
+          prompt: "hi",
+        });
+        const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string | undefined> };
+        expect(opts.env["TRACEPARENT"]).toBeUndefined();
+      } finally {
+        if (prev !== undefined) process.env["TRACEPARENT"] = prev;
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

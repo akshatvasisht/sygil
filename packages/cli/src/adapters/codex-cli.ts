@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
+  SpawnContext,
 } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
@@ -58,7 +59,13 @@ export class CodexCLIAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
+    if (config.outputSchema) {
+      logger.info(
+        `codex: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
+      );
+    }
+
     // Codex exposes `--sandbox` but no tool-name allowlist flag; `NodeConfig.tools`
     // is accepted for cross-adapter shape parity but has no runtime effect here
     // Warn so users don't silently assume tools are sandboxed.
@@ -85,7 +92,7 @@ export class CodexCLIAdapter implements AgentAdapter {
     const proc = spawn("codex", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: CodexInternal = {
@@ -112,7 +119,7 @@ export class CodexCLIAdapter implements AgentAdapter {
     return makeAgentSession(this.name, config.role, internal);
   }
 
-  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession> {
+  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
     const args: string[] = [
@@ -126,7 +133,7 @@ export class CodexCLIAdapter implements AgentAdapter {
     const proc = spawn("codex", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: CodexInternal = {

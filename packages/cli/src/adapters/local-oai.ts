@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
+  SpawnContext,
 } from "@sygil/shared";
 import { SygilErrorCode } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
@@ -97,7 +98,7 @@ export class LocalOaiAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const { baseUrl, apiKey } = this._resolveEndpoint(config);
     const internal: LocalOaiInternal = {
       abortController: new AbortController(),
@@ -120,7 +121,7 @@ export class LocalOaiAdapter implements AgentAdapter {
     };
 
     // Fire the request but don't await — stream() drives the SSE reader.
-    this._startRequest(config, internal, baseUrl, apiKey).catch((err: unknown) => {
+    this._startRequest(config, internal, baseUrl, apiKey, ctx).catch((err: unknown) => {
       // If kill() already finished the stream (e.g. user cancelled), don't
       // overwrite its exitCode (130) with 1 and don't push a spurious error
       // event — the scheduler has already decided this was a kill, not a crash.
@@ -139,7 +140,8 @@ export class LocalOaiAdapter implements AgentAdapter {
     config: NodeConfig,
     internal: LocalOaiInternal,
     baseUrl: string,
-    apiKey: string
+    apiKey: string,
+    ctx?: SpawnContext,
   ): Promise<void> {
     const body: Record<string, unknown> = {
       model: config.model,
@@ -155,12 +157,34 @@ export class LocalOaiAdapter implements AgentAdapter {
       }));
     }
 
+    if (config.outputSchema) {
+      // OpenAI strict mode: requires `parallel_tool_calls: false` and a
+      // schema name matching `^[a-zA-Z0-9_-]+$`. Derive from role; fall back
+      // to "output". The underlying schema is passed verbatim — authors must
+      // conform to OpenAI's JSON-Schema subset (documented in CLAUDE.md).
+      const sanitizedName = config.role.replace(/[^a-zA-Z0-9_-]/g, "_") || "output";
+      body["response_format"] = {
+        type: "json_schema",
+        json_schema: {
+          name: sanitizedName,
+          strict: true,
+          schema: config.outputSchema,
+        },
+      };
+      body["parallel_tool_calls"] = false;
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+    if (ctx?.traceparent) {
+      headers["traceparent"] = ctx.traceparent;
+    }
+
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal: internal.abortController.signal,
     });
@@ -320,7 +344,8 @@ export class LocalOaiAdapter implements AgentAdapter {
   async resume(
     config: NodeConfig,
     previousSession: AgentSession,
-    feedbackMessage: string
+    feedbackMessage: string,
+    ctx?: SpawnContext,
   ): Promise<AgentSession> {
     const prev = previousSession._internal as LocalOaiInternal;
     const newConfig: NodeConfig = {
@@ -331,6 +356,6 @@ export class LocalOaiAdapter implements AgentAdapter {
         `\n\nFeedback: ${feedbackMessage}`,
       ].join(""),
     };
-    return this.spawn(newConfig);
+    return this.spawn(newConfig, ctx);
   }
 }

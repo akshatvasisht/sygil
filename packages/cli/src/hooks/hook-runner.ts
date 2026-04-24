@@ -17,7 +17,7 @@ export const HOOK_SCRIPT_TIMEOUT_MS = 30_000;
 
 export type HookType = "preNode" | "postNode" | "preGate" | "postGate";
 
-export type RunReason = "new" | "resume";
+export type RunReason = "new" | "resume" | "fork";
 
 export interface HookRunResult {
   exitCode: number;

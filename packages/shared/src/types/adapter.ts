@@ -1,16 +1,31 @@
 import type { NodeConfig } from "./workflow.js";
 import type { SygilErrorCode } from "./errors.js";
 
+/**
+ * Deterministic per-node tracing envelope derived from `runId` + `nodeId`.
+ * Adapters propagate this as a W3C `traceparent` so downstream API spans link
+ * back to the driving Sigil node. Optional on every surface — adapters that
+ * don't spawn subprocesses or HTTP requests may ignore it.
+ */
+export interface SpawnContext {
+  /** W3C traceparent header value: `00-<traceId>-<spanId>-01`. */
+  traceparent?: string;
+  /** 32-hex trace id. */
+  traceId?: string;
+  /** 16-hex span id. */
+  spanId?: string;
+}
+
 export interface AgentAdapter {
   readonly name: string;
   isAvailable(): Promise<boolean>;
-  spawn(config: NodeConfig): Promise<AgentSession>;
+  spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession>;
   /**
    * Resume a previous session with additional feedback context.
    * Used for loop-back retries — avoids cold-starting a new session.
    * If the adapter doesn't support resume, it should fall back to spawn().
    */
-  resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession>;
+  resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession>;
   stream(session: AgentSession): AsyncIterable<AgentEvent>;
   getResult(session: AgentSession): Promise<NodeResult>;
   kill(session: AgentSession): Promise<void>;
@@ -45,10 +60,10 @@ export type AgentEvent =
       durationMs: number;
       /**
        * Why this run started. `"new"` from `sygil run`, `"resume"` from
-       * `sygil resume`. Optional so replay of NDJSON logs predating this
-       * field continues to parse.
+       * `sygil resume`, `"fork"` from `sygil fork`. Optional so replay of
+       * NDJSON logs predating this field continues to parse.
        */
-      runReason?: "new" | "resume";
+      runReason?: "new" | "resume" | "fork";
     }
   | {
       /**

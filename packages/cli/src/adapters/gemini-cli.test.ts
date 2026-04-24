@@ -115,6 +115,22 @@ describe("GeminiCLIAdapter", () => {
       expect(args).toContain("gemini-2.5-pro");
     });
 
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(true);
+
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        { adapter: "gemini-cli", model: "gemini-2.5-pro", role: "agent", prompt: "hi" },
+        { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
     it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
       mockExecSync.mockReturnValue("");
       mockExistsSync.mockReturnValue(true);

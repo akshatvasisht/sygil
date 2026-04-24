@@ -259,6 +259,19 @@ describe("CodexCLIAdapter", () => {
       expect(session.startedAt).toBeInstanceOf(Date);
     });
 
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        { adapter: "codex", model: "o4-mini", role: "agent", prompt: "task" },
+        { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
     it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
       const proc = makeFakeProc();
       mockSpawn.mockReturnValue(proc);

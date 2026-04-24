@@ -176,6 +176,22 @@ describe("CursorCLIAdapter", () => {
       expect(args).toContain("--force");
     });
 
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      mockExecSync.mockReturnValue("");
+      mockExistsSync.mockReturnValue(true);
+
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        { adapter: "cursor", model: "gpt-4o", role: "agent", prompt: "test" },
+        { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
     it("includes --model when config.model is set", async () => {
       mockExecSync.mockReturnValue("");
       mockExistsSync.mockReturnValue(true);
