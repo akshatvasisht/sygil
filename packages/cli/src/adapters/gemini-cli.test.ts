@@ -131,28 +131,8 @@ describe("GeminiCLIAdapter", () => {
       expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
     });
 
-    it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
-      mockExecSync.mockReturnValue("");
-      mockExistsSync.mockReturnValue(true);
-
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
-
-      await adapter.spawn({
-        adapter: "gemini-cli",
-        model: "gemini-2.5-pro",
-        role: "agent",
-        prompt: "hi",
-        tools: ["Read", "Write"],
-      });
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/gemini-cli adapter ignores NodeConfig\.tools.*Read.*Write/)
-      );
-      warnSpy.mockRestore();
-    });
+    // Cross-adapter "warns on non-empty tools" coverage lives in
+    // adapters/tools-allowlist-warns.test.ts.
 
     it("does not warn when NodeConfig.tools is omitted or empty", async () => {
       mockExecSync.mockReturnValue("");

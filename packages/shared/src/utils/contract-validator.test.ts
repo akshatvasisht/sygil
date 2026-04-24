@@ -178,82 +178,84 @@ describe("resolveInputMapping", () => {
     mockReadFile = fs.default.readFile as unknown as ReturnType<typeof vi.fn>;
   });
 
-  it("reads a plain file and returns its content", async () => {
-    mockReadFile.mockResolvedValue("Hello, world!");
+  // Single-mock, single-mapping happy / error paths — collapsed to it.each
+  // so each row's variation is the only thing on the page.
+  type SingleCase = {
+    name: string;
+    mock: { resolve: string } | { reject: string };
+    mapping: Record<string, string>;
+    expectedValue: string;
+    expectedErrorCount: number;
+    expectedErrorContains?: string;
+  };
 
-    const result = await resolveInputMapping(
-      { greeting: "hello.txt" },
-      "/output"
-    );
+  const SINGLE_CASES: SingleCase[] = [
+    {
+      name: "reads a plain file and returns its content",
+      mock: { resolve: "Hello, world!" },
+      mapping: { greeting: "hello.txt" },
+      expectedValue: "Hello, world!",
+      expectedErrorCount: 0,
+    },
+    {
+      name: "reads a JSON file and extracts a field",
+      mock: { resolve: JSON.stringify({ summary: "All tests pass", score: 100 }) },
+      mapping: { summary: "result.json#summary" },
+      expectedValue: "All tests pass",
+      expectedErrorCount: 0,
+    },
+    {
+      name: "reads a nested JSON field with dot notation",
+      mock: { resolve: JSON.stringify({ meta: { author: { name: "Alice" } } }) },
+      mapping: { author: "data.json#meta.author.name" },
+      expectedValue: "Alice",
+      expectedErrorCount: 0,
+    },
+    {
+      name: "returns empty string and error for missing JSON field",
+      mock: { resolve: JSON.stringify({ other: "value" }) },
+      mapping: { missing: "data.json#nonexistent" },
+      expectedValue: "",
+      expectedErrorCount: 1,
+      expectedErrorContains: "field 'nonexistent' not found",
+    },
+    {
+      name: "returns empty string and error when file does not exist",
+      mock: { reject: "ENOENT: no such file" },
+      mapping: { data: "missing.txt" },
+      expectedValue: "",
+      expectedErrorCount: 1,
+      expectedErrorContains: "file not found",
+    },
+    {
+      name: "returns empty string and error when JSON parse fails",
+      mock: { resolve: "not valid json" },
+      mapping: { field: "bad.json#someField" },
+      expectedValue: "",
+      expectedErrorCount: 1,
+      expectedErrorContains: "invalid JSON",
+    },
+  ];
 
-    expect(result.resolved["greeting"]).toBe("Hello, world!");
-    expect(result.errors).toHaveLength(0);
+  it.each(SINGLE_CASES)("$name", async ({ mock, mapping, expectedValue, expectedErrorCount, expectedErrorContains }) => {
+    if ("resolve" in mock) {
+      mockReadFile.mockResolvedValue(mock.resolve);
+    } else {
+      mockReadFile.mockRejectedValue(new Error(mock.reject));
+    }
+    const result = await resolveInputMapping(mapping, "/output");
+    const key = Object.keys(mapping)[0]!;
+    expect(result.resolved[key]).toBe(expectedValue);
+    expect(result.errors).toHaveLength(expectedErrorCount);
+    if (expectedErrorContains !== undefined) {
+      expect(result.errors[0]).toContain(expectedErrorContains);
+    }
+  });
+
+  it("invokes readFile with the resolved path", async () => {
+    mockReadFile.mockResolvedValue("content");
+    await resolveInputMapping({ greeting: "hello.txt" }, "/output");
     expect(mockReadFile).toHaveBeenCalledWith("/output/hello.txt", "utf-8");
-  });
-
-  it("reads a JSON file and extracts a field", async () => {
-    mockReadFile.mockResolvedValue(JSON.stringify({ summary: "All tests pass", score: 100 }));
-
-    const result = await resolveInputMapping(
-      { summary: "result.json#summary" },
-      "/output"
-    );
-
-    expect(result.resolved["summary"]).toBe("All tests pass");
-    expect(result.errors).toHaveLength(0);
-  });
-
-  it("reads a nested JSON field with dot notation", async () => {
-    mockReadFile.mockResolvedValue(
-      JSON.stringify({ meta: { author: { name: "Alice" } } })
-    );
-
-    const result = await resolveInputMapping(
-      { author: "data.json#meta.author.name" },
-      "/output"
-    );
-
-    expect(result.resolved["author"]).toBe("Alice");
-    expect(result.errors).toHaveLength(0);
-  });
-
-  it("returns empty string and error for missing JSON field", async () => {
-    mockReadFile.mockResolvedValue(JSON.stringify({ other: "value" }));
-
-    const result = await resolveInputMapping(
-      { missing: "data.json#nonexistent" },
-      "/output"
-    );
-
-    expect(result.resolved["missing"]).toBe("");
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("field 'nonexistent' not found");
-  });
-
-  it("returns empty string and error when file does not exist", async () => {
-    mockReadFile.mockRejectedValue(new Error("ENOENT: no such file"));
-
-    const result = await resolveInputMapping(
-      { data: "missing.txt" },
-      "/output"
-    );
-
-    expect(result.resolved["data"]).toBe("");
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("file not found");
-  });
-
-  it("returns empty string and error when JSON parse fails", async () => {
-    mockReadFile.mockResolvedValue("not valid json");
-
-    const result = await resolveInputMapping(
-      { field: "bad.json#someField" },
-      "/output"
-    );
-
-    expect(result.resolved["field"]).toBe("");
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("invalid JSON");
   });
 
   it("resolves multiple mappings", async () => {

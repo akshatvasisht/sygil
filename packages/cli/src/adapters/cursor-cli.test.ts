@@ -211,28 +211,8 @@ describe("CursorCLIAdapter", () => {
       expect(args).toContain("claude-3.5-sonnet");
     });
 
-    it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
-      mockExecSync.mockReturnValue("");
-      mockExistsSync.mockReturnValue(true);
-
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
-
-      await adapter.spawn({
-        adapter: "cursor",
-        model: "gpt-4o",
-        role: "agent",
-        prompt: "test",
-        tools: ["Read", "Write"],
-      });
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/cursor-cli adapter ignores NodeConfig\.tools.*Read.*Write/)
-      );
-      warnSpy.mockRestore();
-    });
+    // Cross-adapter "warns on non-empty tools" coverage lives in
+    // adapters/tools-allowlist-warns.test.ts.
 
     it("does not warn when NodeConfig.tools is omitted or empty", async () => {
       mockExecSync.mockReturnValue("");

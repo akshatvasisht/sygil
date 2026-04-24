@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { ScrollReveal } from "./ScrollReveal";
 
@@ -23,171 +23,23 @@ class CodeBlockErrorBoundary extends React.Component<
   }
 }
 
-/* ── Minimal syntax highlighter (no deps) ──── */
+/* ── Syntax highlighting via shiki (lazy-loaded) ──── */
 
-// Colorize JSON keys, strings, numbers, and booleans inline
-function highlightJson(code: string, showLineNumbers = false): React.ReactNode[] {
-  const lines = code.split("\n");
-  return lines.map((line, li) => {
-    const parts: React.ReactNode[] = [];
-    let rest = line;
-    let ki = 0;
+// Cache the highlight function across tab switches so the wasm init + grammar
+// fetch only runs once per page load.
+let highlightPromise:
+  | Promise<(code: string, lang: "json" | "bash") => Promise<string>>
+  | null = null;
 
-    while (rest.length > 0) {
-      // JSON key (quoted before colon)
-      const keyMatch = rest.match(/^(\s*)"([^"]+)"(\s*:)/);
-      if (keyMatch) {
-        parts.push(<span key={ki++}>{keyMatch[1]}</span>);
-        parts.push(<span key={ki++} className="terminal-key">&quot;{keyMatch[2]}&quot;</span>);
-        parts.push(<span key={ki++}>{keyMatch[3]}</span>);
-        rest = rest.slice(keyMatch[0].length);
-        continue;
-      }
-      // String value
-      const strMatch = rest.match(/^"([^"]*)"/);
-      if (strMatch) {
-        parts.push(<span key={ki++} className="terminal-string">&quot;{strMatch[1]}&quot;</span>);
-        rest = rest.slice(strMatch[0].length);
-        continue;
-      }
-      // Number
-      const numMatch = rest.match(/^(\d+)/);
-      if (numMatch) {
-        parts.push(<span key={ki++} className="terminal-number">{numMatch[1]}</span>);
-        rest = rest.slice(numMatch[0].length);
-        continue;
-      }
-      // Boolean
-      const boolMatch = rest.match(/^(true|false)/);
-      if (boolMatch) {
-        parts.push(<span key={ki++} className="terminal-number">{boolMatch[1]}</span>);
-        rest = rest.slice(boolMatch[0].length);
-        continue;
-      }
-      // Structural characters and whitespace — consume one char
-      parts.push(<span key={ki++} className="terminal-operator">{rest.charAt(0)}</span>);
-      rest = rest.slice(1);
-    }
-
-    return (
-      <div key={li} className="flex code-hover-line">
-        {showLineNumbers && (
-          <span className="code-line-number inline-block shrink-0 font-mono text-[10px]">
-            {li + 1}
-          </span>
-        )}
-        <span>{parts.length > 0 ? parts : "\u00A0"}</span>
-      </div>
-    );
-  });
-}
-
-// Colorize terminal output with status indicators and structural highlights
-function highlightBash(code: string): React.ReactNode[] {
-  const lines = code.split("\n");
-  return lines.map((line, li) => {
-    // Prompt line
-    if (line.match(/^\$ /)) {
-      return (
-        <div key={li}>
-          <span className="terminal-prompt">$ </span>
-          <span className="text-bright">{line.slice(2)}</span>
-        </div>
-      );
-    }
-    // Success check
-    if (line.includes("\u2713")) {
-      const parts = line.split("\u2713");
-      return (
-        <div key={li}>
-          <span className="terminal-dim">{parts[0]}</span>
-          <span className="terminal-success">{"\u2713"}{parts.slice(1).join("\u2713")}</span>
-        </div>
-      );
-    }
-    // Error/failure cross
-    if (line.includes("\u2717")) {
-      const parts = line.split("\u2717");
-      return (
-        <div key={li}>
-          <span className="terminal-dim">{parts[0]}</span>
-          <span className="terminal-error">{"\u2717"}{parts.slice(1).join("\u2717")}</span>
-        </div>
-      );
-    }
-    // Running arrow
-    if (line.includes("\u2192")) {
-      const parts = line.split("\u2192");
-      return (
-        <div key={li}>
-          <span className="terminal-dim">{parts[0]}</span>
-          <span className="terminal-accent">{"\u2192"}{parts.slice(1).join("\u2192")}</span>
-        </div>
-      );
-    }
-    // Timestamp lines [HH:MM:SS]
-    const tsMatch = line.match(/^(\s*\[)(\d{2}:\d{2}:\d{2})(\]\s*)(.*)/);
-    if (tsMatch) {
-      const content = tsMatch[4]!;
-      const hasSuccess = content.includes("\u2713");
-      const hasArrow = content.includes("\u2192");
-      return (
-        <div key={li}>
-          <span className="terminal-dim">{tsMatch[1]}</span>
-          <span className="terminal-number">{tsMatch[2]}</span>
-          <span className="terminal-dim">{tsMatch[3]}</span>
-          <span className={hasSuccess ? "terminal-success" : hasArrow ? "terminal-accent" : "text-body/70"}>
-            {content}
-          </span>
-        </div>
-      );
-    }
-    // Tree lines (box-drawing characters)
-    if (line.match(/^\s*[\u2502\u250C\u251C\u2514\u2500]/)) {
-      // Highlight statuses within tree
-      if (line.includes("[completed]")) {
-        const [before, after] = line.split("[completed]");
-        return (
-          <div key={li}>
-            <span className="terminal-dim">{before}</span>
-            <span className="terminal-success">[completed]</span>
-            <span className="terminal-dim">{after}</span>
-          </div>
-        );
-      }
-      if (line.includes("[running]")) {
-        const [before, after] = line.split("[running]");
-        return (
-          <div key={li}>
-            <span className="terminal-dim">{before}</span>
-            <span className="terminal-accent">[running]</span>
-            <span className="terminal-dim">{after}</span>
-          </div>
-        );
-      }
-      if (line.includes("[waiting]")) {
-        const [before, after] = line.split("[waiting]");
-        return (
-          <div key={li}>
-            <span className="terminal-dim">{before}</span>
-            <span className="text-dim">[waiting]</span>
-            <span className="terminal-dim">{after}</span>
-          </div>
-        );
-      }
-      return <div key={li} className="terminal-dim">{line}</div>;
-    }
-    // "Detecting adapters..." and similar info lines
-    if (line.match(/^\s+\S/) && !line.match(/^\s*\$/)) {
-      return <div key={li} className="text-body/60">{line}</div>;
-    }
-    // Totals/summary lines with $ cost
-    if (line.includes("Total:") || line.includes("$")) {
-      return <div key={li} className="text-bright/80">{line}</div>;
-    }
-    // Empty / default
-    return <div key={li} className="text-body/60">{line || "\u00A0"}</div>;
-  });
+function getHighlight(): Promise<(code: string, lang: "json" | "bash") => Promise<string>> {
+  if (!highlightPromise) {
+    highlightPromise = (async () => {
+      const { codeToHtml } = await import("shiki");
+      return (code: string, lang: "json" | "bash") =>
+        codeToHtml(code, { lang, theme: "github-dark-dimmed" });
+    })();
+  }
+  return highlightPromise;
 }
 
 const STEPS = [
@@ -346,13 +198,25 @@ export function HowItWorks() {
     [activeStep, changeStep],
   );
 
-  const highlightedCode = useMemo(
-    () =>
-      active.lang === "json"
-        ? highlightJson(active.code, true)
-        : highlightBash(active.code),
-    [active.code, active.lang],
-  );
+  const [highlightedHtml, setHighlightedHtml] = useState<string>("");
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const highlight = await getHighlight();
+        const html = await highlight(active.code, active.lang === "json" ? "json" : "bash");
+        if (alive) setHighlightedHtml(html);
+      } catch {
+        // Shiki failed to load (offline, corrupt wasm, etc.) — the error
+        // boundary wrapping the code block will still render a graceful
+        // fallback if rendering blows up downstream.
+        if (alive) setHighlightedHtml("");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [active.code, active.lang]);
 
   return (
     <section className="below-fold relative py-24 sm:py-32 lg:py-40 border-t border-white/[0.06] section-transition">
@@ -488,11 +352,20 @@ export function HowItWorks() {
                         : "linear-gradient(to bottom, rgba(255,92,0,0.02) 0%, transparent 100%)",
                     }}
                   />
-                  <pre className="bg-canvas p-3 sm:p-4 md:p-6 font-mono text-[10px] sm:text-xs md:text-sm leading-relaxed overflow-x-auto whitespace-pre">
-                    <code>
-                      {highlightedCode}
-                    </code>
-                  </pre>
+                  {highlightedHtml ? (
+                    // Shiki emits a full `<pre><code>` element with inline
+                    // theme styles; the outer wrapper keeps our font-size +
+                    // scroll behavior.
+                    <div
+                      className="shiki-container bg-canvas p-3 sm:p-4 md:p-6 font-mono text-[10px] sm:text-xs md:text-sm leading-relaxed overflow-x-auto"
+                      dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+                    />
+                  ) : (
+                    // Pre-load fallback: plain monospace while shiki lazy-loads.
+                    <pre className="bg-canvas p-3 sm:p-4 md:p-6 font-mono text-[10px] sm:text-xs md:text-sm leading-relaxed overflow-x-auto whitespace-pre text-body/80">
+                      <code>{active.code}</code>
+                    </pre>
+                  )}
                 </div>
               </div>
             </CodeBlockErrorBoundary>

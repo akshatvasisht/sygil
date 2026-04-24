@@ -272,26 +272,9 @@ describe("CodexCLIAdapter", () => {
       expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
     });
 
-    it("warns when NodeConfig.tools is non-empty — no upstream allowlist", async () => {
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
-
-      await adapter.spawn({
-        adapter: "codex",
-        model: "o4-mini",
-        role: "agent",
-        prompt: "task",
-        tools: ["Read", "Write"],
-      });
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/codex adapter ignores NodeConfig\.tools.*Read.*Write/)
-      );
-      warnSpy.mockRestore();
-    });
-
+    // Cross-adapter "warns on non-empty tools" coverage lives in
+    // adapters/tools-allowlist-warns.test.ts (describe.each over codex /
+    // cursor / gemini-cli).
   });
 
   // -------------------------------------------------------------------------
