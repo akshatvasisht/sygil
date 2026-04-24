@@ -83,6 +83,25 @@ export type AgentEvent =
       nextAttempt: number;
       delayMs: number;
       reason: string;
+    }
+  | {
+      /**
+       * Emitted when a node begins waiting to acquire a workflow-scoped sync
+       * slot (mutex or semaphore). Precedes the actual acquire — the node may
+       * block in the registry queue until a slot is available.
+       */
+      type: "sync_acquire";
+      key: string;
+      limit: number;
+    }
+  | {
+      /**
+       * Emitted when a node releases its workflow-scoped sync slot (mutex or
+       * semaphore). Always paired with a prior `sync_acquire` on the same key.
+       */
+      type: "sync_release";
+      key: string;
+      limit: number;
     };
 
 export interface NodeResult {

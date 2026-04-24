@@ -255,6 +255,33 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
               </div>
             </div>
           );
+        case "sync_acquire":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <span className="text-accent-cyan shrink-0 mt-0.5 text-[12px]">⊕</span>
+              <div>
+                <span className="text-dim">sync_acquire</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+                <span className="text-dim ml-2 text-[11px]">limit={inner.limit}</span>
+              </div>
+            </div>
+          );
+        case "sync_release":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <span className="text-dim shrink-0 mt-0.5 text-[12px]">⊖</span>
+              <div>
+                <span className="text-dim">sync_release</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+              </div>
+            </div>
+          );
         default:
           return null;
       }

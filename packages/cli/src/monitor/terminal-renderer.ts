@@ -258,6 +258,16 @@ export function formatEventSummary(event: AgentEvent): { type: string; summary: 
         type: "retry_scheduled",
         summary: `retry ${event.attempt}→${event.nextAttempt} in ${event.delayMs}ms (${event.reason})`,
       };
+    case "sync_acquire":
+      return {
+        type: "sync_acquire",
+        summary: `acquiring sync "${event.key}" (limit=${event.limit})`,
+      };
+    case "sync_release":
+      return {
+        type: "sync_release",
+        summary: `released sync "${event.key}"`,
+      };
   }
 }
 

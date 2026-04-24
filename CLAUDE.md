@@ -77,6 +77,7 @@ Don't inline magic values. From `@sygil/shared` or scheduler modules:
 - `DEFAULT_QUEUE_HIGH_WATER_MARK = 1000` — NDJSON event queue backpressure
 - `GATE_SCRIPT_TIMEOUT_MS = 30_000`
 - `KILL_GRACE_PERIOD_MS = 2_000` — SIGTERM → SIGKILL grace in CLI adapter `kill()` (claude-cli, codex-cli, cursor-cli, gemini-cli all share the value; each redeclares it locally)
+- **Sync primitives** — `NodeConfig.synchronization` accepts `{ mutex: "<key>" }` or `{ semaphore: { key, limit } }`. `SyncRegistry` (`scheduler/sync-registry.ts`) acquires before the adapter pool slot and releases in the finally block. First-acquire-wins on limit: two nodes declaring the same key with different limits throw at acquire time.
 
 ### Adapters — per-adapter gotchas
 

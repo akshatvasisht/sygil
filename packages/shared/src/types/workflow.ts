@@ -115,6 +115,14 @@ export interface NodeConfig {
    * handled here.
    */
   retryPolicy?: RetryPolicy;
+  /**
+   * Workflow-scoped sync primitive. Acquired before the adapter pool slot so
+   * nodes sharing the same key cannot run concurrently beyond the declared
+   * limit. A mutex is a semaphore with limit=1.
+   */
+  synchronization?:
+    | { mutex: string }
+    | { semaphore: { key: string; limit: number } };
 }
 
 export interface EdgeConfig {
@@ -287,6 +295,12 @@ export const NodeConfigSchema = z.object({
     .meta({ category: "context" }),
   retryPolicy: RetryPolicySchema.optional()
     .describe("Per-provider retry loop for transient errors; deterministic jitter preserves replay.")
+    .meta({ category: "resilience" }),
+  synchronization: z.union([
+    z.object({ mutex: z.string().min(1) }),
+    z.object({ semaphore: z.object({ key: z.string().min(1), limit: z.number().int().min(1) }) }),
+  ]).optional()
+    .describe("Workflow-scoped sync primitive: mutex (1 concurrent) or semaphore (N concurrent) keyed by arbitrary string. Acquired before the adapter pool slot.")
     .meta({ category: "resilience" }),
 });
 

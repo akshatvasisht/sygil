@@ -19,7 +19,8 @@ export type EventIconKey =
   | "failover"
   | "context"
   | "hook"
-  | "retry";
+  | "retry"
+  | "sync";
 
 export type EventSeverity = "info" | "warn" | "error" | "neutral";
 
@@ -145,6 +146,20 @@ export function eventRenderData(event: AgentEvent): EventRenderData {
         subtitle: `attempt ${event.attempt}→${event.nextAttempt} in ${event.delayMs}ms (${event.reason})`,
         iconKey: "retry",
         severity: "warn",
+      };
+    case "sync_acquire":
+      return {
+        title: "sync_acquire",
+        subtitle: `"${event.key}" limit=${event.limit}`,
+        iconKey: "sync",
+        severity: "info",
+      };
+    case "sync_release":
+      return {
+        title: "sync_release",
+        subtitle: `"${event.key}"`,
+        iconKey: "sync",
+        severity: "info",
       };
   }
 }

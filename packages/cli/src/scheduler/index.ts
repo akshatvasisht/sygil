@@ -35,6 +35,8 @@ import { HookRunner, hookResultToEvent } from "../hooks/hook-runner.js";
 import type { HookContext, HookType, RunReason } from "../hooks/hook-runner.js";
 import type { HooksConfig } from "../utils/config.js";
 import { buildEnvironmentSnapshot } from "./environment.js";
+import { SyncRegistry } from "./sync-registry.js";
+import type { Release } from "./sync-registry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -137,6 +139,8 @@ export class WorkflowScheduler extends EventEmitter {
   private hookRunner: HookRunner | null = null;
   /** Mutex to serialize concurrent runState mutations from parallel node completions. */
   private completionMutex: Promise<void> = Promise.resolve();
+  /** Workflow-scoped sync registry — one instance per executeGraph() call. */
+  private syncRegistry: SyncRegistry | null = null;
 
   constructor(
     private readonly workflow: WorkflowGraph,
@@ -431,6 +435,11 @@ export class WorkflowScheduler extends EventEmitter {
 
     // Pre-compute critical-path weights for priority scheduling
     const criticalPathWeights = computeCriticalPathWeights(this.graphIndex);
+
+    // Instantiate sync registry for this execution — one per executeGraph() call,
+    // same lifecycle as GateEvaluator. Uses critical-path weights to prioritise
+    // higher-value waiters when a sync slot is released.
+    this.syncRegistry = new SyncRegistry(criticalPathWeights);
 
     // Structured concurrency: create an abort tree for this execution
     const abortTree = new AbortTree();
@@ -913,6 +922,23 @@ export class WorkflowScheduler extends EventEmitter {
       spanId,
     });
 
+    // Workflow-scoped synchronization (mutex / semaphore).
+    // Acquired BEFORE the adapter pool slot so nodes sharing a key cannot
+    // run concurrently beyond the declared limit.
+    let syncRelease: Release | undefined;
+    let syncKey: string | undefined;
+    let syncLimit: number | undefined;
+    if (nodeConfig.synchronization) {
+      const s = nodeConfig.synchronization;
+      syncKey = "mutex" in s ? s.mutex : s.semaphore.key;
+      syncLimit = "mutex" in s ? 1 : s.semaphore.limit;
+      const syncAcquireEvent: AgentEvent = { type: "sync_acquire", key: syncKey, limit: syncLimit };
+      this.emit("node_event", nodeId, syncAcquireEvent);
+      this.monitor.emit({ type: "node_event", workflowId, nodeId, event: syncAcquireEvent, traceId, spanId });
+      this.eventRecorder?.record(nodeId, syncAcquireEvent);
+      syncRelease = await this.syncRegistry!.acquire(syncKey, syncLimit, nodeId, signal);
+    }
+
     // Resolve provider-failover list. Legacy nodes without
     // `providers` produce a single-entry list from the top-level adapter/model.
     const providers = resolveProviders(nodeConfig);
@@ -1295,6 +1321,15 @@ export class WorkflowScheduler extends EventEmitter {
       this.monitor.emit({ type: "node_end", workflowId, nodeId, result: errorResult, traceId, spanId });
       throw finalErr;
     } finally {
+      // Release the workflow-scoped sync slot if one was acquired.
+      if (syncRelease && syncKey !== undefined && syncLimit !== undefined) {
+        syncRelease.release();
+        const syncReleaseEvent: AgentEvent = { type: "sync_release", key: syncKey, limit: syncLimit };
+        this.emit("node_event", nodeId, syncReleaseEvent);
+        this.monitor.emit({ type: "node_event", workflowId, nodeId, event: syncReleaseEvent, traceId, spanId });
+        this.eventRecorder?.record(nodeId, syncReleaseEvent);
+      }
+
       // Worktree cleanup: remove this node's temporary worktree after execution
       // (runs once per node regardless of failover attempts).
       if (worktreeManager) {

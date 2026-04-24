@@ -246,6 +246,53 @@
             ],
             "additionalProperties": false,
             "x-category": "resilience"
+          },
+          "synchronization": {
+            "description": "Workflow-scoped sync primitive: mutex (1 concurrent) or semaphore (N concurrent) keyed by arbitrary string. Acquired before the adapter pool slot.",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mutex": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "mutex"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "semaphore": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "limit"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "semaphore"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "x-category": "resilience"
           }
         },
         "required": [
