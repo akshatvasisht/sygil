@@ -22,6 +22,10 @@ coverage/
 .nyc_output/
 *.lcov
 
+# Playwright artefacts
+playwright-report/
+test-results/
+
 # Environment
 .env
 .env.*
@@ -29,8 +33,8 @@ coverage/
 .env.local
 .env.*.local
 
-# Sigil runtime
-.sigil/
+# Sygil runtime
+.sygil/
 
 # Editor / OS
 .DS_Store
@@ -47,8 +51,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Claude agent worktrees
-.claude/worktrees/
+# Claude Code runtime state, worktrees, and user-local settings
+.claude/
 
 # Codegraph local index
 .gitnexus/

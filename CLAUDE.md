@@ -76,7 +76,7 @@ Don't inline magic values. From `@sygil/shared` or scheduler modules:
 - `CHECKPOINT_DEBOUNCE_MS = 100`
 - `DEFAULT_QUEUE_HIGH_WATER_MARK = 1000` — NDJSON event queue backpressure
 - `GATE_SCRIPT_TIMEOUT_MS = 30_000`
-- `KILL_GRACE_PERIOD_MS = 2_000` — cursor adapter kill grace
+- `KILL_GRACE_PERIOD_MS = 2_000` — SIGTERM → SIGKILL grace in CLI adapter `kill()` (claude-cli, codex-cli, cursor-cli, gemini-cli all share the value; each redeclares it locally)
 
 ### Adapters — per-adapter gotchas
 

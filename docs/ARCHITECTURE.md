@@ -51,6 +51,7 @@ TypeScript types, Zod schemas, error codes, and contract validation shared betwe
 - `src/types/events.ts` — `WsServerEvent`, `WsClientEvent`, `WorkflowRunState`, `RecordedEvent`.
 - `src/types/errors.ts` — `SygilErrorCode` enum and `SygilError` interface.
 - `src/utils/contract-validator.ts` — `validateStructuredOutput()` for JSON schema-like structural validation.
+- `src/utils/event-render-data.ts` — `eventRenderData(event)` pure-data projection of every `AgentEvent` variant into `{ title, subtitle?, iconKey, severity }` for downstream terminal and web renderers.
 
 ---
 
