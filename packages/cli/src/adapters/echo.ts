@@ -50,6 +50,10 @@ export class EchoAdapter implements AgentAdapter {
     }
   }
 
+  async getVersion(): Promise<string | null> {
+    return "test-fixture";
+  }
+
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 

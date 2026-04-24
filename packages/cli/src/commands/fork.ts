@@ -8,12 +8,15 @@ import { readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
+import { getAdapter } from "../adapters/index.js";
+import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
 import type { WorkflowRunState, AgentEvent, NodeResult } from "@sygil/shared";
 import { WorkflowRunStateSchema } from "@sygil/shared";
 
 export interface ForkOptions {
   at?: string;
   param?: string[];
+  ignoreDrift?: boolean;
 }
 
 /**
@@ -167,6 +170,26 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
 
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
+
+  // Drift detection: compare stored environment snapshot against current environment.
+  if (parent.environment) {
+    let drift: string[] = [];
+    try {
+      const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
+      drift = diffEnvironment(parent.environment, currentEnv);
+    } catch {
+      // Drift check failure must not block fork
+    }
+    if (drift.length > 0 && !options.ignoreDrift) {
+      console.warn(chalk.yellow("Environment drift detected:"));
+      for (const d of drift) console.warn(`  • ${d}`);
+      console.warn(chalk.dim("Pass --ignore-drift to proceed."));
+      process.exit(1);
+    } else if (drift.length > 0) {
+      console.warn(chalk.yellow("Environment drift detected (proceeding with --ignore-drift):"));
+      for (const d of drift) console.warn(`  • ${d}`);
+    }
+  }
 
   // Construct the fresh child state.
   const childRunId = randomUUID();

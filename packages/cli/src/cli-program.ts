@@ -73,6 +73,7 @@ Control-channel clients (pause/cancel/human-review) must include ?token=<uuid>.
     .command("resume")
     .description("Resume a paused or failed workflow run")
     .argument("<run-id>", "The run ID to resume (from .sygil/runs/<id>.json)")
+    .option("--ignore-drift", "Proceed even if environment has drifted since the checkpoint was created")
     .addHelpText("after", `
 Examples:
   $ sygil resume run-1712345678901-abc123   # full run ID (see \`sygil list\`)
@@ -80,7 +81,7 @@ Examples:
 The <run-id> must match a checkpoint at .sygil/runs/<id>.json exactly.
 Partial or prefix matching is NOT supported — use \`sygil list\` to copy the full ID.
 `)
-    .action(resumeCommand);
+    .action((runId: string, options: { ignoreDrift?: boolean }) => resumeCommand(runId, options));
 
   program
     .command("fork")
@@ -109,7 +110,8 @@ Semantics:
   - Fork v1 does not inherit resolved parameters from the parent checkpoint
     (they aren't persisted). Supply every required parameter via --param.
 `)
-    .action((parentRunId: string, options: { at?: string; param?: string[] }) =>
+    .option("--ignore-drift", "Proceed even if environment has drifted since the checkpoint was created")
+    .action((parentRunId: string, options: { at?: string; param?: string[]; ignoreDrift?: boolean }) =>
       forkCommand(parentRunId, options),
     );
 
@@ -126,19 +128,41 @@ Semantics:
 
   program
     .command("export")
-    .description("Export a bundled template to a file")
+    .description("Export a bundled template to a file or bundle directory")
     .argument("<template>", "Template name (e.g. tdd-feature)")
-    .argument("<output>", "Output file path (e.g. ./my-workflow.json)")
-    .option("--force", "Overwrite the output file if it already exists")
+    .argument("<output>", "Output path — a .json file (default) or directory/tarball when --bundle is set")
+    .option("--force", "Overwrite the output if it already exists")
+    .option("--bundle", "Emit a bundle directory (workflow.json + gate scripts + manifest) instead of a single file")
+    .option("--format <format>", "Bundle format: dir (default) or tarball (.tar.gz)", "dir")
+    .option("--no-include-gate-scripts", "Exclude gate scripts from the bundle")
+    .option("--no-include-specs", "Exclude spec files from the bundle")
     .addHelpText("after", `
 Examples:
   $ sygil export tdd-feature ./my-workflow.json
+  $ sygil export tdd-feature ./my-bundle --bundle
+  $ sygil export tdd-feature ./my-bundle --bundle --format=tarball
   $ sygil export optimize ./outer-loop.json --force
 
 Bundled templates: bug-fix, code-review, optimize, quick-review, ralph, tdd-feature.
 `)
-    .action((template: string, output: string, options: { force?: boolean }) =>
-      exportCommand(template, output, { force: options.force === true }),
+    .action((
+      template: string,
+      output: string,
+      options: {
+        force?: boolean;
+        bundle?: boolean;
+        format?: string;
+        includeGateScripts?: boolean;
+        includeSpecs?: boolean;
+      },
+    ) =>
+      exportCommand(template, output, {
+        force: options.force === true,
+        bundle: options.bundle === true,
+        format: (options.format === "tarball" ? "tarball" : "dir") as "dir" | "tarball",
+        includeGateScripts: options.includeGateScripts !== false,
+        includeSpecs: options.includeSpecs !== false,
+      }),
     );
 
   program

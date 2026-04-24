@@ -34,6 +34,7 @@ import { EventRecorder } from "./event-recorder.js";
 import { HookRunner, hookResultToEvent } from "../hooks/hook-runner.js";
 import type { HookContext, HookType, RunReason } from "../hooks/hook-runner.js";
 import type { HooksConfig } from "../utils/config.js";
+import { buildEnvironmentSnapshot } from "./environment.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -170,6 +171,16 @@ export class WorkflowScheduler extends EventEmitter {
       retryCounters: {},
       sharedContext: {},
     };
+
+    // Populate environment snapshot (best-effort, non-blocking)
+    try {
+      runState.environment = await buildEnvironmentSnapshot(
+        this.workflow,
+        this.adapterFactory,
+      );
+    } catch {
+      // Environment snapshot failure must not block the run
+    }
 
     this.state = "running";
     this.retryCounters.clear();

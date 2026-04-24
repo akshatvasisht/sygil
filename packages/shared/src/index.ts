@@ -2,6 +2,7 @@ export * from "./types/workflow.js";
 export * from "./types/adapter.js";
 export * from "./types/events.js";
 export * from "./types/errors.js";
+export * from "./types/manifest.js";
 export * from "./utils/contract-validator.js";
 export * from "./utils/event-render-data.js";
 export * from "./utils/zod-to-json-schema.js";

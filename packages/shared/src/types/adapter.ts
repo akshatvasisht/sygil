@@ -29,6 +29,13 @@ export interface AgentAdapter {
   stream(session: AgentSession): AsyncIterable<AgentEvent>;
   getResult(session: AgentSession): Promise<NodeResult>;
   kill(session: AgentSession): Promise<void>;
+  /**
+   * Optional: return the version string of the underlying tool or SDK.
+   * Used by the environment snapshot to capture adapter versions at run start.
+   * Returns null when the version cannot be determined (missing binary, network
+   * error, etc.). Optional so existing adapters need not implement it.
+   */
+  getVersion?(): Promise<string | null>;
 }
 
 export interface AgentSession {

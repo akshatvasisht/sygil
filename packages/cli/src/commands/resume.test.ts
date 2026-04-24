@@ -20,7 +20,18 @@ vi.mock("../adapters/index.js", () => ({
     stream: vi.fn(),
     getResult: vi.fn(),
     kill: vi.fn(),
+    getVersion: vi.fn().mockResolvedValue("test-fixture"),
   }),
+}));
+
+vi.mock("../scheduler/environment.js", () => ({
+  buildEnvironmentSnapshot: vi.fn().mockResolvedValue({
+    sygilVersion: "0.1.0",
+    adapterVersions: { echo: "test-fixture" },
+    nodeVersion: "20.0.0",
+    platform: "linux-x64",
+  }),
+  diffEnvironment: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("../scheduler/index.js", () => ({
@@ -50,12 +61,14 @@ import { readFile } from "node:fs/promises";
 import { loadWorkflow } from "../utils/workflow.js";
 import { WorkflowScheduler } from "../scheduler/index.js";
 import { WsMonitorServer } from "../monitor/websocket.js";
+import { diffEnvironment } from "../scheduler/environment.js";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- WorkflowScheduler is a mock constructor
 const MockScheduler = WorkflowScheduler as any;
 const MockMonitor = WsMonitorServer as ReturnType<typeof vi.fn>;
+const mockDiffEnvironment = diffEnvironment as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -316,5 +329,76 @@ describe("resumeCommand", () => {
     expect(events).toContain("node_start");
     expect(events).toContain("node_event");
     expect(events).toContain("node_end");
+  });
+
+  describe("drift detection", () => {
+    it("exits 1 when environment drift is detected and --ignore-drift is not set", async () => {
+      const state = makeRunState({
+        status: "paused",
+        workflowPath: "/fake/workflow.json",
+        environment: {
+          sygilVersion: "0.1.0",
+          adapterVersions: { "claude-cli": "2.5.0" },
+          nodeVersion: "20.0.0",
+          platform: "linux-x64",
+        },
+      });
+      mockReadFile.mockResolvedValue(JSON.stringify(state));
+      mockLoadWorkflow.mockResolvedValue({
+        version: "1",
+        name: "test-workflow",
+        nodes: { nodeA: { adapter: "claude-cli", model: "claude-3", role: "agent", prompt: "p" } },
+        edges: [],
+      });
+      // Simulate drift: adapter version changed
+      mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
+
+      await expect(resumeCommand("run-abc12345", {})).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("proceeds when --ignore-drift is set even with drift", async () => {
+      const state = makeRunState({
+        status: "paused",
+        workflowPath: "/fake/workflow.json",
+        environment: {
+          sygilVersion: "0.1.0",
+          adapterVersions: { "claude-cli": "2.5.0" },
+          nodeVersion: "20.0.0",
+          platform: "linux-x64",
+        },
+      });
+      mockReadFile.mockResolvedValue(JSON.stringify(state));
+      mockLoadWorkflow.mockResolvedValue({
+        version: "1",
+        name: "test-workflow",
+        nodes: { nodeA: { adapter: "claude-cli", model: "claude-3", role: "agent", prompt: "p" } },
+        edges: [],
+      });
+      mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
+
+      // Should not exit 1
+      await resumeCommand("run-abc12345", { ignoreDrift: true });
+      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    });
+
+    it("proceeds without drift check when state has no environment field", async () => {
+      const state = makeRunState({
+        status: "paused",
+        workflowPath: "/fake/workflow.json",
+        // No environment field
+      });
+      mockReadFile.mockResolvedValue(JSON.stringify(state));
+      mockLoadWorkflow.mockResolvedValue({
+        version: "1",
+        name: "test-workflow",
+        nodes: { nodeA: {} },
+        edges: [],
+      });
+      mockDiffEnvironment.mockReturnValue([]);
+
+      await resumeCommand("run-abc12345", {});
+      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    });
   });
 });

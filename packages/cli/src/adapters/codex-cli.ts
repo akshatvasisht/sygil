@@ -59,6 +59,20 @@ export class CodexCLIAdapter implements AgentAdapter {
     }
   }
 
+  async getVersion(): Promise<string | null> {
+    try {
+      const out = execSync("codex --version", {
+        encoding: "utf8",
+        timeout: 1_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const firstLine = out.split("\n")[0]?.trim();
+      return firstLine ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     if (config.outputSchema) {
       logger.info(

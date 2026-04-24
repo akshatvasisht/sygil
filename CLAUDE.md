@@ -172,6 +172,43 @@ All path-based gate conditions (`file_exists`, `regex`, `script`, `spec_complian
 
 ---
 
+## Bundle format (sygil export --bundle)
+
+`sygil export <template> <output> --bundle` emits a directory containing:
+
+```
+output/
+  sygil-manifest.json   – SygilManifest (sygilVersion, workflow, adapters, assets, createdAt)
+  workflow.json         – the workflow graph
+  gates/<script>.sh     – referenced script-gate files (if any)
+  specs/<file>.md       – referenced spec-compliance files (if any)
+```
+
+With `--format=tarball` the directory is packed into `<output>.tar.gz` (requires `tar@^7.5.13`, already in dependencies).
+
+`sygil import-template <path-or-url>` auto-detects the format:
+- `.tar.gz` → extracts to a temp dir first, then validates manifest
+- directory with `sygil-manifest.json` → treated as a bundle dir
+- `.json` file or URL → legacy single-file import
+
+After import, files land at `~/.sygil/templates/<name>/`. Manifest validation uses `SygilManifestSchema.safeParse`; malformed manifests are rejected. Missing adapters produce a warning (not a hard error).
+
+---
+
+## Environment snapshot in WorkflowRunState
+
+`WorkflowRunState.environment` (optional, backward-compat) captures:
+- `sygilVersion` — Sygil CLI version (from `packages/cli/package.json`)
+- `adapterVersions` — version strings keyed by adapter type (only adapters used by the workflow; populated by the optional `AgentAdapter.getVersion()` method)
+- `envVarHashes` — `sha256(name + ":" + first10chars(value))` truncated to 16 hex chars for `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CURSOR_API_KEY`, `SYGIL_LOCAL_OAI_URL`, `SYGIL_LOCAL_OAI_KEY`
+- `nodeVersion`, `platform`
+
+On `sygil resume` and `sygil fork`, the stored snapshot is compared to a fresh one via `diffEnvironment`. Any difference (version bumps, key rotations, platform changes) is printed as a yellow warning and the command exits 1. Pass `--ignore-drift` to proceed anyway.
+
+Old checkpoints without the `environment` field still parse and resume/fork without drift warnings.
+
+---
+
 ## Common pitfalls
 
 | Symptom | Cause | Fix |
@@ -186,3 +223,5 @@ All path-based gate conditions (`file_exists`, `regex`, `script`, `spec_complian
 | WebSocket control events silently ignored | Client not authenticated | Connect with `?token=<authToken>` |
 | `interpolateWorkflow` throws after valid params | Injected JSON structure fails re-validation | Working as intended |
 | `Module '"@sygil/shared"' has no exported member` | Shared not rebuilt after type change | `cd packages/shared && npx tsc` |
+| `sygil resume` exits 1 with "drift detected" | Adapter version or env var changed since checkpoint | Pass `--ignore-drift` or investigate the change |
+| Bundle import fails with "not a Sygil bundle" | Input is a plain directory without `sygil-manifest.json` | Use `sygil export --bundle` to create a proper bundle |

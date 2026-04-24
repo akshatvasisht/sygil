@@ -81,6 +81,20 @@ export class GeminiCLIAdapter implements AgentAdapter {
     return true;
   }
 
+  async getVersion(): Promise<string | null> {
+    try {
+      const out = execSync("gemini --version", {
+        encoding: "utf8",
+        timeout: 1_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const firstLine = out.split("\n")[0]?.trim();
+      return firstLine ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private _buildArgs(prompt: string, config: NodeConfig): string[] {
     const args: string[] = [
       "-p", prompt,

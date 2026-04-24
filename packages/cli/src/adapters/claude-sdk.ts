@@ -73,6 +73,17 @@ export class ClaudeSDKAdapter implements AgentAdapter {
     }
   }
 
+  async getVersion(): Promise<string | null> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore -- optional peer dep, may not be installed
+      const pkg = await import("@anthropic-ai/claude-agent-sdk/package.json").catch(() => null) as { version?: string } | null;
+      return pkg?.version ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore -- optional peer dep, may not be installed

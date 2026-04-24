@@ -99,6 +99,23 @@ export class LocalOaiAdapter implements AgentAdapter {
     }
   }
 
+  async getVersion(): Promise<string | null> {
+    const baseUrl =
+      process.env["SYGIL_LOCAL_OAI_URL"]?.replace(/\/+$/, "") ?? DEFAULT_BASE_URL;
+    const apiKey = process.env["SYGIL_LOCAL_OAI_KEY"] ?? DEFAULT_API_KEY;
+    try {
+      const res = await fetch(`${baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(AVAILABILITY_PROBE_TIMEOUT_MS),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { data?: Array<{ id?: string }> };
+      return data?.data?.[0]?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const { baseUrl, apiKey } = this._resolveEndpoint(config);
     const internal: LocalOaiInternal = {

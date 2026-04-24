@@ -95,6 +95,20 @@ export class CursorCLIAdapter implements AgentAdapter {
     return true;
   }
 
+  async getVersion(): Promise<string | null> {
+    try {
+      const out = execSync("agent --version", {
+        encoding: "utf8",
+        timeout: 1_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const firstLine = out.split("\n")[0]?.trim();
+      return firstLine ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private _buildArgs(prompt: string, config: NodeConfig, resumeSessionId?: string): string[] {
     const args: string[] = [];
 

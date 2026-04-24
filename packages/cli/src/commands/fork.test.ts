@@ -14,6 +14,27 @@ vi.mock("./_scheduler-bootstrap.js", () => ({
   buildSchedulerContext: vi.fn(),
 }));
 
+vi.mock("../adapters/index.js", () => ({
+  getAdapter: vi.fn().mockReturnValue({
+    isAvailable: vi.fn().mockResolvedValue(true),
+    spawn: vi.fn(),
+    stream: vi.fn(),
+    getResult: vi.fn(),
+    kill: vi.fn(),
+    getVersion: vi.fn().mockResolvedValue("test-fixture"),
+  }),
+}));
+
+vi.mock("../scheduler/environment.js", () => ({
+  buildEnvironmentSnapshot: vi.fn().mockResolvedValue({
+    sygilVersion: "0.1.0",
+    adapterVersions: { echo: "test-fixture" },
+    nodeVersion: "20.0.0",
+    platform: "linux-x64",
+  }),
+  diffEnvironment: vi.fn().mockReturnValue([]),
+}));
+
 vi.mock("../utils/workflow.js", () => ({
   loadWorkflow: vi.fn(),
   interpolateWorkflow: vi.fn((wf: unknown) => wf),
@@ -33,9 +54,11 @@ vi.mock("../utils/config.js", () => ({
 
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { loadWorkflow } from "../utils/workflow.js";
+import { diffEnvironment } from "../scheduler/environment.js";
 
 const mockBuildContext = buildSchedulerContext as ReturnType<typeof vi.fn>;
 const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
+const mockDiffEnvironment = diffEnvironment as ReturnType<typeof vi.fn>;
 
 describe("forkCommand", () => {
   let testDir: string;
@@ -231,6 +254,50 @@ describe("forkCommand", () => {
     const parentId = await seedParent();
     await expect(forkCommand(parentId, { param: ["nokey"] })).rejects.toThrow("process.exit(1)");
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringMatching(/Invalid parameter format/));
+  });
+
+  describe("drift detection", () => {
+    it("exits 1 when environment drift is detected and --ignore-drift is not set", async () => {
+      const parentId = await seedParent({
+        environment: {
+          sygilVersion: "0.1.0",
+          adapterVersions: { "claude-cli": "2.5.0" },
+          nodeVersion: "20.0.0",
+          platform: "linux-x64",
+        },
+      });
+      mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
+
+      await expect(forkCommand(parentId, {})).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("proceeds when --ignore-drift is set even with drift", async () => {
+      const parentId = await seedParent({
+        environment: {
+          sygilVersion: "0.1.0",
+          adapterVersions: { "claude-cli": "2.5.0" },
+          nodeVersion: "20.0.0",
+          platform: "linux-x64",
+        },
+      });
+      mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
+
+      await forkCommand(parentId, { ignoreDrift: true });
+      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+      expect(schedulerResume).toHaveBeenCalledOnce();
+    });
+
+    it("proceeds without drift when state has no environment field", async () => {
+      const parentId = await seedParent();
+      // No environment in parent state — mockDiffEnvironment should not be called
+      mockDiffEnvironment.mockReturnValue(["some-drift"]);
+
+      await forkCommand(parentId, {});
+      // Should succeed since no environment field to compare against
+      expect(schedulerResume).toHaveBeenCalledOnce();
+      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    });
   });
 
 });

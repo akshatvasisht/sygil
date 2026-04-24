@@ -7,10 +7,12 @@ import { readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
+import { getAdapter } from "../adapters/index.js";
+import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
 import type { WorkflowRunState, AgentEvent } from "@sygil/shared";
 import { WorkflowRunStateSchema } from "@sygil/shared";
 
-export async function resumeCommand(runId: string): Promise<void> {
+export async function resumeCommand(runId: string, options: { ignoreDrift?: boolean } = {}): Promise<void> {
   // Reap orphan `.git/worktrees/` entries from prior SIGINT'd runs.
   // Cheap, idempotent, and silent on non-git directories.
   await pruneWorktrees();
@@ -116,6 +118,26 @@ export async function resumeCommand(runId: string): Promise<void> {
   // so resumed runs see the same override logic the original run used.
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
+
+  // Drift detection: compare stored environment snapshot against current environment.
+  if (state.environment) {
+    let drift: string[] = [];
+    try {
+      const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
+      drift = diffEnvironment(state.environment, currentEnv);
+    } catch {
+      // Drift check failure must not block resume
+    }
+    if (drift.length > 0 && !options.ignoreDrift) {
+      console.warn(chalk.yellow("Environment drift detected:"));
+      for (const d of drift) console.warn(`  • ${d}`);
+      console.warn(chalk.dim("Pass --ignore-drift to proceed."));
+      process.exit(1);
+    } else if (drift.length > 0) {
+      console.warn(chalk.yellow("Environment drift detected (proceeding with --ignore-drift):"));
+      for (const d of drift) console.warn(`  • ${d}`);
+    }
+  }
 
   // Build scheduler context (monitor + scheduler) via the shared bootstrap.
   const ctx = await buildSchedulerContext({

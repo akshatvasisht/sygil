@@ -124,6 +124,32 @@ export interface RecordedEvent {
   event: AgentEvent;
 }
 
+/**
+ * Environment snapshot captured at run start. Used for drift detection on
+ * `sygil resume` and `sygil fork`. All fields are optional so checkpoints
+ * written before this field was added continue to parse.
+ */
+export interface EnvironmentSnapshot {
+  /** Sygil CLI version from packages/cli/package.json at build time. */
+  sygilVersion: string;
+  /**
+   * Versions of adapters used by this workflow, keyed by adapter type.
+   * Only adapters actually referenced by workflow nodes are included.
+   * Absent keys mean that adapter wasn't probed (or returned null).
+   */
+  adapterVersions: Record<string, string>;
+  /**
+   * Truncated hashes of relevant env vars. `sha256(name + ":" + value.slice(0, 10))`
+   * truncated to 16 hex chars — enough entropy for rotation detection without
+   * exposing secrets.
+   */
+  envVarHashes?: Record<string, string>;
+  /** `process.versions.node` at run start. */
+  nodeVersion: string;
+  /** `${process.platform}-${process.arch}` at run start. */
+  platform: string;
+}
+
 /** Persisted state for a workflow run — written to .sygil/runs/<id>.json */
 export interface WorkflowRunState {
   id: string;
@@ -154,6 +180,12 @@ export interface WorkflowRunState {
     runId: string;
     checkpointIndex: number;
   };
+  /**
+   * Captured at `run()` start. Used by `sygil resume` and `sygil fork` to
+   * detect environment drift (adapter version bumps, key rotations, etc.).
+   * Absent on checkpoints written before this field was introduced.
+   */
+  environment?: EnvironmentSnapshot;
 }
 
 const NodeResultSchema = z.object({
@@ -198,5 +230,16 @@ export const WorkflowRunStateSchema = z.object({
       runId: z.string(),
       checkpointIndex: z.number().int().nonnegative(),
     })
+    .optional(),
+  // environment is absent on checkpoints written before B.2 was introduced.
+  environment: z
+    .object({
+      sygilVersion: z.string(),
+      adapterVersions: z.record(z.string(), z.string()),
+      envVarHashes: z.record(z.string(), z.string()).optional(),
+      nodeVersion: z.string(),
+      platform: z.string(),
+    })
+    .passthrough()
     .optional(),
 }).passthrough();
