@@ -88,7 +88,7 @@ Partial or prefix matching is NOT supported — use \`sygil list\` to copy the f
     .argument("<run-id>", "Parent run ID to fork from (see `sygil list`)")
     .option(
       "--at <checkpointIndex>",
-      "Keep only the first N completed nodes of the parent. Default: keep all completed nodes.",
+      "Keep only the first N completed nodes of the parent. Clamped to the parent's completed count. Default: keep all.",
     )
     .option(
       "-p, --param <pairs...>",

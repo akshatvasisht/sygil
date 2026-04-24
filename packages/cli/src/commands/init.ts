@@ -246,6 +246,21 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
     `\n${chalk.dim("Config written to")} ${chalk.cyan(`${configDirDisplay}/config.json`)}\n`
   );
 
+  // Next steps hint
+  if (availableAdapters.length === 0) {
+    console.log(
+      chalk.bold.red(
+        "No adapters are available. Install at least one (e.g., `npm install -g @anthropic-ai/claude-code` and set ANTHROPIC_API_KEY) before exporting a template."
+      )
+    );
+    console.log("");
+  }
+
+  console.log(chalk.dim("Next steps:"));
+  console.log(`  ${chalk.cyan("sygil export tdd-feature ./workflow.json")}  ${chalk.dim("# export a bundled template")}`);
+  console.log(`  ${chalk.cyan('sygil run ./workflow.json "your task here"')}  ${chalk.dim("# run it")}`);
+  console.log("");
+
   // Print telemetry status message
   if (options.telemetry === true) {
     console.log(

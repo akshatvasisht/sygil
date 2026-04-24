@@ -6,3 +6,4 @@ export * from "./utils/contract-validator.js";
 export * from "./utils/event-render-data.js";
 export * from "./utils/zod-to-json-schema.js";
 export * from "./validators/tool-validator.js";
+export * from "./adapter-parity.js";

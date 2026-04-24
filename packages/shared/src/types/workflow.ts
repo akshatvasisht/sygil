@@ -162,39 +162,65 @@ export interface ParameterConfig {
 // ---------------------------------------------------------------------------
 
 export const GateConditionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("exit_code"), value: z.number().int() }),
-  z.object({ type: z.literal("file_exists"), path: z.string().min(1) }),
-  z.object({ type: z.literal("regex"), filePath: z.string().min(1), pattern: z.string().min(1) }),
-  z.object({ type: z.literal("script"), path: z.string().min(1) }),
-  z.object({ type: z.literal("human_review"), prompt: z.string().optional() }),
+  z.object({
+    type: z.literal("exit_code"),
+    value: z.number().int().describe("Expected exit code — gate passes when the node's exit code matches."),
+  }).describe("Pass when the upstream node's exit code equals the expected value."),
+  z.object({
+    type: z.literal("file_exists"),
+    path: z.string().min(1).describe("Path relative to the node's outputDir; absolute paths and traversal are rejected."),
+  }).describe("Pass when a file exists at the given path within the node's outputDir."),
+  z.object({
+    type: z.literal("regex"),
+    filePath: z.string().min(1).describe("Path (outputDir-relative) to a file whose contents are tested against the pattern."),
+    pattern: z.string().min(1).describe("JavaScript-flavoured regex compiled with default flags."),
+  }).describe("Pass when a regex matches anywhere in the target file's contents."),
+  z.object({
+    type: z.literal("script"),
+    path: z.string().min(1).describe("Executable gate script; must resolve inside outputDir or templates/gates/."),
+  }).describe("Pass when the gate script exits with code 0; receives SYGIL_EXIT_CODE/OUTPUT_DIR/OUTPUT in env."),
+  z.object({
+    type: z.literal("human_review"),
+    prompt: z.string().optional().describe("Reviewer-facing question; defaults to a generic approve/reject prompt."),
+  }).describe("Pause the workflow until a human approves or rejects via CLI or monitor."),
   z.object({
     type: z.literal("spec_compliance"),
-    specPath: z.string().min(1),
-    mode: z.enum(["exact", "superset"]),
-  }),
+    specPath: z.string().min(1).describe("Path to the spec markdown; must resolve inside outputDir or templates/specs/."),
+    mode: z.enum(["exact", "superset"]).describe("exact = output must match spec verbatim; superset = spec must be covered by output."),
+  }).describe("Pass when the upstream node's output conforms to the named spec."),
 ]);
 
 export const GateConfigSchema = z.object({
-  conditions: z.array(GateConditionSchema).min(1),
+  conditions: z.array(GateConditionSchema).min(1).describe("AND-joined conditions; every condition must pass for the gate to pass."),
 });
 
 export const ContractConfigSchema = z.object({
-  outputSchema: z.record(z.string(), z.unknown()).optional(),
-  inputMapping: z.record(z.string(), z.string()).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional()
+    .describe("JSON Schema the upstream node's output must satisfy before traversing this edge."),
+  inputMapping: z.record(z.string(), z.string()).optional()
+    .describe("Legacy field → field mapping from upstream output into downstream context."),
 });
 
 export const ProviderConfigSchema = z.object({
-  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"]),
-  model: z.string().min(1).optional(),
-  priority: z.number().int(),
+  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"])
+    .describe("Adapter type to use for this provider attempt."),
+  model: z.string().min(1).optional()
+    .describe("Model ID for this provider; falls back to the node's top-level model when omitted."),
+  priority: z.number().int()
+    .describe("Lower numbers run first; ties break by declaration order."),
 });
 
 export const RetryPolicySchema = z.object({
-  maxAttempts: z.number().int().min(1),
-  initialDelayMs: z.number().int().min(0),
-  backoffMultiplier: z.number().min(1),
-  maxDelayMs: z.number().int().min(0),
-  retryableErrors: z.array(z.enum(["transport", "rate_limit", "server_5xx"])).min(1).optional(),
+  maxAttempts: z.number().int().min(1)
+    .describe("Total attempts including the first; 1 disables retries."),
+  initialDelayMs: z.number().int().min(0)
+    .describe("Delay before the second attempt; subsequent delays multiply by backoffMultiplier."),
+  backoffMultiplier: z.number().min(1)
+    .describe("Multiplier applied between attempts; 1 = constant delay, 2 = classic exponential."),
+  maxDelayMs: z.number().int().min(0)
+    .describe("Upper bound on computed delay; must be >= initialDelayMs."),
+  retryableErrors: z.array(z.enum(["transport", "rate_limit", "server_5xx"])).min(1).optional()
+    .describe("Opt-in whitelist of transient error classes; omitted = all three classes retry."),
 }).superRefine((policy, ctx) => {
   if (policy.maxDelayMs < policy.initialDelayMs) {
     ctx.addIssue({
@@ -205,35 +231,87 @@ export const RetryPolicySchema = z.object({
 });
 
 export const NodeConfigSchema = z.object({
-  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"]),
-  model: z.string().min(1),
-  role: z.string().min(1),
-  prompt: z.string().min(1),
-  tools: z.array(z.string()).optional(),
-  disallowedTools: z.array(z.string()).optional(),
-  outputDir: z.string().optional(),
-  expectedOutputs: z.array(z.string()).optional(),
-  outputSchema: z.record(z.string(), z.unknown()).optional(),
-  maxTurns: z.number().int().positive().optional(),
-  maxBudgetUsd: z.number().positive().optional(),
-  timeoutMs: z.number().int().positive().optional(),
-  idleTimeoutMs: z.number().int().positive().optional(),
-  sandbox: z.enum(["read-only", "workspace-write", "full-access"]).optional(),
-  providers: z.array(ProviderConfigSchema).min(1).optional(),
-  modelTier: z.enum(["cheap", "smart"]).optional(),
-  writesContext: z.array(z.string().min(1)).optional(),
-  readsContext: z.array(z.string().min(1)).optional(),
-  retryPolicy: RetryPolicySchema.optional(),
+  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"])
+    .describe("Agent adapter to spawn; controls how the prompt is executed and which CLI/SDK is used.")
+    .meta({ category: "core" }),
+  model: z.string().min(1)
+    .describe("Model ID passed to the adapter; resolved from modelTier before scheduler start when a tier mapping exists.")
+    .meta({ category: "core" }),
+  role: z.string().min(1)
+    .describe("Free-form label shown in the monitor and logs; no behavioral effect.")
+    .meta({ category: "core" }),
+  prompt: z.string().min(1)
+    .describe("Prompt text; supports {{parameters.X}}, {{nodes.X.output}}, and {{ctx.X}} interpolation.")
+    .meta({ category: "core" }),
+  tools: z.array(z.string()).optional()
+    .describe("Allowlist of tool names the agent may call; adapter support varies — see ADAPTER_MATRIX.")
+    .meta({ category: "contract" }),
+  disallowedTools: z.array(z.string()).optional()
+    .describe("Blocklist of tool names the agent must not call; adapter support mirrors tools.")
+    .meta({ category: "contract" }),
+  outputDir: z.string().optional()
+    .describe("Working directory for file-based gate checks; defaults to the run's working directory.")
+    .meta({ category: "contract" }),
+  expectedOutputs: z.array(z.string()).optional()
+    .describe("Paths (outputDir-relative) expected to exist after the node completes; surfaced to gates and monitors.")
+    .meta({ category: "contract" }),
+  outputSchema: z.record(z.string(), z.unknown()).optional()
+    .describe("JSON Schema the node's structured output must conform to; adapters that support strict mode enforce it provider-side.")
+    .meta({ category: "contract" }),
+  maxTurns: z.number().int().positive().optional()
+    .describe("Upper bound on agent turns; adapter support varies — several CLIs ignore this field.")
+    .meta({ category: "limits" }),
+  maxBudgetUsd: z.number().positive().optional()
+    .describe("Cost ceiling in USD; node fails with a budget error when exceeded (adapters that report cost).")
+    .meta({ category: "limits" }),
+  timeoutMs: z.number().int().positive().optional()
+    .describe("Wall-clock timeout; node is cancelled via SIGTERM→SIGKILL when exceeded.")
+    .meta({ category: "limits" }),
+  idleTimeoutMs: z.number().int().positive().optional()
+    .describe("Idle timeout; node is cancelled when no AgentEvent is received for this long.")
+    .meta({ category: "limits" }),
+  sandbox: z.enum(["read-only", "workspace-write", "full-access"]).optional()
+    .describe("Filesystem permission boundary for sandbox-aware adapters (codex, cursor).")
+    .meta({ category: "contract" }),
+  providers: z.array(ProviderConfigSchema).min(1).optional()
+    .describe("Failover list; scheduler tries providers in priority order on transient errors and takes precedence over top-level adapter.")
+    .meta({ category: "resilience" }),
+  modelTier: z.enum(["cheap", "smart"]).optional()
+    .describe("Symbolic tier resolved at workflow-load time via .sygil/config.json > tiers; overrides model with the mapped value.")
+    .meta({ category: "resilience" }),
+  writesContext: z.array(z.string().min(1)).optional()
+    .describe("Allowlist of sharedContext keys this node may write via context_set events; unlisted writes are dropped.")
+    .meta({ category: "context" }),
+  readsContext: z.array(z.string().min(1)).optional()
+    .describe("sharedContext keys interpolated into the prompt via {{ctx.<key>}}; missing keys resolve to empty string.")
+    .meta({ category: "context" }),
+  retryPolicy: RetryPolicySchema.optional()
+    .describe("Per-provider retry loop for transient errors; deterministic jitter preserves replay.")
+    .meta({ category: "resilience" }),
 });
 
 export const EdgeConfigSchema = z.object({
-  id: z.string().min(1),
-  from: z.string().min(1),
-  to: z.string().min(1),
-  gate: GateConfigSchema.optional(),
-  contract: ContractConfigSchema.optional(),
-  isLoopBack: z.boolean().optional(),
-  maxRetries: z.number().int().positive().optional(),
+  id: z.string().min(1)
+    .describe("Unique edge identifier; used for gate attribution in the monitor and logs.")
+    .meta({ category: "core" }),
+  from: z.string().min(1)
+    .describe("Source node ID; must match a key in workflow.nodes.")
+    .meta({ category: "core" }),
+  to: z.string().min(1)
+    .describe("Destination node ID; must match a key in workflow.nodes.")
+    .meta({ category: "core" }),
+  gate: GateConfigSchema.optional()
+    .describe("Conditions evaluated after the source node completes; failure blocks traversal.")
+    .meta({ category: "core" }),
+  contract: ContractConfigSchema.optional()
+    .describe("Output contract enforced on the source node's structured output before traversal.")
+    .meta({ category: "core" }),
+  isLoopBack: z.boolean().optional()
+    .describe("True for back-edges that create loops; requires maxRetries.")
+    .meta({ category: "resilience" }),
+  maxRetries: z.number().int().positive().optional()
+    .describe("Upper bound on loop-back traversals for this edge; required when isLoopBack is true.")
+    .meta({ category: "resilience" }),
 }).superRefine((edge, ctx) => {
   if (edge.isLoopBack && edge.maxRetries === undefined) {
     ctx.addIssue({
@@ -244,10 +322,14 @@ export const EdgeConfigSchema = z.object({
 });
 
 export const ParameterConfigSchema = z.object({
-  type: z.enum(["string", "number", "boolean"]),
-  description: z.string().optional(),
-  required: z.boolean().optional(),
-  default: z.unknown().optional(),
+  type: z.enum(["string", "number", "boolean"])
+    .describe("Parameter primitive type; governs how CLI flags are parsed."),
+  description: z.string().optional()
+    .describe("Human-readable description shown in help text and the editor's Run modal."),
+  required: z.boolean().optional()
+    .describe("When true, the parameter must be provided at run time; no default is consulted."),
+  default: z.unknown().optional()
+    .describe("Value used when the parameter is omitted at run time; type must match the declared type."),
 });
 
 export interface NodeExecutionStatus {
@@ -258,12 +340,19 @@ export interface NodeExecutionStatus {
 }
 
 export const WorkflowGraphSchema = z.object({
-  version: z.string(),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  nodes: z.record(z.string(), NodeConfigSchema).refine(nodes => Object.keys(nodes).length > 0, "Workflow must have at least one node"),
-  edges: z.array(EdgeConfigSchema),
-  parameters: z.record(z.string(), ParameterConfigSchema).optional(),
+  version: z.string()
+    .describe("Workflow schema version string; authored templates currently use \"1.0\"."),
+  name: z.string().min(1)
+    .describe("Human-readable workflow name; shown in the monitor title and CLI logs."),
+  description: z.string().optional()
+    .describe("Optional longer description surfaced in share bundles and the editor."),
+  nodes: z.record(z.string(), NodeConfigSchema)
+    .refine(nodes => Object.keys(nodes).length > 0, "Workflow must have at least one node")
+    .describe("Node definitions keyed by stable node ID; order is irrelevant to execution."),
+  edges: z.array(EdgeConfigSchema)
+    .describe("Directed edges between nodes; gates and contracts are attached here, not on nodes."),
+  parameters: z.record(z.string(), ParameterConfigSchema).optional()
+    .describe("Run-time parameters surfaced as CLI flags and editor form fields."),
 }).superRefine((graph, ctx) => {
   const nodeIds = new Set(Object.keys(graph.nodes));
   const edgeIds = new Set<string>();

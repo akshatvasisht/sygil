@@ -133,9 +133,10 @@ export async function listCommand(): Promise<void> {
       const cost =
         state.totalCostUsd > 0 ? chalk.dim(` $${state.totalCostUsd.toFixed(4)}`) : "";
 
+      const shortId = state.id.length > 12 ? state.id.slice(0, 12) + "…" : state.id;
       console.log(
         `  ${colorFn(state.status.padEnd(10))} ` +
-          `${chalk.bold(state.id)}  ` +
+          `${chalk.bold(shortId)}  ` +
           `${chalk.cyan(state.workflowName.padEnd(20))} ` +
           `${chalk.dim(startedAt)}${cost}`
       );
@@ -144,5 +145,7 @@ export async function listCommand(): Promise<void> {
     }
   }
 
+  console.log(chalk.dim("\nRun IDs are truncated to 12 characters above. Full run IDs are shown in"));
+  console.log(chalk.dim(".sygil/runs/<id>.json filenames; paste the full file name (minus .json) into `sygil resume`."));
   console.log("");
 }

@@ -48,4 +48,28 @@ describe("zodToJsonSchema", () => {
     const b = zodToJsonSchema(WorkflowGraphSchema);
     expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
   });
+
+  it("propagates .describe() text into the output as description", () => {
+    const out = zodToJsonSchema(WorkflowGraphSchema);
+    const nodeProps = ((out["properties"] as Record<string, unknown>)["nodes"] as Record<string, unknown>);
+    const nodeItem = nodeProps["additionalProperties"] as Record<string, unknown>;
+    const nodeFieldProps = nodeItem["properties"] as Record<string, Record<string, unknown>>;
+    expect(typeof nodeFieldProps["adapter"]!["description"]).toBe("string");
+    expect(String(nodeFieldProps["adapter"]!["description"])).toContain("adapter");
+  });
+
+  it("rewrites .meta({ category }) to x-category on nested fields", () => {
+    const out = zodToJsonSchema(WorkflowGraphSchema);
+    const nodeProps = ((out["properties"] as Record<string, unknown>)["nodes"] as Record<string, unknown>);
+    const nodeItem = nodeProps["additionalProperties"] as Record<string, unknown>;
+    const fieldProps = nodeItem["properties"] as Record<string, Record<string, unknown>>;
+    expect(fieldProps["adapter"]!["x-category"]).toBe("core");
+    expect(fieldProps["model"]!["x-category"]).toBe("core");
+    expect(fieldProps["tools"]!["x-category"]).toBe("contract");
+    expect(fieldProps["maxTurns"]!["x-category"]).toBe("limits");
+    expect(fieldProps["providers"]!["x-category"]).toBe("resilience");
+    expect(fieldProps["writesContext"]!["x-category"]).toBe("context");
+    // Raw "category" key is stripped in favor of x-category.
+    expect(fieldProps["adapter"]!["category"]).toBeUndefined();
+  });
 });

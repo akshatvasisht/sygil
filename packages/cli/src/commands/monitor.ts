@@ -123,6 +123,7 @@ export async function monitorCommand(
           "No active workflow found. Start one with 'sygil run' or pass --url."
         )
       );
+      console.error(chalk.dim("Recent runs: sygil list"));
       process.exit(1);
     }
     wsUrl = `ws://127.0.0.1:${info.port}?token=${info.token}`;

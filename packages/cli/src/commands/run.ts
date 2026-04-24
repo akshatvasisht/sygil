@@ -7,7 +7,7 @@ import { loadWorkflow, interpolateWorkflow } from "../utils/workflow.js";
 import { pruneWorktrees } from "../worktree/index.js";
 import { readConfig, readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
-import { validateWorkflowTools } from "@sygil/shared";
+import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
 import { buildSchedulerContext, formatMetricsUrl } from "./_scheduler-bootstrap.js";
 import { WorkflowWatcher } from "../utils/watcher.js";
@@ -57,7 +57,37 @@ export async function runCommand(
     process.exit(1);
   }
 
-  // 2. Parse parameters
+  // 2. Adapter availability pre-flight — runs before parameter interpolation because
+  //    adapter types are hard-coded at the node level (no {{...}} on adapter field).
+  //    Failing fast here avoids wasted interpolation on missing adapters.
+  const requiredAdaptersPreflight = [...new Set(Object.values(workflow.nodes).map((n) => n.adapter))];
+  for (const adapterType of requiredAdaptersPreflight) {
+    const adapter = getAdapter(adapterType);
+    const available = await adapter.isAvailable();
+    if (!available) {
+      console.error(chalk.red(`✗ Adapter '${adapterType}' is not available.`));
+      console.error(chalk.dim(`  Run 'sygil init' to see adapter status and setup instructions.`));
+      process.exit(1);
+      return;
+    }
+  }
+
+  // 2a. Parity walk — warn when a node uses a field its adapter silently ignores.
+  const FIELDS_WITH_DIVERGENCE = ["tools", "disallowedTools", "sandbox", "outputSchema", "maxBudgetUsd", "maxTurns"];
+  for (const [nodeId, node] of Object.entries(workflow.nodes)) {
+    const support = ADAPTER_FIELD_SUPPORT[node.adapter] ?? {};
+    const nodeAsRecord = node as unknown as Record<string, unknown>;
+    for (const f of FIELDS_WITH_DIVERGENCE) {
+      const hasField = nodeAsRecord[f] !== undefined && nodeAsRecord[f] !== null;
+      if (!hasField) continue;
+      const s = support[f] ?? "enforced";
+      if (s === "ignored" || s === "na") {
+        logger.warn(`Node "${nodeId}" sets \`${f}\` but adapter "${node.adapter}" ${s === "ignored" ? "silently ignores it" : "does not apply"} — value will have no effect.`);
+      }
+    }
+  }
+
+  // 3. Parse parameters
   const parameters: Record<string, string> = {};
   if (task) {
     parameters["task"] = task;
@@ -75,7 +105,7 @@ export async function runCommand(
     }
   }
 
-  // 3. Resolve parameters: merge CLI params with workflow defaults, then interpolate
+  // 4. Resolve parameters: merge CLI params with workflow defaults, then interpolate
   const resolvedParams: Record<string, string> = {};
 
   // Apply defaults from graph.parameters first
@@ -142,20 +172,8 @@ export async function runCommand(
     return;
   }
 
-  // 4. Load config (used for default adapter hints if needed)
+  // 5. Load config (used for default adapter hints if needed)
   await readConfig(process.env["SYGIL_CONFIG_DIR"]).catch(() => null);
-
-  // 4a. Adapter preflight check
-  const requiredAdapters = [...new Set(Object.values(workflow.nodes).map((n) => n.adapter))];
-  for (const adapterType of requiredAdapters) {
-    const adapter = getAdapter(adapterType);
-    const available = await adapter.isAvailable();
-    if (!available) {
-      console.error(chalk.red(`✗ Adapter '${adapterType}' is not available.`));
-      console.error(chalk.dim(`  Run 'sygil init' to see adapter status and setup instructions.`));
-      process.exit(1);
-    }
-  }
 
   // Warn if any node uses claude-cli with an outputSchema (unreliable structured output)
   for (const [nodeId, nodeConfig] of Object.entries(workflow.nodes)) {
@@ -196,8 +214,9 @@ export async function runCommand(
       chalk.red(err instanceof Error ? err.message : String(err)),
     );
     process.exit(1);
+    return;
   }
-  const { scheduler, monitor } = ctx;
+  const { scheduler, monitor } = ctx!;
 
   if (ctx.metricsPort !== null && ctx.metricsAuthToken !== null) {
     console.log(formatMetricsUrl(ctx.metricsPort, ctx.metricsAuthToken) + "\n");
@@ -398,6 +417,35 @@ export async function runCommand(
         console.log(chalk.dim(`Total cost: $${result.totalCostUsd.toFixed(4)}`));
       }
       console.log(chalk.dim(`Run ID: ${result.runId}`));
+
+      // Non-TTY compact summary table — printed in CI / pipe mode where the
+      // live TUI wasn't rendered. Hand-rolled column padding; no new deps.
+      if (!process.stdout.isTTY) {
+        const runIdShort = result.runId.slice(0, 12);
+        console.log(`\nWorkflow: ${workflow.name}  (runId: ${runIdShort})`);
+        let totalDurationMs = 0;
+        let totalCost = 0;
+        let totalTokens = 0;
+        // Determine column widths for node ID column
+        const nodeIds = nodeOrder.length > 0 ? nodeOrder : Object.keys(workflow.nodes);
+        const maxNodeIdLen = Math.max(...nodeIds.map(id => id.length), 4);
+        for (const nodeId of nodeIds) {
+          const ns = monitorState.nodes.get(nodeId);
+          if (!ns) continue;
+          const durationStr = `${(ns.elapsedMs / 1000).toFixed(1)}s`;
+          const costStr = ns.costUsd > 0 ? `$${ns.costUsd.toFixed(4)}` : "$0.0000";
+          const tokens = ns.tokenUsage.input + ns.tokenUsage.output;
+          const tokensStr = `${tokens} tokens`;
+          const statusIcon = ns.status === "completed" ? "✓" : ns.status === "failed" ? "✗" : "-";
+          const paddedId = nodeId.padEnd(maxNodeIdLen);
+          console.log(`  ${paddedId}  ${durationStr.padStart(8)}  ${costStr.padStart(9)}  ${tokensStr.padStart(12)}  ${statusIcon}`);
+          totalDurationMs += ns.elapsedMs;
+          totalCost += ns.costUsd;
+          totalTokens += tokens;
+        }
+        const totalCostStr = totalCost > 0 ? `$${totalCost.toFixed(4)}` : "$0.0000";
+        console.log(`Total: ${(totalDurationMs / 1000).toFixed(1)}s  ${totalCostStr}  ${totalTokens} tokens`);
+      }
     } else {
       trackEvent("workflow_run_failed", {
         success: false,

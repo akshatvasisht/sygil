@@ -124,7 +124,8 @@ describe("listCommand", () => {
     expect(output).toContain("my-workflow");
   });
 
-  it("shows the full run ID in output (so `sygil resume` gets a copyable exact ID)", async () => {
+  it("truncates run ID to 12 characters with ellipsis when ID is longer than 12 chars", async () => {
+    // ID longer than 12 chars — should display first 12 + "…"
     const state = makeRunState({ id: "run-abc12345-uniqueid" });
 
     mockReaddir.mockImplementation((dir: string) => {
@@ -143,10 +144,36 @@ describe("listCommand", () => {
 
     await listCommand();
 
-    // The command must display the complete id — `sygil resume` requires an exact
-    // match (cli-program.ts help text explicitly points users at `sygil list`).
     const output = consoleLogSpy.mock.calls.flat().join("\n");
-    expect(output).toContain("run-abc12345-uniqueid");
+    // First 12 chars of "run-abc12345-uniqueid" is "run-abc12345"
+    expect(output).toContain("run-abc12345…");
+    // Footer hint references the full ID storage location
+    expect(output).toContain(".sygil/runs");
+  });
+
+  it("shows run ID unchanged when it is 12 chars or shorter (no ellipsis)", async () => {
+    const state = makeRunState({ id: "short-id" });
+
+    mockReaddir.mockImplementation((dir: string) => {
+      if (String(dir).includes("runs")) {
+        return Promise.resolve(["short-id.json"]);
+      }
+      return Promise.reject(new Error("ENOENT"));
+    });
+
+    mockReadFile.mockImplementation((path: string) => {
+      if (String(path).includes("short-id.json")) {
+        return Promise.resolve(JSON.stringify(state));
+      }
+      return Promise.reject(new Error("not found"));
+    });
+
+    await listCommand();
+
+    const output = consoleLogSpy.mock.calls.flat().join("\n");
+    expect(output).toContain("short-id");
+    // No ellipsis when ID fits
+    expect(output).not.toMatch(/short-id…/);
   });
 
   it("skips unparseable run files gracefully", async () => {
