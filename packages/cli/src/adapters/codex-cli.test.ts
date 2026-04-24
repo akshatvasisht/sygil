@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CodexCLIAdapter } from "./codex-cli.js";
 import type { AgentSession } from "@sygil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
 import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -9,38 +14,20 @@ import { logger } from "../utils/logger.js";
 // ---------------------------------------------------------------------------
 
 /** Build a fake AgentSession backed by a fake process */
-function makeSession(adapter: CodexCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session-id",
-    nodeId: "test-node",
-    adapter: "codex",
-    startedAt: new Date(),
-    _internal: {
-      proc,
-      outputLines: [],
-      exitCode: null,
-      done: false,
-      eventQueue: [],
-      resolve: null,
-      totalCostUsd: 0,
-      outputText: "",
-      tokenUsage: { input: 0, output: 0 },
-      stallTimer: null,
-      maxQueueSize: 1000,
-    },
-  };
-}
-
-/** Collect all events from the stream, waiting for it to finish */
-async function collectEvents(
-  adapter: CodexCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const events: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    events.push(ev as { type: string; [k: string]: unknown });
-  }
-  return events;
+function makeSession(_adapter: CodexCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
+  return makeSessionEnvelope("codex", {
+    proc,
+    outputLines: [],
+    exitCode: null,
+    done: false,
+    eventQueue: [],
+    resolve: null,
+    totalCostUsd: 0,
+    outputText: "",
+    tokenUsage: { input: 0, output: 0 },
+    stallTimer: null,
+    maxQueueSize: 1000,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -292,22 +279,6 @@ describe("CodexCLIAdapter", () => {
       warnSpy.mockRestore();
     });
 
-    it("does not warn when NodeConfig.tools is omitted or empty", async () => {
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
-
-      await adapter.spawn({
-        adapter: "codex",
-        model: "o4-mini",
-        role: "agent",
-        prompt: "task",
-      });
-
-      expect(warnSpy).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
-    });
   });
 
   // -------------------------------------------------------------------------

@@ -10,37 +10,8 @@ import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { WorkflowRunState, NodeResult } from "@sygil/shared";
 import { CheckpointManager, CHECKPOINT_DEBOUNCE_MS } from "./checkpoint-manager.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunState {
-  return {
-    id: randomUUID(),
-    workflowName: "test-workflow",
-    workflowPath: "",
-    status: "running",
-    startedAt: new Date().toISOString(),
-    completedNodes: [],
-    nodeResults: {},
-    totalCostUsd: 0,
-    retryCounters: {},
-    sharedContext: {},
-    ...overrides,
-  };
-}
-
-function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {
-  return {
-    output: "test output",
-    exitCode: 0,
-    durationMs: 100,
-    ...overrides,
-  };
-}
+import { makeRunState, makeNodeResult } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Test setup

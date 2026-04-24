@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { GateConfig, GateCondition, NodeResult, WsClientEvent } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
+import { buildSafeEnv } from "../utils/safe-env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -33,15 +34,33 @@ export function isContainedIn(child: string, parent: string): boolean {
   return realChild.startsWith(realParent);
 }
 
-function bundledTemplatesDir(): string {
-  return pathResolve(fileURLToPath(new URL("../../templates", import.meta.url)));
+const BUNDLED_TEMPLATES_DIR = pathResolve(
+  fileURLToPath(new URL("../../templates", import.meta.url))
+);
+
+/**
+ * Resolve a caller-supplied path against a working directory and check that
+ * it stays inside the sandbox: the `workingDir` (primary) OR the bundled
+ * `templates/<templateSubdir>/` (when `templateSubdir` is non-null). Returns
+ * the absolute resolved path, or `null` if the path escapes both. Callers
+ * translate `null` into the appropriate throw/return shape.
+ */
+function resolveSandboxedPath(
+  relativePath: string,
+  workingDir: string,
+  templateSubdir: string | null
+): string | null {
+  const resolved = isAbsolute(relativePath) ? relativePath : pathResolve(workingDir, relativePath);
+  if (isContainedIn(resolved, workingDir)) return resolved;
+  if (templateSubdir !== null) {
+    const templateDir = pathResolve(BUNDLED_TEMPLATES_DIR, templateSubdir);
+    if (isContainedIn(resolved, templateDir)) return resolved;
+  }
+  return null;
 }
 
 function validateScriptPath(scriptPath: string, workingDir: string): void {
-  const resolved = pathResolve(workingDir, scriptPath);
-  const templatesGatesDir = pathResolve(bundledTemplatesDir(), "gates");
-
-  if (!isContainedIn(resolved, workingDir) && !isContainedIn(resolved, templatesGatesDir)) {
+  if (resolveSandboxedPath(scriptPath, workingDir, "gates") === null) {
     throw new Error(
       `Gate script path "${scriptPath}" resolves outside the working directory. ` +
       `Script paths must be relative to the workflow's working directory.`
@@ -50,19 +69,22 @@ function validateScriptPath(scriptPath: string, workingDir: string): void {
 }
 
 /**
- * Resolve a gate script path. Order: absolute → workingDir-relative (if the
- * file exists there) → bundled `templates/<scriptPath>` fallback. The bundled
- * fallback lets workflows like `templates/ralph.json` reference
- * `gates/ralph-done.sh` without requiring users to copy the gates/ directory
- * into their run dir — a usability gap the original design left unfilled for
- * bundled-template script gates (same pattern applies to `optimize.json`'s
- * `gates/check-budget.sh`).
+ * Resolve a gate script path to a concrete file on disk. Order: absolute →
+ * workingDir-relative (if the file exists there) → bundled
+ * `templates/<scriptPath>` fallback. The bundled fallback lets workflows like
+ * `templates/ralph.json` reference `gates/ralph-done.sh` without requiring
+ * users to copy the gates/ directory into their run dir — a usability gap
+ * the original design left unfilled for bundled-template script gates (same
+ * pattern applies to `optimize.json`'s `gates/check-budget.sh`).
+ *
+ * Assumes `validateScriptPath` has already run; this function is pure
+ * filesystem discovery, not a security check.
  */
 function resolveGateScriptPath(scriptPath: string, workingDir: string): string {
   if (isAbsolute(scriptPath)) return scriptPath;
   const local = join(workingDir, scriptPath);
   if (existsSync(local)) return local;
-  const bundled = join(bundledTemplatesDir(), scriptPath);
+  const bundled = join(BUNDLED_TEMPLATES_DIR, scriptPath);
   if (existsSync(bundled)) return bundled;
   return local; // fall back to local path so the execFile error message stays clear
 }
@@ -77,14 +99,7 @@ function normalizeLines(text: string): string[] {
 }
 
 function resolveSpecPath(specPath: string, workingDir: string): string | null {
-  const resolved = isAbsolute(specPath) ? specPath : pathResolve(workingDir, specPath);
-  const templatesSpecsDir = pathResolve(
-    fileURLToPath(new URL("../../templates/specs", import.meta.url))
-  );
-  if (!isContainedIn(resolved, workingDir) && !isContainedIn(resolved, templatesSpecsDir)) {
-    return null;
-  }
-  return resolved;
+  return resolveSandboxedPath(specPath, workingDir, "specs");
 }
 
 // ---------------------------------------------------------------------------
@@ -270,27 +285,14 @@ export class GateEvaluator {
 
     const resolved = resolveGateScriptPath(scriptPath, outputDir);
 
-    // Whitelist environment variables passed to gate scripts.
-    // We never leak the full parent env (which may contain API keys, SSH creds, etc.).
-    // Do NOT forward arbitrary SYGIL_* vars — those can carry secrets or
-    // stale values from nested runs. The fresh-set block below assigns exactly
-    // the documented contract (SYGIL_EXIT_CODE, SYGIL_OUTPUT_DIR, SYGIL_OUTPUT).
-    const ALLOWED_ENV_KEYS = ["PATH", "HOME", "SHELL", "TERM", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP"];
-    const safeEnv: Record<string, string> = {};
-    for (const key of ALLOWED_ENV_KEYS) {
-      const val = process.env[key];
-      if (val !== undefined) safeEnv[key] = val;
-    }
-
     try {
       await execFileAsync(resolved, [], {
         cwd: outputDir,
-        env: {
-          ...safeEnv,
+        env: buildSafeEnv({
           SYGIL_EXIT_CODE: String(nodeResult.exitCode),
           SYGIL_OUTPUT_DIR: outputDir,
           SYGIL_OUTPUT: nodeResult.output,
-        },
+        }),
         timeout: GATE_SCRIPT_TIMEOUT_MS,
         signal,
       });

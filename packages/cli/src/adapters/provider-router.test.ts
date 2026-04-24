@@ -100,11 +100,13 @@ describe("classifyError", () => {
     expect(c.reason).toBe("server_5xx");
   });
 
-  it("does NOT classify a 4xx (non-429) error as retryable", () => {
-    expect(classifyError("HTTP 400 Bad Request").retryable).toBe(false);
-    expect(classifyError("HTTP 401 Unauthorized").retryable).toBe(false);
-    expect(classifyError("HTTP 403 Forbidden").retryable).toBe(false);
-    expect(classifyError("HTTP 404 Not Found").retryable).toBe(false);
+  it.each([
+    ["HTTP 400 Bad Request"],
+    ["HTTP 401 Unauthorized"],
+    ["HTTP 403 Forbidden"],
+    ["HTTP 404 Not Found"],
+  ])("does NOT classify 4xx (non-429) %p as retryable", (msg) => {
+    expect(classifyError(msg).retryable).toBe(false);
   });
 
   it("does NOT classify a stall as retryable (likely reproducible)", () => {

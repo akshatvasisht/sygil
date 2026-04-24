@@ -7,6 +7,9 @@
  * options shape from `index.test.ts`) so all callers share one surface.
  */
 
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import type {
   AdapterType,
@@ -16,12 +19,80 @@ import type {
   NodeConfig,
   NodeResult,
   WorkflowGraph,
+  WorkflowRunState,
 } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 
 // ---------------------------------------------------------------------------
 // NodeConfig + session factories
 // ---------------------------------------------------------------------------
+
+/** Minimal WorkflowRunState factory. */
+export function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunState {
+  return {
+    id: randomUUID(),
+    workflowName: "test-workflow",
+    workflowPath: "",
+    status: "running",
+    startedAt: new Date().toISOString(),
+    completedNodes: [],
+    nodeResults: {},
+    totalCostUsd: 0,
+    retryCounters: {},
+    sharedContext: {},
+    ...overrides,
+  };
+}
+
+/** Minimal NodeResult factory. */
+export function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {
+  return {
+    output: "test output",
+    exitCode: 0,
+    durationMs: 100,
+    ...overrides,
+  };
+}
+
+/**
+ * AgentEvent factory keyed by the discriminator. Returns a minimal-valid
+ * event for common variants used across scheduler and event-recorder tests;
+ * the fallback case covers `shell_exec` for anything unmapped.
+ */
+export function makeEvent(
+  type: AgentEvent["type"],
+  extra?: Record<string, unknown>
+): AgentEvent {
+  switch (type) {
+    case "tool_call":
+      return { type: "tool_call", tool: "bash", input: { cmd: "ls" }, ...extra };
+    case "tool_result":
+      return { type: "tool_result", tool: "bash", output: "file.txt", success: true, ...extra };
+    case "file_write":
+      return { type: "file_write", path: "/tmp/out.txt", ...extra };
+    case "text_delta":
+      return { type: "text_delta", text: "hello", ...extra };
+    case "cost_update":
+      return { type: "cost_update", totalCostUsd: 0.05, ...extra };
+    case "error":
+      return { type: "error", message: "something broke", ...extra };
+    case "stall":
+      return { type: "stall", reason: "no output for 60s", ...extra };
+    default:
+      return { type: "shell_exec", command: "ls", exitCode: 0, ...extra };
+  }
+}
+
+/**
+ * Create a tmpdir with the given prefix and track it in `tempDirs` for the
+ * caller's `afterEach` cleanup. Each test file still owns its own tempDirs
+ * array — this just centralizes the `mkdtemp` + push boilerplate.
+ */
+export async function makeTempDir(tempDirs: string[], prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 /** Minimal NodeConfig factory. */
 export function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {

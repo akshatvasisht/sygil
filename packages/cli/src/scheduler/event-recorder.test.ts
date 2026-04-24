@@ -1,10 +1,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { rm, readFile, readdir, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { EventRecorder } from "./event-recorder.js";
 import * as loggerModule from "../utils/logger.js";
-import type { AgentEvent, RecordedEvent } from "@sygil/shared";
+import type { RecordedEvent } from "@sygil/shared";
+import { makeEvent, makeTempDir as makeTempDirHelper } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -12,32 +12,8 @@ import type { AgentEvent, RecordedEvent } from "@sygil/shared";
 
 const tempDirs: string[] = [];
 
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sygil-recorder-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function makeEvent(type: AgentEvent["type"], extra?: Record<string, unknown>): AgentEvent {
-  switch (type) {
-    case "tool_call":
-      return { type: "tool_call", tool: "bash", input: { cmd: "ls" }, ...extra };
-    case "tool_result":
-      return { type: "tool_result", tool: "bash", output: "file.txt", success: true, ...extra };
-    case "file_write":
-      return { type: "file_write", path: "/tmp/out.txt", ...extra };
-    case "text_delta":
-      return { type: "text_delta", text: "hello", ...extra };
-    case "cost_update":
-      return { type: "cost_update", totalCostUsd: 0.05, ...extra };
-    case "error":
-      return { type: "error", message: "something broke", ...extra };
-    case "stall":
-      return { type: "stall", reason: "no output for 60s", ...extra };
-    default:
-      return { type: "shell_exec", command: "ls", exitCode: 0, ...extra };
-  }
-}
+const makeTempDir = (): Promise<string> =>
+  makeTempDirHelper(tempDirs, "sygil-recorder-test-");
 
 afterEach(async () => {
   vi.restoreAllMocks();

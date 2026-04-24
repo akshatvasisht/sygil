@@ -2,32 +2,26 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { EventStream } from "./EventStream";
 import type { WsServerEvent } from "@sygil/shared";
-
-// Mock lucide-react icons to simple spans
-vi.mock("lucide-react", () => {
-  const icon = (name: string) => {
-    const Comp = (_props: Record<string, unknown>) => <span data-testid={`icon-${name}`} />;
-    Comp.displayName = name;
-    return Comp;
-  };
-  return {
-    Wrench: icon("wrench"),
-    FileText: icon("file-text"),
-    Terminal: icon("terminal"),
-    Type: icon("type"),
-    DollarSign: icon("dollar"),
-    AlertTriangle: icon("alert-triangle"),
-    AlertCircle: icon("alert-circle"),
-    GitBranch: icon("git-branch"),
-    Play: icon("play"),
-    CheckCircle2: icon("check-circle"),
-    XCircle: icon("x-circle"),
-    Eye: icon("eye"),
-    CheckSquare: icon("check-square"),
-    Zap: icon("zap"),
-    Database: icon("database"),
-    Webhook: icon("webhook"),
-  };
+vi.mock("lucide-react", async () => {
+  const { buildLucideIconMocks } = await import("../__mocks__/lucide-react");
+  return buildLucideIconMocks([
+    ["Wrench", "wrench"],
+    ["FileText", "file-text"],
+    ["Terminal", "terminal"],
+    ["Type", "type"],
+    ["DollarSign", "dollar"],
+    ["AlertTriangle", "alert-triangle"],
+    ["AlertCircle", "alert-circle"],
+    ["GitBranch", "git-branch"],
+    ["Play", "play"],
+    ["CheckCircle2", "check-circle"],
+    ["XCircle", "x-circle"],
+    ["Eye", "eye"],
+    ["CheckSquare", "check-square"],
+    ["Zap", "zap"],
+    ["Database", "database"],
+    ["Webhook", "webhook"],
+  ]);
 });
 
 describe("EventStream", () => {

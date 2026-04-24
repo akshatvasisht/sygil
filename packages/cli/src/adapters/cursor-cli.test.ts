@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CursorCLIAdapter } from "./cursor-cli.js";
 import type { AgentSession } from "@sygil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
 import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -9,38 +14,20 @@ import { logger } from "../utils/logger.js";
 // ---------------------------------------------------------------------------
 
 /** Build a fake AgentSession backed by a fake process */
-function makeSession(adapter: CursorCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session-id",
-    nodeId: "test-node",
-    adapter: "cursor-cli",
-    startedAt: new Date(),
-    _internal: {
-      proc,
-      stdout: [],
-      exitCode: null,
-      done: false,
-      eventQueue: [],
-      resolve: null,
-      totalCostUsd: 0,
-      outputText: "",
-      resultEvent: null,
-      stallTimer: null,
-      maxQueueSize: 1000,
-    },
-  };
-}
-
-/** Collect all events from the stream, waiting for it to finish */
-async function collectEvents(
-  adapter: CursorCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const events: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    events.push(ev as { type: string; [k: string]: unknown });
-  }
-  return events;
+function makeSession(_adapter: CursorCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
+  return makeSessionEnvelope("cursor-cli", {
+    proc,
+    stdout: [],
+    exitCode: null,
+    done: false,
+    eventQueue: [],
+    resolve: null,
+    totalCostUsd: 0,
+    outputText: "",
+    resultEvent: null,
+    stallTimer: null,
+    maxQueueSize: 1000,
+  });
 }
 
 // ---------------------------------------------------------------------------

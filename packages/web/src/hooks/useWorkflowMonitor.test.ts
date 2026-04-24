@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useWorkflowMonitor } from "./useWorkflowMonitor";
 import type { WsServerEvent } from "@sygil/shared";
+import {
+  makeNodeEndEvent,
+  makeNodeStartEvent,
+  makeWorkflowEndEvent,
+  makeWorkflowStartEvent,
+} from "../test/fixtures/workflow-events";
 
 // ── WebSocket mock ────────────────────────────────────────────────────────────
 
@@ -85,13 +91,7 @@ describe("useWorkflowMonitor", () => {
     const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
-    const startEvent: WsServerEvent = {
-      type: "workflow_start",
-      workflowId: "wf-1",
-      graph: { version: "1", name: "my-workflow", nodes: {}, edges: [] },
-    };
-
-    act(() => ws.simulateMessage(startEvent));
+    act(() => ws.simulateMessage(makeWorkflowStartEvent("wf-1", "my-workflow")));
 
     expect(result.current.workflowState?.workflowName).toBe("my-workflow");
     expect(result.current.workflowState?.status).toBe("running");
@@ -105,27 +105,16 @@ describe("useWorkflowMonitor", () => {
     const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
-    act(() =>
-      ws.simulateMessage({
-        type: "workflow_start",
-        workflowId: "wf-1",
-        graph: { version: "1", name: "wf", nodes: {}, edges: [] },
-      })
-    );
+    act(() => ws.simulateMessage(makeWorkflowStartEvent("wf-1", "wf")));
 
     act(() =>
-      ws.simulateMessage({
-        type: "node_start",
-        workflowId: "wf-1",
-        nodeId: "planner",
-        config: {
-          adapter: "claude-sdk",
+      ws.simulateMessage(
+        makeNodeStartEvent("planner", "claude-sdk", {
           model: "claude-opus-4-5",
           role: "Planner",
           prompt: "plan it",
-        },
-        attempt: 1,
-      })
+        })
+      )
     );
 
     expect(result.current.workflowState?.currentNodeId).toBe("planner");
@@ -139,27 +128,17 @@ describe("useWorkflowMonitor", () => {
     const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
-    act(() =>
-      ws.simulateMessage({
-        type: "workflow_start",
-        workflowId: "wf-1",
-        graph: { version: "1", name: "wf", nodes: {}, edges: [] },
-      })
-    );
+    act(() => ws.simulateMessage(makeWorkflowStartEvent("wf-1", "wf")));
 
     act(() =>
-      ws.simulateMessage({
-        type: "node_end",
-        workflowId: "wf-1",
-        nodeId: "planner",
-        result: {
+      ws.simulateMessage(
+        makeNodeEndEvent("planner", {
           output: "done",
           exitCode: 0,
           durationMs: 1000,
           costUsd: 0.01,
-          tokenUsage: { input: 100, output: 50 },
-        },
-      })
+        })
+      )
     );
 
     expect(result.current.workflowState?.completedNodes).toContain("planner");
@@ -173,22 +152,12 @@ describe("useWorkflowMonitor", () => {
     const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
-    act(() =>
-      ws.simulateMessage({
-        type: "workflow_start",
-        workflowId: "wf-1",
-        graph: { version: "1", name: "wf", nodes: {}, edges: [] },
-      })
-    );
+    act(() => ws.simulateMessage(makeWorkflowStartEvent("wf-1", "wf")));
 
     act(() =>
-      ws.simulateMessage({
-        type: "workflow_end",
-        workflowId: "wf-1",
-        success: true,
-        durationMs: 5000,
-        totalCostUsd: 0.05,
-      })
+      ws.simulateMessage(
+        makeWorkflowEndEvent({ durationMs: 5000, totalCostUsd: 0.05 })
+      )
     );
 
     expect(result.current.workflowState?.status).toBe("completed");
@@ -202,13 +171,7 @@ describe("useWorkflowMonitor", () => {
     const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
-    act(() =>
-      ws.simulateMessage({
-        type: "workflow_start",
-        workflowId: "wf-1",
-        graph: { version: "1", name: "wf", nodes: {}, edges: [] },
-      })
-    );
+    act(() => ws.simulateMessage(makeWorkflowStartEvent("wf-1", "wf")));
 
     act(() =>
       ws.simulateMessage({

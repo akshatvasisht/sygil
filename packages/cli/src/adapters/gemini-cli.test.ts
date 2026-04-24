@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { GeminiCLIAdapter } from "./gemini-cli.js";
 import type { AgentSession } from "@sygil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
 import { logger } from "../utils/logger.js";
 
 function makeSession(proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session",
-    nodeId: "node",
-    adapter: "gemini-cli",
-    startedAt: new Date(),
-    _internal: {
+  return makeSessionEnvelope(
+    "gemini-cli",
+    {
       proc,
       stdout: [],
       exitCode: null,
@@ -23,18 +25,8 @@ function makeSession(proc: ReturnType<typeof makeFakeProc>): AgentSession {
       stallTimer: null,
       maxQueueSize: 1000,
     },
-  };
-}
-
-async function collectEvents(
-  adapter: GeminiCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const out: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    out.push(ev as { type: string; [k: string]: unknown });
-  }
-  return out;
+    { id: "test-session", nodeId: "node" }
+  );
 }
 
 vi.mock("node:child_process", async (importOriginal) => {

@@ -2,8 +2,6 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
 import type {
   AgentAdapter,
   AgentSession,
@@ -16,16 +14,18 @@ import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
+import {
+  GETRESULT_KILL_GRACE_MS,
+  GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
+  STALL_GRACE_MS,
+} from "./constants.js";
+import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { makeAgentSession } from "./session.js";
 
-const STALL_GRACE_MS = 5_000;
 const KILL_GRACE_PERIOD_MS = 2_000;
-const POLL_INTERVAL_MS = 50;
 
 /** Upper bound on `getResult`'s wait-for-exit poll. */
 const GEMINI_GETRESULT_TIMEOUT_MS = 10_000;
-
-/** Grace period after SIGTERM before SIGKILL during getResult's forced teardown. */
-const GETRESULT_KILL_GRACE_MS = 2_000;
 
 interface GeminiInternal {
   proc: ReturnType<typeof spawn>;
@@ -114,15 +114,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
-
-    return session;
+    return makeAgentSession(this.name, config.role, internal);
   }
 
   async spawn(config: NodeConfig): Promise<AgentSession> {
@@ -159,18 +151,10 @@ export class GeminiCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    let lineBuffer = "";
-    // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
-    // chunk boundaries (see claude-cli.ts for rationale).
-    const stdoutDecoder = new StringDecoder("utf8");
+    const decoder = createLineDecoder();
 
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += stdoutDecoder.write(chunk);
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const trimmed of decoder.feed(chunk)) {
         internal.stdout.push(trimmed);
         const event = this.parseLine(trimmed, internal);
         if (event) push(event);
@@ -178,10 +162,10 @@ export class GeminiCLIAdapter implements AgentAdapter {
     });
 
     proc.stdout?.on("end", () => {
-      lineBuffer += stdoutDecoder.end();
-      if (lineBuffer.trim()) {
-        internal.stdout.push(lineBuffer.trim());
-        const event = this.parseLine(lineBuffer.trim(), internal);
+      const trailing = decoder.flush();
+      if (trailing) {
+        internal.stdout.push(trailing);
+        const event = this.parseLine(trailing, internal);
         if (event) push(event);
       }
       stdoutClosed = true;
@@ -252,13 +236,15 @@ export class GeminiCLIAdapter implements AgentAdapter {
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as GeminiInternal;
-    // Guard on process liveness, NOT on internal.done. See codex-cli.ts kill()
-    // for the rationale.
+    // Guard on process liveness rather than internal.done. The stall path sets
+    // done=true before the process exits, so an `if (!internal.done)` check
+    // would skip termination and leak the child. `proc.killed` only means
+    // "signal was sent", not "process exited" — `proc.exitCode === null` is
+    // the only reliable liveness signal.
     if (internal.proc.exitCode === null) {
-      // Clear any pending stall timer before killing. Without this, a stall
-      // event can fire during the SIGTERM→SIGKILL grace window and pollute
-      // the NDJSON replay stream with a spurious stall the scheduler never
-      // saw (it had already decided to kill). Symmetric with codex-cli.ts.
+      // Clear any pending stall timer before killing so a stall event can't
+      // fire during the SIGTERM→SIGKILL grace window and land in the NDJSON
+      // replay stream after the scheduler has already decided to kill.
       if (internal.stallTimer !== null) {
         clearTimeout(internal.stallTimer);
         internal.stallTimer = null;

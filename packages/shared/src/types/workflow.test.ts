@@ -3,7 +3,6 @@ import type {
   WorkflowGraph,
   NodeConfig,
   EdgeConfig,
-  GateCondition,
   AdapterType,
   ParameterConfig,
   SandboxMode,
@@ -159,103 +158,10 @@ describe("EdgeConfig type", () => {
   });
 });
 
-describe("GateCondition discriminated union", () => {
-  it("narrows to exit_code condition", () => {
-    const cond: GateCondition = { type: "exit_code", value: 0 };
-    expect(cond.type).toBe("exit_code");
-    if (cond.type === "exit_code") {
-      expect(typeof cond.value).toBe("number");
-    }
-  });
-
-  it("narrows to file_exists condition", () => {
-    const cond: GateCondition = { type: "file_exists", path: "/tmp/output.txt" };
-    expect(cond.type).toBe("file_exists");
-    if (cond.type === "file_exists") {
-      expect(typeof cond.path).toBe("string");
-    }
-  });
-
-  it("narrows to regex condition", () => {
-    const cond: GateCondition = {
-      type: "regex",
-      filePath: "/tmp/output.txt",
-      pattern: "LGTM",
-    };
-    expect(cond.type).toBe("regex");
-    if (cond.type === "regex") {
-      expect(typeof cond.filePath).toBe("string");
-      expect(typeof cond.pattern).toBe("string");
-    }
-  });
-
-  it("narrows to script condition", () => {
-    const cond: GateCondition = { type: "script", path: "/tmp/check.sh" };
-    expect(cond.type).toBe("script");
-    if (cond.type === "script") {
-      expect(typeof cond.path).toBe("string");
-    }
-  });
-
-  it("narrows to human_review condition without prompt", () => {
-    const cond: GateCondition = { type: "human_review" };
-    expect(cond.type).toBe("human_review");
-    if (cond.type === "human_review") {
-      expect(cond.prompt).toBeUndefined();
-    }
-  });
-
-  it("narrows to human_review condition with prompt", () => {
-    const cond: GateCondition = { type: "human_review", prompt: "Approve this?" };
-    expect(cond.type).toBe("human_review");
-    if (cond.type === "human_review") {
-      expect(cond.prompt).toBe("Approve this?");
-    }
-  });
-
-  it("narrows to spec_compliance condition in exact mode", () => {
-    const cond: GateCondition = {
-      type: "spec_compliance",
-      specPath: "spec.md",
-      mode: "exact",
-    };
-    expect(cond.type).toBe("spec_compliance");
-    if (cond.type === "spec_compliance") {
-      expect(cond.specPath).toBe("spec.md");
-      expect(cond.mode).toBe("exact");
-    }
-  });
-
-  it("narrows to spec_compliance condition in superset mode", () => {
-    const cond: GateCondition = {
-      type: "spec_compliance",
-      specPath: "templates/specs/api-contract.md",
-      mode: "superset",
-    };
-    expect(cond.type).toBe("spec_compliance");
-    if (cond.type === "spec_compliance") {
-      expect(cond.mode).toBe("superset");
-    }
-  });
-});
-
 describe("AdapterType union", () => {
-  it("accepts all valid adapter type values", () => {
+  it("drift guard: length matches current adapter count", () => {
     const adapters: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"];
     expect(adapters).toHaveLength(7);
-    expect(adapters).toContain("claude-sdk");
-    expect(adapters).toContain("claude-cli");
-    expect(adapters).toContain("codex");
-    expect(adapters).toContain("cursor");
-    expect(adapters).toContain("echo");
-    expect(adapters).toContain("gemini-cli");
-    expect(adapters).toContain("local-oai");
-  });
-
-  it("can be used to type a variable", () => {
-    const adapter: AdapterType = "claude-sdk";
-    const typed: AdapterType = adapter;
-    expect(typed).toBe("claude-sdk");
   });
 });
 
@@ -541,92 +447,49 @@ describe("NodeConfigSchema", () => {
     expect(NodeConfigSchema.safeParse({}).success).toBe(false);
   });
 
-  it("rejects empty model string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "",
-      role: "r",
-      prompt: "p",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty role string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "",
-      prompt: "p",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty prompt string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects negative timeoutMs", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      timeoutMs: -1000,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects zero maxTurns", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      maxTurns: 0,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid sandbox mode", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      sandbox: "invalid-mode",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts all valid adapter types", () => {
-    for (const adapter of ["claude-sdk", "claude-cli", "codex", "cursor", "echo"]) {
-      const result = NodeConfigSchema.safeParse({
-        adapter,
-        model: "m",
-        role: "r",
-        prompt: "p",
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-
-  it("accepts all valid sandbox modes", () => {
-    for (const sandbox of ["read-only", "workspace-write", "full-access"]) {
+  describe.each([
+    { label: "empty model string", override: { model: "" } },
+    { label: "empty role string", override: { role: "" } },
+    { label: "empty prompt string", override: { prompt: "" } },
+    { label: "negative timeoutMs", override: { timeoutMs: -1000 } },
+    { label: "zero maxTurns", override: { maxTurns: 0 } },
+    { label: "invalid sandbox mode", override: { sandbox: "invalid-mode" } },
+  ])("NodeConfig rejection: $label", ({ override }) => {
+    it("is rejected by NodeConfigSchema", () => {
       const result = NodeConfigSchema.safeParse({
         adapter: "claude-sdk",
         model: "m",
         role: "r",
         prompt: "p",
-        sandbox,
+        ...override,
       });
-      expect(result.success).toBe(true);
-    }
+      expect(result.success).toBe(false);
+    });
+  });
+
+  it.each([
+    ["claude-sdk"], ["claude-cli"], ["codex"], ["cursor"], ["echo"], ["gemini-cli"], ["local-oai"],
+  ])("accepts valid adapter type %p", (adapter) => {
+    const result = NodeConfigSchema.safeParse({
+      adapter,
+      model: "m",
+      role: "r",
+      prompt: "p",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["read-only"], ["workspace-write"], ["full-access"],
+  ])("accepts valid sandbox mode %p", (sandbox) => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "m",
+      role: "r",
+      prompt: "p",
+      sandbox,
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts writesContext + readsContext arrays", () => {

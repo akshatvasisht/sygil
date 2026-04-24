@@ -1,9 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { writeFile, rm, mkdtemp, chmod } from "node:fs/promises";
+import { writeFile, rm, chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { GateEvaluator } from "./index.js";
-import type { NodeResult } from "@sygil/shared";
+import { makeNodeResult, makeTempDir as makeTempDirHelper } from "../scheduler/__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -11,19 +10,11 @@ import type { NodeResult } from "@sygil/shared";
 
 const evaluator = new GateEvaluator();
 
-const defaultResult: NodeResult = {
-  output: "test output",
-  exitCode: 0,
-  durationMs: 100,
-};
+const defaultResult = makeNodeResult();
 
 const tempDirs: string[] = [];
 
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sygil-gate-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const makeTempDir = (): Promise<string> => makeTempDirHelper(tempDirs, "sygil-gate-test-");
 
 afterEach(async () => {
   // Clean up temp dirs in reverse order (deepest first)
@@ -38,24 +29,17 @@ afterEach(async () => {
 
 describe("GateEvaluator", () => {
   describe("exit_code condition", () => {
-    it("passes when exit code matches", async () => {
+    it.each([
+      { label: "passes when exit code matches", actual: 0, passed: true, reason: /matches expected/ },
+      { label: "fails when exit code does not match", actual: 1, passed: false, reason: /does not match expected/ },
+    ])("$label", async ({ actual, passed, reason }) => {
       const result = await evaluator.evaluate(
         { conditions: [{ type: "exit_code", value: 0 }] },
-        { ...defaultResult, exitCode: 0 },
+        { ...defaultResult, exitCode: actual },
         "/tmp"
       );
-      expect(result.passed).toBe(true);
-      expect(result.reason).toMatch(/matches expected/);
-    });
-
-    it("fails when exit code does not match", async () => {
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "exit_code", value: 0 }] },
-        { ...defaultResult, exitCode: 1 },
-        "/tmp"
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/does not match expected/);
+      expect(result.passed).toBe(passed);
+      expect(result.reason).toMatch(reason);
     });
   });
 
@@ -359,21 +343,13 @@ describe("GateEvaluator", () => {
   // ---------------------------------------------------------------------------
 
   describe("file_exists — path traversal prevention", () => {
-    it("rejects absolute path outside outputDir", async () => {
+    it.each([
+      ["absolute", "/etc/passwd"],
+      ["relative traversal", "../../etc/passwd"],
+    ])("rejects %s path outside outputDir", async (_label, path) => {
       const dir = await makeTempDir();
       const result = await evaluator.evaluate(
-        { conditions: [{ type: "file_exists", path: "/etc/passwd" }] },
-        defaultResult,
-        dir
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/resolves outside the output directory/);
-    });
-
-    it("rejects relative traversal path outside outputDir", async () => {
-      const dir = await makeTempDir();
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "file_exists", path: "../../etc/passwd" }] },
+        { conditions: [{ type: "file_exists", path }] },
         defaultResult,
         dir
       );
@@ -396,21 +372,13 @@ describe("GateEvaluator", () => {
   });
 
   describe("regex — path traversal prevention", () => {
-    it("rejects absolute path outside outputDir", async () => {
+    it.each([
+      ["absolute", "/etc/passwd"],
+      ["relative traversal", "../../etc/passwd"],
+    ])("rejects %s path outside outputDir", async (_label, filePath) => {
       const dir = await makeTempDir();
       const result = await evaluator.evaluate(
-        { conditions: [{ type: "regex", filePath: "/etc/passwd", pattern: "root" }] },
-        defaultResult,
-        dir
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/resolves outside the output directory/);
-    });
-
-    it("rejects relative traversal path outside outputDir", async () => {
-      const dir = await makeTempDir();
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "regex", filePath: "../../etc/passwd", pattern: "root" }] },
+        { conditions: [{ type: "regex", filePath, pattern: "root" }] },
         defaultResult,
         dir
       );
@@ -592,25 +560,13 @@ describe("GateEvaluator", () => {
     });
 
     describe("path traversal prevention", () => {
-      it("rejects absolute path outside outputDir", async () => {
+      it.each([
+        ["absolute", "/etc/passwd", "exact" as const],
+        ["relative traversal", "../../etc/passwd", "superset" as const],
+      ])("rejects %s path outside outputDir", async (_label, specPath, mode) => {
         const dir = await makeTempDir();
         const result = await evaluator.evaluate(
-          { conditions: [{ type: "spec_compliance", specPath: "/etc/passwd", mode: "exact" }] },
-          defaultResult,
-          dir
-        );
-        expect(result.passed).toBe(false);
-        expect(result.reason).toMatch(/resolves outside the output directory/);
-      });
-
-      it("rejects relative traversal path outside outputDir", async () => {
-        const dir = await makeTempDir();
-        const result = await evaluator.evaluate(
-          {
-            conditions: [
-              { type: "spec_compliance", specPath: "../../etc/passwd", mode: "superset" },
-            ],
-          },
+          { conditions: [{ type: "spec_compliance", specPath, mode }] },
           defaultResult,
           dir
         );

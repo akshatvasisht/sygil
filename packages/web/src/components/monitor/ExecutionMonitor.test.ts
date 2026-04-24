@@ -1,43 +1,29 @@
 import { describe, it, expect } from "vitest";
 import { buildExecutionStateMap, buildTimelineEntries } from "./ExecutionMonitor";
 import type { WsServerEvent, WorkflowRunState } from "@sygil/shared";
+import {
+  makeNodeEndEvent,
+  makeNodeStartEvent,
+} from "../../test/fixtures/workflow-events";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
-const nodeStartPlanner: WsServerEvent = {
-  type: "node_start",
-  workflowId: "wf-1",
-  nodeId: "planner",
-  config: {
-    adapter: "claude-sdk",
-    model: "claude-opus-4-5",
-    role: "Planner",
-    prompt: "",
-  },
-  attempt: 1,
-};
-
-const nodeEndPlanner: WsServerEvent = {
-  type: "node_end",
-  workflowId: "wf-1",
-  nodeId: "planner",
-  result: { output: "done", exitCode: 0, durationMs: 1200, costUsd: 0.012 },
-};
-
-const nodeStartImpl: WsServerEvent = {
-  type: "node_start",
-  workflowId: "wf-1",
-  nodeId: "implementer",
-  config: {
-    adapter: "codex",
-    model: "gpt-4o",
-    role: "Implementer",
-    prompt: "",
-  },
-  attempt: 1,
-};
+const nodeStartPlanner = makeNodeStartEvent("planner", "claude-sdk", {
+  model: "claude-opus-4-5",
+  role: "Planner",
+});
+const nodeEndPlanner = makeNodeEndEvent("planner", {
+  output: "done",
+  exitCode: 0,
+  durationMs: 1200,
+  costUsd: 0.012,
+});
+const nodeStartImpl = makeNodeStartEvent("implementer", "codex", {
+  model: "gpt-4o",
+  role: "Implementer",
+});
 
 // ---------------------------------------------------------------------------
 // buildExecutionStateMap

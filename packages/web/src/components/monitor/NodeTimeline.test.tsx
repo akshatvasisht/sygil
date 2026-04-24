@@ -5,34 +5,28 @@ import {
   type NodeTimelineEntry,
   type HumanReviewTimelineEntry,
 } from "./NodeTimeline";
-
-// Mock lucide-react icons
-vi.mock("lucide-react", () => {
-  const icon = (name: string) => {
-    const Comp = (_props: Record<string, unknown>) => <span data-testid={`icon-${name}`} />;
-    Comp.displayName = name;
-    return Comp;
-  };
-  return {
-    CheckCircle2: icon("check-circle"),
-    Circle: icon("circle"),
-    XCircle: icon("x-circle"),
-    Loader2: icon("loader"),
-    ChevronDown: icon("chevron-down"),
-    ChevronRight: icon("chevron-right"),
-    FileText: icon("file-text"),
-    Terminal: icon("terminal"),
-    Wrench: icon("wrench"),
-    AlertTriangle: icon("alert-triangle"),
-    DollarSign: icon("dollar"),
-    Clock3: icon("clock"),
-    Snowflake: icon("snowflake"),
-    Ban: icon("ban"),
-    Clock: icon("clock-icon"),
-    ArrowRight: icon("arrow-right"),
-    Database: icon("database"),
-    Webhook: icon("webhook"),
-  };
+vi.mock("lucide-react", async () => {
+  const { buildLucideIconMocks } = await import("../__mocks__/lucide-react");
+  return buildLucideIconMocks([
+    ["CheckCircle2", "check-circle"],
+    ["Circle", "circle"],
+    ["XCircle", "x-circle"],
+    ["Loader2", "loader"],
+    ["ChevronDown", "chevron-down"],
+    ["ChevronRight", "chevron-right"],
+    ["FileText", "file-text"],
+    ["Terminal", "terminal"],
+    ["Wrench", "wrench"],
+    ["AlertTriangle", "alert-triangle"],
+    ["DollarSign", "dollar"],
+    ["Clock3", "clock"],
+    ["Snowflake", "snowflake"],
+    ["Ban", "ban"],
+    ["Clock", "clock-icon"],
+    ["ArrowRight", "arrow-right"],
+    ["Database", "database"],
+    ["Webhook", "webhook"],
+  ]);
 });
 
 function makeEntry(overrides: Partial<NodeTimelineEntry> = {}): NodeTimelineEntry {

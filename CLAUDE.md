@@ -89,6 +89,8 @@ Each implements `AgentAdapter` from `@sygil/shared`. Registry and auth in `docs/
 
 **NDJSON event mapper** (`adapters/ndjson-event-mapper.ts`) — `cursor-cli`, `codex-cli`, `gemini-cli` share `dispatchEventLine(line, mapping, internal)`. Declare `EventMapping` at module scope as pure data; dispatcher stays pure bytes → dispatch.
 
+**Shared adapter helpers** — the four stream-json CLI adapters (`claude-cli`, `codex-cli`, `cursor-cli`, `gemini-cli`) also share `adapters/constants.ts` (stall/getResult timings), `adapters/ndjson-line-decoder.ts` (UTF-8-safe chunk→line decoder), and `adapters/session.ts` (`makeAgentSession()` outer envelope). New CLI adapters should reuse these before rolling their own.
+
 **Circuit breaker** — opt-in per adapter type via `PoolConfig.circuitBreaker`. Defaults: 5 failures in 30 s → open for 60 s. `rate_limit` failures ignored (backpressure, not outage). Open acquires throw `CircuitOpenError`, classified by `provider-router.ts` as `retryable:circuit_open` so failover kicks in. Transitions broadcast as `circuit_breaker` WsServerEvent; NOT recorded in NDJSON — the driving failures are.
 
 ### Replay determinism
@@ -113,6 +115,7 @@ Six types: `exit_code`, `file_exists`, `regex`, `script`, `human_review`, `spec_
 
 - **One `GateEvaluator` per `executeGraph()` call** — `regexCache` reuse depends on it.
 - `evaluate()` accepts `signal?: AbortSignal` — pass the node's abort signal so pending `human_review` cancels on workflow cancel.
+- `evaluateScript` and `HookRunner.run` both build their child env via `utils/safe-env.ts > buildSafeEnv(extra)` and both check paths via `gates/index.ts > isContainedIn`. Do not reinline either — the shared helper is the security contract.
 
 ### Lifecycle hooks
 
@@ -123,8 +126,8 @@ Project scripts in `.sygil/config.json > hooks: { preNode?, postNode?, preGate?,
 | `preNode` | **Yes** |
 | `postNode`, `preGate`, `postGate` | No |
 
-- Security mirrors `gates/index.ts > evaluateScript` — do not bypass `validateHookPath`.
-- Parent env is **not** leaked; only a small whitelist (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR`, `TMP`, `TEMP`) plus fresh `SYGIL_*` vars per hook. Parent `SYGIL_*` vars are not forwarded.
+- Security mirrors `gates/index.ts > evaluateScript` — do not bypass `validateHookPath`. Path containment uses the exported `isContainedIn` from `gates/index.ts`; env whitelist lives in `utils/safe-env.ts`.
+- Parent env is **not** leaked; only the whitelist in `utils/safe-env.ts > ALLOWED_ENV_KEYS` (`PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`, `TMPDIR`, `TMP`, `TEMP`) plus fresh `SYGIL_*` vars per hook. Parent `SYGIL_*` vars are not forwarded.
 - Every hook emits a `hook_result` AgentEvent → replay sees the same hook sequence.
 
 ---

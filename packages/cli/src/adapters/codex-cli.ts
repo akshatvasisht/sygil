@@ -1,6 +1,4 @@
 import { spawn, execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
 import type {
   AgentAdapter,
   AgentSession,
@@ -13,20 +11,21 @@ import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
-
-/** Grace period in ms before emitting a stall event after stdout closes without process exit */
-const STALL_GRACE_MS = 5_000;
+import {
+  GETRESULT_KILL_GRACE_MS,
+  GETRESULT_POLL_INTERVAL_MS,
+  STALL_GRACE_MS,
+} from "./constants.js";
+import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { makeAgentSession } from "./session.js";
 
 /** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
  * never legitimately exceed this; if it does, we assume a hung socket or a misbehaving
  * MCP server pinning the child and force-kill so the workflow isn't pinned forever. */
 const CODEX_GETRESULT_TIMEOUT_MS = 10_000;
 
-/** Grace period after SIGTERM before SIGKILL during getResult's forced teardown. */
-const GETRESULT_KILL_GRACE_MS = 2_000;
-
-/** Polling cadence while waiting for the child to exit in getResult. */
-const GETRESULT_POLL_INTERVAL_MS = 50;
+/** Grace period before SIGKILL after SIGTERM during kill(). */
+const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface TokenUsage {
   input: number;
@@ -110,15 +109,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       }
     });
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
-
-    return session;
+    return makeAgentSession(this.name, config.role, internal);
   }
 
   async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession> {
@@ -159,13 +150,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       }
     });
 
-    return {
-      id: previousSession.id,
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
+    return makeAgentSession(this.name, config.role, internal, { id: previousSession.id });
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -180,30 +165,21 @@ export class CodexCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    let lineBuffer = "";
-    // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
-    // chunk boundaries (see claude-cli.ts for rationale).
-    const stdoutDecoder = new StringDecoder("utf8");
+    const decoder = createLineDecoder();
 
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += stdoutDecoder.write(chunk);
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const trimmed of decoder.feed(chunk)) {
         internal.outputLines.push(trimmed);
-
         const event = this.parseLine(trimmed, internal);
         if (event) push(event);
       }
     });
 
     proc.stdout?.on("end", () => {
-      lineBuffer += stdoutDecoder.end();
-      if (lineBuffer.trim()) {
-        internal.outputLines.push(lineBuffer.trim());
-        const event = this.parseLine(lineBuffer.trim(), internal);
+      const trailing = decoder.flush();
+      if (trailing) {
+        internal.outputLines.push(trailing);
+        const event = this.parseLine(trailing, internal);
         if (event) push(event);
       }
       stdoutClosed = true;
@@ -291,14 +267,11 @@ export class CodexCLIAdapter implements AgentAdapter {
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as CodexInternal;
-    // Guard on process liveness, NOT on internal.done. The stall path flips
-    // done=true (via push(stall) + finish()) BEFORE the process exits, so
-    // an `if (!internal.done)` check here would silently skip termination
-    // and leak the child. The scheduler's stall handler calls adapter.kill
-    // expecting the child to die — gate on `proc.exitCode === null` (the only
-    // reliable liveness signal; Node's `proc.killed` means "signal was sent",
-    // not "process exited", so it turns true right after SIGTERM while the
-    // child is still running and about to need SIGKILL).
+    // Guard on process liveness rather than internal.done. The stall path sets
+    // done=true before the process exits, so an `if (!internal.done)` check
+    // would skip termination and leak the child. `proc.killed` only means
+    // "signal was sent", not "process exited" — `proc.exitCode === null` is
+    // the only reliable liveness signal.
     if (internal.proc.exitCode === null) {
       if (internal.stallTimer !== null) {
         clearTimeout(internal.stallTimer);
@@ -307,9 +280,11 @@ export class CodexCLIAdapter implements AgentAdapter {
       internal.proc.kill("SIGTERM");
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          internal.proc.kill("SIGKILL");
+          if (internal.proc.exitCode === null) {
+            internal.proc.kill("SIGKILL");
+          }
           resolve();
-        }, 5000);
+        }, KILL_GRACE_PERIOD_MS);
         internal.proc.once("exit", () => {
           clearTimeout(timeout);
           resolve();

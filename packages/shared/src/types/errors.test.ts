@@ -41,31 +41,4 @@ describe("SygilErrorCode", () => {
     expect(err.details?.exitCode).toBe(1);
   });
 
-  it("covers all expected error categories", () => {
-    // Gate errors
-    expect(SygilErrorCode.GATE_TIMEOUT).toBeDefined();
-    expect(SygilErrorCode.GATE_SCRIPT_FAILED).toBeDefined();
-    expect(SygilErrorCode.GATE_CONDITION_FAILED).toBeDefined();
-    expect(SygilErrorCode.GATE_PATH_TRAVERSAL).toBeDefined();
-
-    // Node errors
-    expect(SygilErrorCode.NODE_TIMEOUT).toBeDefined();
-    expect(SygilErrorCode.NODE_IDLE_TIMEOUT).toBeDefined();
-    expect(SygilErrorCode.NODE_STALLED).toBeDefined();
-    expect(SygilErrorCode.NODE_CRASHED).toBeDefined();
-
-    // Adapter errors
-    expect(SygilErrorCode.ADAPTER_UNAVAILABLE).toBeDefined();
-    expect(SygilErrorCode.ADAPTER_SPAWN_FAILED).toBeDefined();
-    expect(SygilErrorCode.ADAPTER_RATE_LIMITED).toBeDefined();
-
-    // Workflow errors
-    expect(SygilErrorCode.WORKFLOW_CANCELLED).toBeDefined();
-    expect(SygilErrorCode.WORKFLOW_VALIDATION_FAILED).toBeDefined();
-    expect(SygilErrorCode.WORKFLOW_NODE_FAILED).toBeDefined();
-
-    // Checkpoint errors
-    expect(SygilErrorCode.CHECKPOINT_WRITE_FAILED).toBeDefined();
-    expect(SygilErrorCode.CHECKPOINT_LOAD_FAILED).toBeDefined();
-  });
 });

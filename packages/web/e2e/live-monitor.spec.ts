@@ -5,6 +5,40 @@ import { startSygilRun } from "./helpers/sigil-runner";
 // Fixture paths — relative to this spec file
 const FIXTURES = resolve(__dirname, "../../cli/test-fixtures/workflows");
 
+test.describe("Monitor — static shell (no subprocess)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/monitor");
+    await page.waitForLoadState("networkidle");
+  });
+
+  test("loads without the retired demo-mode banner", async ({ page }) => {
+    // Demo mode was retired — the banner must not appear on a fresh load.
+    await expect(page.getByText(/demo mode/i)).toHaveCount(0);
+    // The top bar still renders the sygil brand, confirming the shell loaded.
+    await expect(page.getByText("sygil")).toBeVisible({ timeout: 5_000 });
+  });
+
+  test("shows the event log drawer toggle", async ({ page }) => {
+    // The collapsible drawer tab renders its label as "Event log (<count>)"
+    await expect(page.getByText(/event log/i)).toBeVisible({ timeout: 5_000 });
+  });
+
+  test("event log drawer opens when clicked", async ({ page }) => {
+    await page.getByText(/event log/i).click();
+    const eventStream = page
+      .locator("[data-testid='event-stream'], .event-stream")
+      .or(page.getByText(/event stream/i))
+      .first();
+    await expect(eventStream).toBeVisible({ timeout: 3_000 });
+  });
+
+  test("has a copy URL button", async ({ page }) => {
+    await expect(
+      page.getByRole("button", { name: /copy url/i })
+    ).toBeVisible({ timeout: 5_000 });
+  });
+});
+
 test.describe("Live monitor — real sygil subprocess", () => {
   // Give each test extra time: subprocess startup + browser connection + assertions
   test.setTimeout(30_000);

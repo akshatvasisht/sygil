@@ -1,10 +1,11 @@
-import { realpathSync } from "node:fs";
-import { isAbsolute, resolve as pathResolve, sep } from "node:path";
+import { isAbsolute, resolve as pathResolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { AgentEvent } from "@sygil/shared";
 import type { HooksConfig } from "../utils/config.js";
+import { isContainedIn } from "../gates/index.js";
+import { buildSafeEnv } from "../utils/safe-env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,12 +38,6 @@ export interface HookContext {
   gatePassed?: boolean;
   /** postGate — gate reason string */
   gateReason?: string;
-}
-
-function isContainedIn(child: string, parent: string): boolean {
-  const realParent = (() => { try { return realpathSync(parent); } catch { return pathResolve(parent); } })() + sep;
-  const realChild = (() => { try { return realpathSync(child); } catch { return pathResolve(child); } })();
-  return realChild.startsWith(realParent);
 }
 
 function validateHookPath(hookPath: string, workingDir: string): void {
@@ -111,39 +106,28 @@ export class HookRunner {
       ? scriptPath
       : pathResolve(this.workingDir, scriptPath);
 
-    // Whitelist env: PATH/HOME/etc. let hook scripts resolve binaries; we
-    // do NOT forward arbitrary SYGIL_* vars from the parent environment —
-    // those can carry secrets or stale values from nested runs.
-    // The fresh-set block below assigns exactly the documented contract.
-    const ALLOWED_ENV_KEYS = ["PATH", "HOME", "SHELL", "TERM", "USER", "LOGNAME", "TMPDIR", "TMP", "TEMP"];
-    const safeEnv: Record<string, string> = {};
-    for (const key of ALLOWED_ENV_KEYS) {
-      const val = process.env[key];
-      if (val !== undefined) safeEnv[key] = val;
-    }
-
-    const hookEnv: Record<string, string> = {
-      ...safeEnv,
+    const extra: Record<string, string> = {
       SYGIL_HOOK_TYPE: type,
       SYGIL_WORKFLOW_ID: context.workflowId,
       SYGIL_NODE_ID: context.nodeId,
       SYGIL_OUTPUT_DIR: context.outputDir,
     };
     if (context.exitCode !== undefined) {
-      hookEnv["SYGIL_EXIT_CODE"] = String(context.exitCode);
+      extra["SYGIL_EXIT_CODE"] = String(context.exitCode);
     }
     if (context.output !== undefined) {
-      hookEnv["SYGIL_OUTPUT"] = context.output;
+      extra["SYGIL_OUTPUT"] = context.output;
     }
     if (context.edgeId !== undefined) {
-      hookEnv["SYGIL_EDGE_ID"] = context.edgeId;
+      extra["SYGIL_EDGE_ID"] = context.edgeId;
     }
     if (context.gatePassed !== undefined) {
-      hookEnv["SYGIL_GATE_PASSED"] = context.gatePassed ? "1" : "0";
+      extra["SYGIL_GATE_PASSED"] = context.gatePassed ? "1" : "0";
     }
     if (context.gateReason !== undefined) {
-      hookEnv["SYGIL_GATE_REASON"] = context.gateReason;
+      extra["SYGIL_GATE_REASON"] = context.gateReason;
     }
+    const hookEnv = buildSafeEnv(extra);
 
     const startedAt = Date.now();
     try {
@@ -192,7 +176,10 @@ export class HookRunner {
 }
 
 /** Build the NDJSON-recordable AgentEvent for a completed hook invocation. */
-export function hookResultToEvent(type: HookType, result: HookRunResult): AgentEvent {
+export function hookResultToEvent(
+  type: HookType,
+  result: HookRunResult,
+): AgentEvent {
   return {
     type: "hook_result",
     hook: type,

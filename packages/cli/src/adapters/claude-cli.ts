@@ -1,6 +1,4 @@
 import { spawn, execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { StringDecoder } from "node:string_decoder";
 import type {
   AgentAdapter,
   AgentSession,
@@ -11,17 +9,16 @@ import type {
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
+import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS } from "./constants.js";
+import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { makeAgentSession } from "./session.js";
 
-/** Upper bound on `getResult`'s wait-for-exit poll. Mirrors codex/cursor/gemini
- * adapters. Post-stream teardown should never legitimately
- * exceed this; if it does, force-kill so a hung MCP server can't pin the workflow. */
+/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
+ * never legitimately exceed this; if it does, force-kill so a hung MCP server
+ * can't pin the workflow. */
 const CLAUDE_CLI_GETRESULT_TIMEOUT_MS = 10_000;
-const GETRESULT_KILL_GRACE_MS = 2_000;
-const GETRESULT_POLL_INTERVAL_MS = 50;
-/** Grace period after SIGTERM before SIGKILL during explicit `kill()`. Matches
- * `cursor-cli.ts` and `gemini-cli.ts` KILL_GRACE_PERIOD_MS — claude was the
- * outlier at 5_000ms, which made the scheduler's cancel path wait 2.5× longer
- * on this adapter than the others for no documented reason. */
+
+/** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface ClaudeCLIInternal {
@@ -106,15 +103,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       }
     });
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
-
-    return session;
+    return makeAgentSession(this.name, config.role, internal);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -129,44 +118,28 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       stderrBuf.push(chunk.toString());
     });
 
-    // StringDecoder buffers incomplete multi-byte UTF-8 sequences across
-    // chunk boundaries. Without it, `chunk.toString()` on a chunk that
-    // splits mid-emoji (or any multi-byte char) produces U+FFFD replacement
-    // characters and corrupts the NDJSON payload — JSON.parse usually still
-    // succeeds for string values (replacement char is valid in strings) but
-    // the final output text carries permanent mojibake for any non-ASCII
-    // content that unluckily lands on a chunk boundary.
-    const stdoutDecoder = new StringDecoder("utf8");
+    const decoder = createLineDecoder();
     let stdoutClosed = false;
-    let lineBuffer = "";
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += stdoutDecoder.write(chunk);
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const trimmed of decoder.feed(chunk)) {
         internal.outputLines.push(trimmed);
-
         for (const event of this.parseLine(trimmed, internal)) {
           push(event);
         }
       }
     });
 
-    // Use the same "last of end+exit calls finish" pattern as codex/cursor/
-    // gemini. Calling finish() unconditionally from both handlers drops the
-    // 'end' handler's trailing-line events when 'exit' fires first: finish
-    // sets `done=true` and resolves the drainEventQueue waiter with null,
-    // so the generator breaks before a subsequent pushEvent from the 'end'
-    // handler is ever yielded. The trailing line buffer includes the final
-    // NDJSON record for fast-exiting runs (e.g. auth failures that end
-    // without a newline), which would be silently lost.
+    // Only the later of `end` and `exit` calls finish(). Calling finish() from
+    // both handlers drops the trailing-line events when 'exit' fires first:
+    // finish() sets done=true and resolves the drainEventQueue waiter with
+    // null, so the generator breaks before a subsequent pushEvent is yielded.
+    // The trailing buffer can hold the final NDJSON record for fast-exiting
+    // runs (e.g. auth failures that end without a newline).
     proc.stdout?.on("end", () => {
-      lineBuffer += stdoutDecoder.end();
-      if (lineBuffer.trim()) {
-        internal.outputLines.push(lineBuffer.trim());
-        for (const event of this.parseLine(lineBuffer.trim(), internal)) {
+      const trailing = decoder.flush();
+      if (trailing) {
+        internal.outputLines.push(trailing);
+        for (const event of this.parseLine(trailing, internal)) {
           push(event);
         }
       }
@@ -347,24 +320,18 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       }
     });
 
-    return {
-      id: previousSession.id,
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
+    return makeAgentSession(this.name, config.role, internal, { id: previousSession.id });
   }
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as ClaudeCLIInternal;
     if (!internal.done) {
       internal.proc.kill("SIGTERM");
-      // SIGTERM → grace → SIGKILL to guarantee teardown; symmetric with cursor
-      // and gemini adapters.
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          internal.proc.kill("SIGKILL");
+          if (internal.proc.exitCode === null) {
+            internal.proc.kill("SIGKILL");
+          }
           resolve();
         }, KILL_GRACE_PERIOD_MS);
         internal.proc.once("exit", () => {

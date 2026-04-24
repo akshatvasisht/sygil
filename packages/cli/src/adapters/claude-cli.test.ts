@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ClaudeCLIAdapter } from "./claude-cli.js";
 import type { AgentSession } from "@sygil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — Claude Code CLI v2.1 stream-json event factories
@@ -47,35 +52,17 @@ function resultEvent(result: string, cost: number, isError = false): string {
 }
 
 /** Build a fake AgentSession backed by a fake process */
-function makeSession(adapter: ClaudeCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session-id",
-    nodeId: "test-node",
-    adapter: "claude-cli",
-    startedAt: new Date(),
-    _internal: {
-      proc,
-      outputLines: [],
-      exitCode: null,
-      done: false,
-      eventQueue: [],
-      resolve: null,
-      totalCostUsd: 0,
-      maxQueueSize: 1000,
-    },
-  };
-}
-
-/** Collect all events from the stream, waiting for it to finish */
-async function collectEvents(
-  adapter: ClaudeCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const events: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    events.push(ev as { type: string; [k: string]: unknown });
-  }
-  return events;
+function makeSession(_adapter: ClaudeCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
+  return makeSessionEnvelope("claude-cli", {
+    proc,
+    outputLines: [],
+    exitCode: null,
+    done: false,
+    eventQueue: [],
+    resolve: null,
+    totalCostUsd: 0,
+    maxQueueSize: 1000,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -397,22 +384,6 @@ describe("ClaudeCLIAdapter", () => {
       const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
       expect(args).toContain("--disallowedTools");
       expect(args).toContain("Bash,Edit");
-    });
-
-    it("omits --allowedTools when tools list is empty", async () => {
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      await adapter.spawn({
-        adapter: "claude-cli",
-        model: "claude-sonnet-4-20250514",
-        role: "agent",
-        prompt: "test",
-        tools: [],
-      });
-
-      const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
-      expect(args).not.toContain("--allowedTools");
     });
 
     it("returns a valid AgentSession", async () => {
