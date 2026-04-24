@@ -3,7 +3,6 @@ import type {
   WorkflowGraph,
   NodeConfig,
   EdgeConfig,
-  GateCondition,
   AdapterType,
   ParameterConfig,
   SandboxMode,
@@ -159,76 +158,10 @@ describe("EdgeConfig type", () => {
   });
 });
 
-describe("GateCondition discriminated union", () => {
-  it("narrows to exit_code condition", () => {
-    const cond: GateCondition = { type: "exit_code", value: 0 };
-    expect(cond.type).toBe("exit_code");
-    if (cond.type === "exit_code") {
-      expect(typeof cond.value).toBe("number");
-    }
-  });
-
-  it("narrows to file_exists condition", () => {
-    const cond: GateCondition = { type: "file_exists", path: "/tmp/output.txt" };
-    expect(cond.type).toBe("file_exists");
-    if (cond.type === "file_exists") {
-      expect(typeof cond.path).toBe("string");
-    }
-  });
-
-  it("narrows to regex condition", () => {
-    const cond: GateCondition = {
-      type: "regex",
-      filePath: "/tmp/output.txt",
-      pattern: "LGTM",
-    };
-    expect(cond.type).toBe("regex");
-    if (cond.type === "regex") {
-      expect(typeof cond.filePath).toBe("string");
-      expect(typeof cond.pattern).toBe("string");
-    }
-  });
-
-  it("narrows to script condition", () => {
-    const cond: GateCondition = { type: "script", path: "/tmp/check.sh" };
-    expect(cond.type).toBe("script");
-    if (cond.type === "script") {
-      expect(typeof cond.path).toBe("string");
-    }
-  });
-
-  it("narrows to human_review condition without prompt", () => {
-    const cond: GateCondition = { type: "human_review" };
-    expect(cond.type).toBe("human_review");
-    if (cond.type === "human_review") {
-      expect(cond.prompt).toBeUndefined();
-    }
-  });
-
-  it("narrows to human_review condition with prompt", () => {
-    const cond: GateCondition = { type: "human_review", prompt: "Approve this?" };
-    expect(cond.type).toBe("human_review");
-    if (cond.type === "human_review") {
-      expect(cond.prompt).toBe("Approve this?");
-    }
-  });
-});
-
 describe("AdapterType union", () => {
-  it("accepts all valid adapter type values", () => {
-    const adapters: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor", "echo"];
-    expect(adapters).toHaveLength(5);
-    expect(adapters).toContain("claude-sdk");
-    expect(adapters).toContain("claude-cli");
-    expect(adapters).toContain("codex");
-    expect(adapters).toContain("cursor");
-    expect(adapters).toContain("echo");
-  });
-
-  it("can be used to type a variable", () => {
-    const adapter: AdapterType = "claude-sdk";
-    const typed: AdapterType = adapter;
-    expect(typed).toBe("claude-sdk");
+  it("drift guard: length matches current adapter count", () => {
+    const adapters: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"];
+    expect(adapters).toHaveLength(7);
   });
 });
 
@@ -242,6 +175,113 @@ describe("SandboxMode union", () => {
 describe("Constants", () => {
   it("exports STALL_EXIT_CODE as -2", () => {
     expect(STALL_EXIT_CODE).toBe(-2);
+  });
+});
+
+describe("ProviderConfig (multi-provider failover)", () => {
+  it("accepts a minimal providers list on a NodeConfig", () => {
+    const node: NodeConfig = {
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "planner",
+      prompt: "Plan",
+      providers: [
+        { adapter: "claude-sdk", priority: 0 },
+        { adapter: "claude-cli", model: "claude-opus-4-5", priority: 1 },
+      ],
+    };
+    expect(node.providers).toHaveLength(2);
+  });
+
+  it("NodeConfigSchema parses providers array", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "planner",
+      prompt: "Plan",
+      providers: [
+        { adapter: "claude-sdk", priority: 0 },
+        { adapter: "local-oai", model: "llama3.2", priority: 10 },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("NodeConfigSchema rejects an empty providers array", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "planner",
+      prompt: "Plan",
+      providers: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("NodeConfigSchema rejects a providers entry with invalid adapter", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "planner",
+      prompt: "Plan",
+      providers: [{ adapter: "nonexistent", priority: 0 }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("omitting providers is valid (backwards compatible)", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-5",
+      role: "planner",
+      prompt: "Plan",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("ModelTier (tier-based model selection)", () => {
+  it("NodeConfigSchema accepts a modelTier value", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "Plan",
+      modelTier: "cheap",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("NodeConfigSchema rejects an unknown modelTier value", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "Plan",
+      modelTier: "cosmic",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("omitting modelTier is valid (backwards compatible)", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "Plan",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("typed NodeConfig allows a modelTier field", () => {
+    const node: NodeConfig = {
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "Plan",
+      modelTier: "smart",
+    };
+    expect(node.modelTier).toBe("smart");
   });
 });
 
@@ -407,92 +447,72 @@ describe("NodeConfigSchema", () => {
     expect(NodeConfigSchema.safeParse({}).success).toBe(false);
   });
 
-  it("rejects empty model string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "",
-      role: "r",
-      prompt: "p",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty role string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "",
-      prompt: "p",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects empty prompt string", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects negative timeoutMs", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      timeoutMs: -1000,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects zero maxTurns", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      maxTurns: 0,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects invalid sandbox mode", () => {
-    const result = NodeConfigSchema.safeParse({
-      adapter: "claude-sdk",
-      model: "m",
-      role: "r",
-      prompt: "p",
-      sandbox: "invalid-mode",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts all valid adapter types", () => {
-    for (const adapter of ["claude-sdk", "claude-cli", "codex", "cursor", "echo"]) {
-      const result = NodeConfigSchema.safeParse({
-        adapter,
-        model: "m",
-        role: "r",
-        prompt: "p",
-      });
-      expect(result.success).toBe(true);
-    }
-  });
-
-  it("accepts all valid sandbox modes", () => {
-    for (const sandbox of ["read-only", "workspace-write", "full-access"]) {
+  describe.each([
+    { label: "empty model string", override: { model: "" } },
+    { label: "empty role string", override: { role: "" } },
+    { label: "empty prompt string", override: { prompt: "" } },
+    { label: "negative timeoutMs", override: { timeoutMs: -1000 } },
+    { label: "zero maxTurns", override: { maxTurns: 0 } },
+    { label: "invalid sandbox mode", override: { sandbox: "invalid-mode" } },
+  ])("NodeConfig rejection: $label", ({ override }) => {
+    it("is rejected by NodeConfigSchema", () => {
       const result = NodeConfigSchema.safeParse({
         adapter: "claude-sdk",
         model: "m",
         role: "r",
         prompt: "p",
-        sandbox,
+        ...override,
       });
-      expect(result.success).toBe(true);
-    }
+      expect(result.success).toBe(false);
+    });
+  });
+
+  it.each([
+    ["claude-sdk"], ["claude-cli"], ["codex"], ["cursor"], ["echo"], ["gemini-cli"], ["local-oai"],
+  ])("accepts valid adapter type %p", (adapter) => {
+    const result = NodeConfigSchema.safeParse({
+      adapter,
+      model: "m",
+      role: "r",
+      prompt: "p",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["read-only"], ["workspace-write"], ["full-access"],
+  ])("accepts valid sandbox mode %p", (sandbox) => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "m",
+      role: "r",
+      prompt: "p",
+      sandbox,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts writesContext + readsContext arrays", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "m",
+      role: "r",
+      prompt: "p",
+      writesContext: ["summary"],
+      readsContext: ["plan"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects empty strings inside writesContext", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "m",
+      role: "r",
+      prompt: "p",
+      writesContext: [""],
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -643,6 +663,50 @@ describe("GateConditionSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("parses spec_compliance in exact mode", () => {
+    const result = GateConditionSchema.safeParse({
+      type: "spec_compliance",
+      specPath: "spec.md",
+      mode: "exact",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("parses spec_compliance in superset mode", () => {
+    const result = GateConditionSchema.safeParse({
+      type: "spec_compliance",
+      specPath: "spec.md",
+      mode: "superset",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects spec_compliance with empty specPath", () => {
+    const result = GateConditionSchema.safeParse({
+      type: "spec_compliance",
+      specPath: "",
+      mode: "exact",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects spec_compliance with unknown mode", () => {
+    const result = GateConditionSchema.safeParse({
+      type: "spec_compliance",
+      specPath: "spec.md",
+      mode: "semantic",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects spec_compliance missing mode", () => {
+    const result = GateConditionSchema.safeParse({
+      type: "spec_compliance",
+      specPath: "spec.md",
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects exit_code missing value", () => {
     const result = GateConditionSchema.safeParse({ type: "exit_code" });
     expect(result.success).toBe(false);
@@ -678,5 +742,130 @@ describe("ParameterConfigSchema", () => {
   it("rejects invalid parameter type", () => {
     const result = ParameterConfigSchema.safeParse({ type: "array" });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RetryPolicy
+// ---------------------------------------------------------------------------
+
+describe("RetryPolicy", () => {
+  function nodeWithRetry(retryPolicy: unknown): Record<string, unknown> {
+    return {
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "hi",
+      retryPolicy,
+    };
+  }
+
+  it("accepts a minimal retryPolicy (no retryableErrors)", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 3,
+        initialDelayMs: 200,
+        backoffMultiplier: 2,
+        maxDelayMs: 5000,
+      }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts retryPolicy with the full retryableErrors whitelist", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 5,
+        initialDelayMs: 100,
+        backoffMultiplier: 2.5,
+        maxDelayMs: 10000,
+        retryableErrors: ["transport", "rate_limit", "server_5xx"],
+      }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a single-attempt retryPolicy (retries effectively disabled)", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 1,
+        initialDelayMs: 0,
+        backoffMultiplier: 1,
+        maxDelayMs: 0,
+      }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects retryPolicy with maxAttempts < 1", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 0,
+        initialDelayMs: 100,
+        backoffMultiplier: 2,
+        maxDelayMs: 500,
+      }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects retryPolicy with backoffMultiplier < 1", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 3,
+        initialDelayMs: 100,
+        backoffMultiplier: 0.5,
+        maxDelayMs: 500,
+      }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects retryPolicy where maxDelayMs < initialDelayMs", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        backoffMultiplier: 2,
+        maxDelayMs: 500,
+      }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown retryableErrors entries", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 3,
+        initialDelayMs: 100,
+        backoffMultiplier: 2,
+        maxDelayMs: 500,
+        retryableErrors: ["timeout"],
+      }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects empty retryableErrors array (opt-in requires at least one class)", () => {
+    const result = NodeConfigSchema.safeParse(
+      nodeWithRetry({
+        maxAttempts: 3,
+        initialDelayMs: 100,
+        backoffMultiplier: 2,
+        maxDelayMs: 500,
+        retryableErrors: [],
+      }),
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("is backwards-compatible — node without retryPolicy still parses", () => {
+    const result = NodeConfigSchema.safeParse({
+      adapter: "claude-sdk",
+      model: "claude-opus-4-7",
+      role: "planner",
+      prompt: "hi",
+    });
+    expect(result.success).toBe(true);
   });
 });

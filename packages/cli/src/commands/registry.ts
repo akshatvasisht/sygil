@@ -84,12 +84,14 @@ const installSubCommand = new Command("install")
       const entry = index.templates.find(t => t.name === name);
       if (!entry) {
         console.error(chalk.red(`Template '${name}' not found in registry.`));
-        console.log(chalk.dim("Run 'sigil registry list' to see available templates."));
+        console.log(chalk.dim("Run 'sygil registry list' to see available templates."));
         process.exit(1);
       }
 
-      // Download and validate JSON structure
-      const res = await fetch(entry.url);
+      // Download and validate JSON structure. 10s timeout mirrors the
+      // `installTemplate` helper below — without this, a hung CDN connection
+      // would block the install command indefinitely with no feedback.
+      const res = await fetch(entry.url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) {
         throw new Error(`Failed to download template: ${res.status}`);
       }
@@ -117,13 +119,13 @@ const installSubCommand = new Command("install")
 
       console.log(chalk.green(`✓ Installed template '${name}' → ${destPath}`));
       console.log(
-        chalk.dim(`Run 'sigil export ${name} ./workflow.json' to use it`)
+        chalk.dim(`Run 'sygil export ${name} ./workflow.json' to use it`)
       );
     })
   );
 
 export const registryCommand = new Command("registry")
-  .description("Browse and install templates from the Sigil registry")
+  .description("Browse and install templates from the Sygil registry")
   .addCommand(listSubCommand)
   .addCommand(searchSubCommand)
   .addCommand(installSubCommand);

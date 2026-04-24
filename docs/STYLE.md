@@ -35,7 +35,7 @@ The web package disables `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 ## Imports
 
 - Use `.js` extensions on relative imports even in TypeScript source (required for ESM Node.js).
-- Group imports: Node built-ins → third-party → internal packages (`@sigil/shared`) → relative.
+- Group imports: Node built-ins → third-party → internal packages (`@sygil/shared`) → relative.
 - Type-only imports use `import type { ... }`.
 
 ## Async
@@ -48,7 +48,7 @@ The web package disables `exactOptionalPropertyTypes` and `noUncheckedIndexedAcc
 
 - Validate at system boundaries (CLI input, external HTTP responses, workflow JSON). Trust internal types inside the boundary.
 - Never swallow errors silently. Either rethrow, log with `logger.error`, or return a typed result object.
-- Use `SigilErrorCode` from `@sigil/shared` for programmatic error classification.
+- Use `SygilErrorCode` from `@sygil/shared` for programmatic error classification.
 - Errors from child processes use the `message` field of `Error` — do not parse `stderr` unless necessary.
 
 ## TypeScript patterns

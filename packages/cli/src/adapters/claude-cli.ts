@@ -1,14 +1,27 @@
 import { spawn, execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import type {
   AgentAdapter,
   AgentSession,
   AgentEvent,
   NodeConfig,
   NodeResult,
-} from "@sigil/shared";
-import { SigilErrorCode, STALL_EXIT_CODE } from "@sigil/shared";
+  SpawnContext,
+} from "@sygil/shared";
+import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { waitForDoneOrTimeout } from "./await-done.js";
+import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS } from "./constants.js";
+import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { makeAgentSession } from "./session.js";
+import { logger } from "../utils/logger.js";
+
+/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
+ * never legitimately exceed this; if it does, force-kill so a hung MCP server
+ * can't pin the workflow. */
+const CLAUDE_CLI_GETRESULT_TIMEOUT_MS = 10_000;
+
+/** Grace period before SIGKILL after SIGTERM during kill(). */
+const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface ClaudeCLIInternal {
   proc: ReturnType<typeof spawn>;
@@ -34,7 +47,27 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async getVersion(): Promise<string | null> {
+    try {
+      const out = execSync("claude --version", {
+        encoding: "utf8",
+        timeout: 1_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const firstLine = out.split("\n")[0]?.trim();
+      return firstLine ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
+    if (config.outputSchema) {
+      logger.info(
+        `claude-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
+      );
+    }
+
     const cwd = config.outputDir ?? process.cwd();
     const tools = (config.tools ?? []).join(",");
 
@@ -69,7 +102,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: ClaudeCLIInternal = {
@@ -92,15 +125,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       }
     });
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
-
-    return session;
+    return makeAgentSession(this.name, config.role, internal);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -115,35 +140,38 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       stderrBuf.push(chunk.toString());
     });
 
-    let lineBuffer = "";
+    const decoder = createLineDecoder();
+    let stdoutClosed = false;
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const trimmed of decoder.feed(chunk)) {
         internal.outputLines.push(trimmed);
-
         for (const event of this.parseLine(trimmed, internal)) {
           push(event);
         }
       }
     });
 
+    // Only the later of `end` and `exit` calls finish(). Calling finish() from
+    // both handlers drops the trailing-line events when 'exit' fires first:
+    // finish() sets done=true and resolves the drainEventQueue waiter with
+    // null, so the generator breaks before a subsequent pushEvent is yielded.
+    // The trailing buffer can hold the final NDJSON record for fast-exiting
+    // runs (e.g. auth failures that end without a newline).
     proc.stdout?.on("end", () => {
-      if (lineBuffer.trim()) {
-        internal.outputLines.push(lineBuffer.trim());
-        for (const event of this.parseLine(lineBuffer.trim(), internal)) {
+      const trailing = decoder.flush();
+      if (trailing) {
+        internal.outputLines.push(trailing);
+        for (const event of this.parseLine(trailing, internal)) {
           push(event);
         }
       }
-      finish();
+      stdoutClosed = true;
+      if (internal.exitCode !== null) finish();
     });
 
     proc.on("exit", (code) => {
       internal.exitCode = code ?? 1;
-      finish();
+      if (stdoutClosed) finish();
     });
 
     yield* drainEventQueue(internal);
@@ -154,7 +182,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     try {
       parsed = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      if (process.env["SIGIL_DEBUG"]) {
+      if (process.env["SYGIL_DEBUG"]) {
         process.stderr.write(`[claude-cli] malformed NDJSON (first 200 chars): ${line.slice(0, 200)}\n`);
       }
       return [];
@@ -236,8 +264,10 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const internal = session._internal as ClaudeCLIInternal;
 
     if (!internal.done || internal.exitCode === null) {
-      await new Promise<void>((resolve) => {
-        internal.proc.on("exit", () => resolve());
+      await waitForDoneOrTimeout(internal, {
+        timeoutMs: CLAUDE_CLI_GETRESULT_TIMEOUT_MS,
+        pollIntervalMs: GETRESULT_POLL_INTERVAL_MS,
+        killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
     }
 
@@ -253,13 +283,13 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       : undefined;
 
     // Map exit code to structured error code
-    let errorCode: SigilErrorCode | undefined;
+    let errorCode: SygilErrorCode | undefined;
     if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SigilErrorCode.NODE_STALLED;
+      errorCode = SygilErrorCode.NODE_STALLED;
     } else if (exitCode === 124) {
-      errorCode = SigilErrorCode.NODE_TIMEOUT;
+      errorCode = SygilErrorCode.NODE_TIMEOUT;
     } else if (exitCode !== 0) {
-      errorCode = SigilErrorCode.NODE_CRASHED;
+      errorCode = SygilErrorCode.NODE_CRASHED;
     }
 
     return {
@@ -272,7 +302,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     };
   }
 
-  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string): Promise<AgentSession> {
+  async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
     const args: string[] = [
@@ -290,7 +320,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: ClaudeCLIInternal = {
@@ -312,25 +342,20 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       }
     });
 
-    return {
-      id: previousSession.id,
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
+    return makeAgentSession(this.name, config.role, internal, { id: previousSession.id });
   }
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as ClaudeCLIInternal;
     if (!internal.done) {
       internal.proc.kill("SIGTERM");
-      // Await process exit with a 5s SIGKILL fallback to guarantee cleanup
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
-          internal.proc.kill("SIGKILL");
+          if (internal.proc.exitCode === null) {
+            internal.proc.kill("SIGKILL");
+          }
           resolve();
-        }, 5000);
+        }, KILL_GRACE_PERIOD_MS);
         internal.proc.once("exit", () => {
           clearTimeout(timeout);
           resolve();

@@ -70,27 +70,15 @@ describe("useWorkflowEditor", () => {
   // ── Initial state ─────────────────────────────────────────────────────────
 
   describe("initial state", () => {
-    it("starts with empty nodes and edges", () => {
+    it("exposes empty collections and clean history/dirty flags", () => {
       const { result } = renderHook(() => useWorkflowEditor());
       expect(result.current.nodes).toHaveLength(0);
       expect(result.current.edges).toHaveLength(0);
-    });
-
-    it("starts with canUndo=false and canRedo=false", () => {
-      const { result } = renderHook(() => useWorkflowEditor());
-      expect(result.current.canUndo).toBe(false);
-      expect(result.current.canRedo).toBe(false);
-    });
-
-    it("starts with isDirty=false", () => {
-      const { result } = renderHook(() => useWorkflowEditor());
-      expect(result.current.isDirty).toBe(false);
-    });
-
-    it("exposes nodeCount and edgeCount", () => {
-      const { result } = renderHook(() => useWorkflowEditor());
       expect(result.current.nodeCount).toBe(0);
       expect(result.current.edgeCount).toBe(0);
+      expect(result.current.canUndo).toBe(false);
+      expect(result.current.canRedo).toBe(false);
+      expect(result.current.isDirty).toBe(false);
     });
   });
 

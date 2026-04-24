@@ -1,0 +1,45 @@
+{
+  "version": "1",
+  "name": "tdd-feature-v1-replay-fixture",
+  "description": "Frozen echo-adapter fixture for Replay-CI. Do not edit the NDJSON event logs by hand — regenerate via `npm run replay:ci -- --regenerate` if the replay event tuple schema legitimately changes.",
+  "nodes": {
+    "planner": {
+      "adapter": "echo",
+      "model": "echo-fixture",
+      "role": "planner",
+      "prompt": "Plan the feature.",
+      "tools": ["Read", "Write"],
+      "outputDir": "planning"
+    },
+    "implementer": {
+      "adapter": "echo",
+      "model": "echo-fixture",
+      "role": "implementer",
+      "prompt": "Implement the plan.",
+      "tools": ["Read", "Write", "Edit"],
+      "outputDir": "src"
+    },
+    "reviewer": {
+      "adapter": "echo",
+      "model": "echo-fixture",
+      "role": "reviewer",
+      "prompt": "Review the implementation.",
+      "tools": ["Read", "Bash"],
+      "outputDir": "review"
+    }
+  },
+  "edges": [
+    {
+      "id": "plan-to-implement",
+      "from": "planner",
+      "to": "implementer",
+      "gate": { "conditions": [{ "type": "exit_code", "value": 0 }] }
+    },
+    {
+      "id": "implement-to-review",
+      "from": "implementer",
+      "to": "reviewer",
+      "gate": { "conditions": [{ "type": "exit_code", "value": 0 }] }
+    }
+  ]
+}

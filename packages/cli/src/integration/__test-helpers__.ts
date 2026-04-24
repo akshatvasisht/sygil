@@ -21,7 +21,7 @@ import type {
   AdapterType,
   WorkflowRunState,
   WsServerEvent,
-} from "@sigil/shared";
+} from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 
 const execFileAsync = promisify(execFile);
@@ -32,7 +32,7 @@ const execFileAsync = promisify(execFile);
 
 const tempDirs: string[] = [];
 
-export async function makeTempDir(prefix = "sigil-integ-"): Promise<string> {
+export async function makeTempDir(prefix = "sygil-integ-"): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
@@ -49,10 +49,10 @@ export async function cleanupTempDirs(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function createTempGitRepo(): Promise<string> {
-  const dir = await makeTempDir("sigil-git-");
+  const dir = await makeTempDir("sygil-git-");
   await execFileAsync("git", ["init", dir]);
-  await execFileAsync("git", ["-C", dir, "config", "user.email", "test@sigil.dev"]);
-  await execFileAsync("git", ["-C", dir, "config", "user.name", "Sigil Test"]);
+  await execFileAsync("git", ["-C", dir, "config", "user.email", "test@sygil.dev"]);
+  await execFileAsync("git", ["-C", dir, "config", "user.name", "Sygil Test"]);
   // Create an initial commit so HEAD exists
   await writeFile(join(dir, "README.md"), "# test repo\n");
   await execFileAsync("git", ["-C", dir, "add", "."]);
@@ -88,6 +88,24 @@ export function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig 
   };
 }
 
+/**
+ * Build a NodeConfig whose `role` equals the graph node ID and whose default
+ * `prompt` embeds the node ID. Used by tests that rely on per-node adapter
+ * routing via `session.nodeId == config.role`.
+ */
+export function makeNodeConfigForNode(
+  nodeId: string,
+  overrides: Partial<NodeConfig> = {}
+): NodeConfig {
+  return {
+    adapter: "claude-sdk" as AdapterType,
+    model: "test",
+    role: nodeId,
+    prompt: `prompt for ${nodeId}`,
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Node result factory
 // ---------------------------------------------------------------------------
@@ -115,6 +133,7 @@ export function makeRunState(overrides: Partial<WorkflowRunState> = {}): Workflo
     nodeResults: {},
     totalCostUsd: 0,
     retryCounters: {},
+    sharedContext: {},
     ...overrides,
   };
 }
@@ -192,6 +211,83 @@ export function createRoutingAdapterFactory(
 }
 
 // ---------------------------------------------------------------------------
+// Simple mock adapter — minimal surface used by contract/node-output tests
+// ---------------------------------------------------------------------------
+
+export interface MockAdapterOptions {
+  result?: Partial<NodeResult>;
+  /** Called on spawn with the resolved config — use to capture the prompt. */
+  onSpawn?: (config: NodeConfig) => void;
+}
+
+/**
+ * Minimal mock adapter: no streamed events, single `getResult`, session's
+ * `nodeId` is set to `config.role` so per-node routing factories can dispatch.
+ */
+export function createMockAdapter(options: MockAdapterOptions = {}): AgentAdapter {
+  const result: NodeResult = {
+    output: "mock output",
+    exitCode: 0,
+    durationMs: 1,
+    ...options.result,
+  };
+
+  return {
+    name: "mock",
+    async isAvailable() { return true; },
+    async spawn(config) {
+      options.onSpawn?.(config);
+      return makeSession(config.role);
+    },
+    async resume(_config, session) { return session; },
+    async *stream(_session): AsyncGenerator<AgentEvent> { /* no events */ },
+    async getResult(_session) { return result; },
+    async kill(_session) { /* no-op */ },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Routing adapter factory — dispatches per-node adapter calls by session.nodeId
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a routing adapter factory that dispatches per-node adapter calls
+ * using `config.role` on spawn and `session.nodeId` on subsequent calls.
+ * Pairs with `makeNodeConfigForNode` (which sets `role == nodeId`) to allow
+ * tests to wire a distinct adapter per graph node.
+ */
+export function createNodeRoutingAdapterFactory(
+  adaptersByNodeId: Record<string, AgentAdapter>
+): (_type: AdapterType) => AgentAdapter {
+  return (_type: AdapterType): AgentAdapter => ({
+    name: "mock",
+    async isAvailable() { return true; },
+    async spawn(config) {
+      const a = adaptersByNodeId[config.role];
+      return a ? a.spawn(config) : makeSession(config.role);
+    },
+    async resume(config, session, feedback) {
+      const a = adaptersByNodeId[session.nodeId];
+      return a ? a.resume(config, session, feedback) : session;
+    },
+    async *stream(session): AsyncGenerator<AgentEvent> {
+      const a = adaptersByNodeId[session.nodeId];
+      if (a) yield* a.stream(session);
+    },
+    async getResult(session) {
+      const a = adaptersByNodeId[session.nodeId];
+      return a
+        ? a.getResult(session)
+        : { output: "", exitCode: 0, durationMs: 1 };
+    },
+    async kill(session) {
+      const a = adaptersByNodeId[session.nodeId];
+      if (a) await a.kill(session);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Mock monitor
 // ---------------------------------------------------------------------------
 
@@ -206,6 +302,7 @@ export function createMockMonitor(): WsMonitorServer & { events: MonitorEmit[] }
     async stop() {},
     getPort() { return null; },
     getAuthToken() { return "test-token"; },
+    setAdapterPool() {},
     onClientControl: undefined,
   } as unknown as WsMonitorServer & { events: MonitorEmit[] };
 }

@@ -9,10 +9,11 @@
  * - Static loadState() to reconstruct state from main + per-node files
  */
 
-import { writeFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { WorkflowRunState, NodeResult } from "@sigil/shared";
+import type { WorkflowRunState, NodeResult } from "@sygil/shared";
 import { logger } from "../utils/logger.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 
 /** Default debounce window in milliseconds. */
 export const CHECKPOINT_DEBOUNCE_MS = 100;
@@ -32,6 +33,7 @@ export class CheckpointManager {
 
   private readonly baseDir: string;
   private readonly debounceMs: number;
+  private onWriteSuccess: (() => void) | null = null;
   private dirCreated = false;
   private dirty = false;
   private pendingState: WorkflowRunState | null = null;
@@ -43,6 +45,15 @@ export class CheckpointManager {
   constructor(baseDir: string, debounceMs = CHECKPOINT_DEBOUNCE_MS) {
     this.baseDir = baseDir;
     this.debounceMs = debounceMs;
+  }
+
+  /**
+   * Register a callback that fires once per successful background/flush write.
+   * Used by the Prometheus exporter to increment a write counter.
+   * At most one listener is supported; setting a new one replaces the previous.
+   */
+  setWriteListener(listener: (() => void) | null): void {
+    this.onWriteSuccess = listener;
   }
 
   /**
@@ -112,7 +123,7 @@ export class CheckpointManager {
    * plus any per-node result files.
    */
   static async loadState(baseDir: string, runId: string): Promise<WorkflowRunState> {
-    const runsDir = join(baseDir, ".sigil", "runs");
+    const runsDir = join(baseDir, ".sygil", "runs");
     const mainFilePath = join(runsDir, `${runId}.json`);
     const raw = await readFile(mainFilePath, "utf8");
     const state = JSON.parse(raw) as WorkflowRunState;
@@ -145,6 +156,11 @@ export class CheckpointManager {
     this.debounceTimer = setTimeout(() => {
       this.writeInFlight = this.writePending();
     }, this.debounceMs);
+    // Don't keep the process alive waiting for a debounced checkpoint write —
+    // matches the pattern at websocket.ts:297 / metrics-aggregator.ts / event-
+    // fanout.ts. The workflow's `flush()` path explicitly awaits the pending
+    // write, so callers that care about durability still block correctly.
+    this.debounceTimer.unref?.();
   }
 
   private cancelTimer(): void {
@@ -170,26 +186,42 @@ export class CheckpointManager {
     this.dirty = false;
 
     try {
-      const runsDir = join(this.baseDir, ".sigil", "runs");
+      const runsDir = join(this.baseDir, ".sygil", "runs");
       await this.ensureDir(runsDir);
 
-      // Write main state file (compact JSON — no pretty-printing)
+      // Write main state file (compact JSON — no pretty-printing). Atomic via
+      // write-to-tmp + rename so a crash mid-write leaves the previous
+      // checkpoint intact rather than producing a truncated file that
+      // `resume` can't parse.
       if (state) {
         const filePath = join(runsDir, `${state.id}.json`);
-        await writeFile(filePath, JSON.stringify(state), "utf8");
+        await writeFileAtomic(filePath, JSON.stringify(state));
       }
 
-      // Write per-node result files
+      // Write per-node result files (also atomic).
       for (const { runId, nodeId, result } of nodeResults) {
         const nodesDir = join(runsDir, runId, "nodes");
         await mkdir(nodesDir, { recursive: true });
         const nodeFilePath = join(nodesDir, `${nodeId}.json`);
-        await writeFile(nodeFilePath, JSON.stringify(result), "utf8");
+        await writeFileAtomic(nodeFilePath, JSON.stringify(result));
       }
 
       this.lastError = undefined;
+      this.onWriteSuccess?.();
     } catch (err) {
       this.lastError = err instanceof Error ? err : new Error(String(err));
+      // Re-queue the failed batch so a subsequent flush()/markDirty() retries.
+      // Without this, a transient write failure (ENOSPC, EPERM, temporary EBUSY)
+      // silently drops in-flight checkpoint data: the sync prologue already
+      // cleared `pendingNodeResults` and set `dirty = false`, so flush()'s
+      // early-return on `!this.dirty` would bypass the retry path entirely.
+      // `pendingState` is intentionally NOT restored: a newer markDirty() that
+      // arrived during the await has already overwritten it with a fresher
+      // snapshot, which is what we want to write next.
+      if (nodeResults.length > 0) {
+        this.pendingNodeResults.unshift(...nodeResults);
+      }
+      this.dirty = true;
     }
   }
 }

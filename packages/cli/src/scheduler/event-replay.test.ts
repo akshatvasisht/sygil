@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { replayEvents } from "./event-replay.js";
 import { EventRecorder } from "./event-recorder.js";
-import type { AgentEvent, RecordedEvent } from "@sigil/shared";
+import type { AgentEvent, RecordedEvent } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -13,7 +13,7 @@ import type { AgentEvent, RecordedEvent } from "@sigil/shared";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-replay-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-replay-test-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -202,7 +202,7 @@ describe("replayEvents", () => {
   });
 
   it("returns empty for a nonexistent run directory", async () => {
-    const runDir = join(tmpdir(), "sigil-nonexistent-" + Date.now());
+    const runDir = join(tmpdir(), "sygil-nonexistent-" + Date.now());
     const events = await collectAll(replayEvents(runDir, { speed: 0 }));
     expect(events).toHaveLength(0);
   });

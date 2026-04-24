@@ -1,10 +1,10 @@
 {
-  "name": "sigil",
+  "name": "sygil",
   "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/akshatvasisht/sigil.git"
+    "url": "git+https://github.com/akshatvasisht/sygil.git"
   },
   "workspaces": [
     "packages/*"
@@ -14,7 +14,10 @@
     "dev": "turbo dev",
     "lint": "turbo lint",
     "test": "turbo test",
+    "replay:ci": "turbo replay:ci",
     "clean": "turbo clean",
+    "schema": "npm run schema --workspace=sygil -- --out ../../docs/workflow.schema.json",
+    "validate:schema": "npm run schema --workspace=sygil -- --out ../../docs/workflow.schema.json --check",
     "release": "changeset publish"
   },
   "devDependencies": {

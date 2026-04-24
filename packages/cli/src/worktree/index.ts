@@ -14,14 +14,31 @@ export interface WorktreeInfo {
   branch: string;
 }
 
+/**
+ * Reap orphan entries from `.git/worktrees/<name>`. `git worktree add`
+ * creates the registry dir BEFORE `WorktreeManager` records the entry into
+ * its in-memory map; SIGINT in that window leaks a directory that `cleanup()`
+ * never sees. Prune at the top of every `run`/`resume` so orphans from any
+ * cause (prior Sygil crashes, external tooling, manual `rm -rf`) don't pile up.
+ *
+ * Best-effort — non-git repos and permission errors are swallowed.
+ */
+export async function pruneWorktrees(repoRoot: string = process.cwd()): Promise<void> {
+  try {
+    await execFileAsync("git", ["-C", repoRoot, "worktree", "prune"]);
+  } catch (e: unknown) {
+    logger.debug(`worktree prune failed (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 export class WorktreeManager {
-  private readonly baseDir: string; // .sigil/worktrees/<runId>
+  private readonly baseDir: string; // .sygil/worktrees/<runId>
   private readonly repoRoot: string;
   private worktrees: Map<string, WorktreeInfo> = new Map();
 
   constructor(runId: string, repoRoot: string = process.cwd()) {
     this.repoRoot = repoRoot;
-    this.baseDir = path.join(repoRoot, ".sigil", "worktrees", runId);
+    this.baseDir = path.join(repoRoot, ".sygil", "worktrees", runId);
   }
 
   async create(nodeId: string, signal?: AbortSignal): Promise<string> {
@@ -46,7 +63,7 @@ export class WorktreeManager {
     }
 
     // Create a new branch for this worktree
-    const wtBranch = `sigil/worktree/${nodeId}-${randomUUID()}`;
+    const wtBranch = `sygil/worktree/${nodeId}-${randomUUID()}`;
     await execFileAsync("git", ["-C", this.repoRoot, "worktree", "add", "-b", wtBranch, worktreePath, branchName], { signal });
 
     this.worktrees.set(nodeId, { path: worktreePath, nodeId, branch: wtBranch });
@@ -63,7 +80,7 @@ export class WorktreeManager {
 
     // Commit any changes in the worktree
     await execFileAsync("git", ["-C", info.path, "add", "-A"]).catch((e: unknown) => logger.debug(`worktree git-add failed for node ${nodeId}: ${e}`));
-    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sigil: node ${nodeId} output`]).catch((e: unknown) => logger.debug(`worktree git-commit failed for node ${nodeId}: ${e}`));
+    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sygil: node ${nodeId} output`]).catch((e: unknown) => logger.debug(`worktree git-commit failed for node ${nodeId}: ${e}`));
 
     // Merge into target branch
     try {

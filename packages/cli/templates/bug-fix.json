@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
   "version": "1",
   "name": "bug-fix",
   "description": "Bug fix pipeline: reproduce → fix → verify (gate on test suite passing)",

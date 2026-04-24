@@ -1,43 +1,29 @@
 import { describe, it, expect } from "vitest";
 import { buildExecutionStateMap, buildTimelineEntries } from "./ExecutionMonitor";
-import type { WsServerEvent, WorkflowRunState } from "@sigil/shared";
+import type { WsServerEvent, WorkflowRunState } from "@sygil/shared";
+import {
+  makeNodeEndEvent,
+  makeNodeStartEvent,
+} from "../../test/fixtures/workflow-events";
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
-const nodeStartPlanner: WsServerEvent = {
-  type: "node_start",
-  workflowId: "wf-1",
-  nodeId: "planner",
-  config: {
-    adapter: "claude-sdk",
-    model: "claude-opus-4-5",
-    role: "Planner",
-    prompt: "",
-  },
-  attempt: 1,
-};
-
-const nodeEndPlanner: WsServerEvent = {
-  type: "node_end",
-  workflowId: "wf-1",
-  nodeId: "planner",
-  result: { output: "done", exitCode: 0, durationMs: 1200, costUsd: 0.012 },
-};
-
-const nodeStartImpl: WsServerEvent = {
-  type: "node_start",
-  workflowId: "wf-1",
-  nodeId: "implementer",
-  config: {
-    adapter: "codex",
-    model: "gpt-4o",
-    role: "Implementer",
-    prompt: "",
-  },
-  attempt: 1,
-};
+const nodeStartPlanner = makeNodeStartEvent("planner", "claude-sdk", {
+  model: "claude-opus-4-5",
+  role: "Planner",
+});
+const nodeEndPlanner = makeNodeEndEvent("planner", {
+  output: "done",
+  exitCode: 0,
+  durationMs: 1200,
+  costUsd: 0.012,
+});
+const nodeStartImpl = makeNodeStartEvent("implementer", "codex", {
+  model: "gpt-4o",
+  role: "Implementer",
+});
 
 // ---------------------------------------------------------------------------
 // buildExecutionStateMap
@@ -240,6 +226,7 @@ describe("buildTimelineEntries()", () => {
       nodeResults: {},
       totalCostUsd: 0,
       retryCounters: {},
+      sharedContext: {},
       currentNodeId: "planner",
     };
     // Manually set to failed first so we can verify the override
@@ -251,5 +238,67 @@ describe("buildTimelineEntries()", () => {
     const planner = entries.find((e) => e.nodeId === "planner");
     // workflowState says planner is current — should remain running
     expect(planner?.status).toBe("running");
+  });
+
+  // Distinguish `cached` and `cancelled` so operators can tell
+  // memoized results and user-intent aborts apart from genuine completion or
+  // adapter failure.
+  describe("status coverage", () => {
+    it("marks a node_end with cacheHit=true as cached, not completed", () => {
+      const cacheHitEnd: WsServerEvent = {
+        type: "node_end",
+        workflowId: "wf-1",
+        nodeId: "planner",
+        result: {
+          output: "done",
+          exitCode: 0,
+          durationMs: 12,
+          costUsd: 0.004,
+          cacheHit: true,
+        },
+      };
+      const entries = buildTimelineEntries(null, [nodeStartPlanner, cacheHitEnd]);
+      const planner = entries.find((e) => e.nodeId === "planner");
+      expect(planner?.status).toBe("cached");
+    });
+
+    it("treats 'Workflow cancelled' workflow_error as cancellation, not failure", () => {
+      const cancelled: WsServerEvent = {
+        type: "workflow_error",
+        workflowId: "wf-1",
+        nodeId: "planner",
+        message: "Workflow cancelled",
+      };
+      const entries = buildTimelineEntries(null, [nodeStartPlanner, cancelled]);
+      const planner = entries.find((e) => e.nodeId === "planner");
+      expect(planner?.status).toBe("cancelled");
+    });
+
+    it("sweeps all in-flight nodes to cancelled on bare cancellation error", () => {
+      const cancelled: WsServerEvent = {
+        type: "workflow_error",
+        workflowId: "wf-1",
+        message: "Workflow cancelled",
+      };
+      const entries = buildTimelineEntries(null, [
+        nodeStartPlanner,
+        nodeStartImpl,
+        cancelled,
+      ]);
+      expect(entries.find((e) => e.nodeId === "planner")?.status).toBe("cancelled");
+      expect(entries.find((e) => e.nodeId === "implementer")?.status).toBe("cancelled");
+    });
+
+    it("still marks non-cancellation errors as failed", () => {
+      const failed: WsServerEvent = {
+        type: "workflow_error",
+        workflowId: "wf-1",
+        nodeId: "planner",
+        message: "adapter crashed",
+      };
+      const entries = buildTimelineEntries(null, [nodeStartPlanner, failed]);
+      const planner = entries.find((e) => e.nodeId === "planner");
+      expect(planner?.status).toBe("failed");
+    });
   });
 });

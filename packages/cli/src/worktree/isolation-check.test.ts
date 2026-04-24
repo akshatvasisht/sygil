@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { NodeConfig } from "@sigil/shared";
+import type { NodeConfig } from "@sygil/shared";
 import { needsIsolation } from "./isolation-check.js";
 
 describe("needsIsolation", () => {

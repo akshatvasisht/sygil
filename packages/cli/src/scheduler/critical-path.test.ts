@@ -8,21 +8,8 @@
 import { describe, it, expect } from "vitest";
 import { computeCriticalPathWeights } from "./critical-path.js";
 import { GraphIndex } from "./graph-index.js";
-import type { WorkflowGraph, NodeConfig, AdapterType, NodeResult } from "@sigil/shared";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test-model",
-    role: "test role",
-    prompt: "test prompt",
-    ...overrides,
-  };
-}
+import type { WorkflowGraph, NodeConfig, NodeResult } from "@sygil/shared";
+import { makeNodeConfig } from "./__test-helpers__.js";
 
 const DEFAULT_WEIGHT = 1;
 
@@ -307,5 +294,33 @@ describe("computeCriticalPathWeights", () => {
     expect(weights.get("A")).toBe(2);
     expect(weights.get("B")).toBe(1);
     expect(weights.get("C")).toBe(1);
+  });
+
+  // Regression where a forward-edge cycle (unmarked isLoopBack)
+  // would recurse unboundedly and crash with "Maximum call stack size
+  // exceeded" before the scheduler could start. The schema doesn't reject
+  // such cycles explicitly, so the priority-weight routine must terminate
+  // on any input and let the scheduler's start-node detection surface the
+  // malformed graph.
+  it("terminates on a forward-edge cycle without stack overflow", () => {
+    const graph: WorkflowGraph = {
+      version: "1",
+      name: "cycle",
+      nodes: {
+        A: makeNodeConfig(),
+        B: makeNodeConfig(),
+      },
+      edges: [
+        { id: "a-to-b", from: "A", to: "B" },
+        { id: "b-to-a", from: "B", to: "A" }, // unmarked forward back-edge
+      ],
+    };
+
+    const index = new GraphIndex(graph);
+    // Should not throw. Weights are finite (approximate, but terminating).
+    const weights = computeCriticalPathWeights(index);
+    expect(weights.get("A")).toBe(DEFAULT_WEIGHT + DEFAULT_WEIGHT); // A + max(B=1)
+    expect(weights.get("B")).toBeGreaterThanOrEqual(1);
+    expect(weights.size).toBe(2);
   });
 });

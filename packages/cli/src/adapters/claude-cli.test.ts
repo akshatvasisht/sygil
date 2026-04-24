@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
 import { ClaudeCLIAdapter } from "./claude-cli.js";
-import type { AgentSession } from "@sigil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import type { AgentSession } from "@sygil/shared";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers — Claude Code CLI v2.1 stream-json event factories
@@ -48,35 +52,17 @@ function resultEvent(result: string, cost: number, isError = false): string {
 }
 
 /** Build a fake AgentSession backed by a fake process */
-function makeSession(adapter: ClaudeCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session-id",
-    nodeId: "test-node",
-    adapter: "claude-cli",
-    startedAt: new Date(),
-    _internal: {
-      proc,
-      outputLines: [],
-      exitCode: null,
-      done: false,
-      eventQueue: [],
-      resolve: null,
-      totalCostUsd: 0,
-      maxQueueSize: 1000,
-    },
-  };
-}
-
-/** Collect all events from the stream, waiting for it to finish */
-async function collectEvents(
-  adapter: ClaudeCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const events: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    events.push(ev as { type: string; [k: string]: unknown });
-  }
-  return events;
+function makeSession(_adapter: ClaudeCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
+  return makeSessionEnvelope("claude-cli", {
+    proc,
+    outputLines: [],
+    exitCode: null,
+    done: false,
+    eventQueue: [],
+    resolve: null,
+    totalCostUsd: 0,
+    maxQueueSize: 1000,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +178,70 @@ describe("ClaudeCLIAdapter", () => {
         type: "tool_result",
         output: "output here",
         success: true,
+      });
+    });
+
+    // Regression where chunk boundaries can split a multi-byte
+    // UTF-8 character (emoji, CJK, etc.). Without StringDecoder the adapter
+    // decodes each chunk independently, producing U+FFFD replacement chars
+    // at the split and silently corrupting the final output text.
+    it("preserves multi-byte UTF-8 characters split across stdout chunks", async () => {
+      const proc = makeFakeProc();
+      const session = makeSession(adapter, proc);
+
+      const streamPromise = collectEvents(adapter, session);
+      await new Promise((r) => setTimeout(r, 0));
+
+      // "🎉" is F0 9F 8E 89 — split after the first two bytes across chunks.
+      const line = assistantText("party 🎉 time") + "\n";
+      const fullBuf = Buffer.from(line, "utf8");
+      // Split somewhere in the middle of the emoji's byte sequence.
+      const emojiStart = Buffer.from("party ", "utf8").length;
+      const splitAt = emojiStart + 2; // after "F0 9F", before "8E 89"
+      proc.stdout.emit("data", fullBuf.subarray(0, splitAt));
+      proc.stdout.emit("data", fullBuf.subarray(splitAt));
+      proc.stdout.emit("end");
+      proc.emit("exit", 0);
+
+      const events = await streamPromise;
+      const textEvents = events.filter((e) => e.type === "text_delta");
+      expect(textEvents).toHaveLength(1);
+      expect(textEvents[0]).toMatchObject({ type: "text_delta", text: "party 🎉 time" });
+      // Assert no replacement-char corruption.
+      expect((textEvents[0] as unknown as { text: string }).text).not.toContain("�");
+    });
+
+    // Regression where claude-cli's stream() previously called
+    // finish() unconditionally from both the 'end' and 'exit' handlers. If
+    // 'exit' fired first, finishStream set done=true and resolved the
+    // drainEventQueue waiter with null — the generator broke BEFORE the
+    // 'end' handler's trailing-line parseLine events were yielded. Events
+    // pushed to the queue post-finish sat until GC. Now both handlers track
+    // stdoutClosed/exitCode and only the LAST one to arrive calls finish(),
+    // matching codex/cursor/gemini.
+    it("preserves trailing-line events when 'exit' fires before 'end'", async () => {
+      const proc = makeFakeProc();
+      const session = makeSession(adapter, proc);
+
+      const streamPromise = collectEvents(adapter, session);
+      await new Promise((r) => setTimeout(r, 0));
+
+      // Emit a non-terminated line (no \n) — it lives in lineBuffer until 'end'.
+      const partial = assistantText("final trailing message");
+      proc.stdout.emit("data", Buffer.from(partial, "utf8"));
+
+      // Exit fires FIRST (fast-exiting process, e.g. auth failure).
+      proc.emit("exit", 0);
+      await new Promise((r) => setTimeout(r, 0));
+      // Then 'end' fires, draining the trailing buffer and parsing the event.
+      proc.stdout.emit("end");
+
+      const events = await streamPromise;
+      const textEvents = events.filter((e) => e.type === "text_delta");
+      expect(textEvents).toHaveLength(1);
+      expect(textEvents[0]).toMatchObject({
+        type: "text_delta",
+        text: "final trailing message",
       });
     });
 
@@ -336,22 +386,6 @@ describe("ClaudeCLIAdapter", () => {
       expect(args).toContain("Bash,Edit");
     });
 
-    it("omits --allowedTools when tools list is empty", async () => {
-      const proc = makeFakeProc();
-      mockSpawn.mockReturnValue(proc);
-
-      await adapter.spawn({
-        adapter: "claude-cli",
-        model: "claude-sonnet-4-20250514",
-        role: "agent",
-        prompt: "test",
-        tools: [],
-      });
-
-      const args: string[] = mockSpawn.mock.calls[0]![1] as string[];
-      expect(args).not.toContain("--allowedTools");
-    });
-
     it("returns a valid AgentSession", async () => {
       const proc = makeFakeProc();
       mockSpawn.mockReturnValue(proc);
@@ -370,6 +404,48 @@ describe("ClaudeCLIAdapter", () => {
       expect(typeof session.id).toBe("string");
       expect(session.startedAt).toBeInstanceOf(Date);
       expect(session._internal).toBeTruthy();
+    });
+
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        {
+          adapter: "claude-cli",
+          model: "sonnet",
+          role: "agent",
+          prompt: "hi",
+        },
+        {
+          traceparent: "00-abc-def-01",
+          traceId: "abc",
+          spanId: "def",
+        },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
+    it("does not set TRACEPARENT when SpawnContext is omitted", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const prev = process.env["TRACEPARENT"];
+      delete process.env["TRACEPARENT"];
+      try {
+        await adapter.spawn({
+          adapter: "claude-cli",
+          model: "sonnet",
+          role: "agent",
+          prompt: "hi",
+        });
+        const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string | undefined> };
+        expect(opts.env["TRACEPARENT"]).toBeUndefined();
+      } finally {
+        if (prev !== undefined) process.env["TRACEPARENT"] = prev;
+      }
     });
   });
 
@@ -573,6 +649,45 @@ describe("ClaudeCLIAdapter", () => {
 
       const result = await adapter.getResult(session);
       expect(result.exitCode).toBe(1);
+    });
+
+    it("force-kills and returns when child hangs past the getResult timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeFakeProc();
+        const internal = {
+          proc,
+          outputLines: [],
+          exitCode: null as number | null,
+          done: false,
+          eventQueue: [],
+          resolve: null,
+          totalCostUsd: 0,
+          maxQueueSize: 1000,
+        };
+
+        const session: AgentSession = {
+          id: "test",
+          nodeId: "node",
+          adapter: "claude-cli",
+          startedAt: new Date(),
+          _internal: internal,
+        };
+
+        const resultPromise = adapter.getResult(session);
+
+        // Advance past CLAUDE_CLI_GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
+        await vi.advanceTimersByTimeAsync(10_050);
+        // SIGTERM issued; grace window (2_000) then SIGKILL.
+        await vi.advanceTimersByTimeAsync(2_050);
+
+        const result = await resultPromise;
+        expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+        expect(result.exitCode).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

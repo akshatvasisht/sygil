@@ -17,14 +17,13 @@ import { WorkflowScheduler } from "../scheduler/index.js";
 import { loadWorkflow } from "../utils/workflow.js";
 import type {
   AgentAdapter,
-  AgentSession,
   AgentEvent,
-  NodeConfig,
   NodeResult,
   WorkflowGraph,
   AdapterType,
-} from "@sigil/shared";
+} from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
+import { createMockMonitor, makeSession } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -34,39 +33,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = pathResolve(__dirname, "../../templates/tdd-feature.json");
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — bespoke to this file; shared factories live in __test-helpers__
 // ---------------------------------------------------------------------------
 
-function makeSession(nodeId: string): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter: "mock",
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-function createMockMonitor(): WsMonitorServer & { events: Array<{ type: string }> } {
-  const events: Array<{ type: string }> = [];
-
-  const monitor = {
-    events,
-    emit(event: { type: string }) {
-      events.push(event);
-    },
-    on() { /* no-op */ },
-    off() { /* no-op */ },
-    async start() { return 0; },
-    async stop() { /* no-op */ },
-    getPort() { return null; },
-    onClientControl: undefined,
-  } as unknown as WsMonitorServer & { events: Array<{ type: string }> };
-
-  return monitor;
-}
-
-/** Minimal no-op adapter. */
+// Minimal no-op adapter — returns an empty stream and a configurable NodeResult.
 function noopAdapter(resultOverride: Partial<NodeResult> = {}): AgentAdapter {
   return {
     name: "mock",
@@ -89,7 +59,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-int-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-int-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -329,7 +299,7 @@ describe("tdd-feature template integration", () => {
     expect(loopBackEvents[0]?.attempt).toBe(1);
 
     // Final run state is "completed"
-    const stateFile = join(testDir, ".sigil", "runs", `${result.runId}.json`);
+    const stateFile = join(testDir, ".sygil", "runs", `${result.runId}.json`);
     const raw = await readFile(stateFile, "utf8");
     const state = JSON.parse(raw);
     expect(state.status).toBe("completed");

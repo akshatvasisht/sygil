@@ -16,8 +16,9 @@ import type {
   AgentEvent,
   NodeConfig,
   NodeResult,
-} from "@sigil/shared";
-import { SigilErrorCode, STALL_EXIT_CODE } from "@sigil/shared";
+  SpawnContext,
+} from "@sygil/shared";
+import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -49,7 +50,11 @@ export class EchoAdapter implements AgentAdapter {
     }
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async getVersion(): Promise<string | null> {
+    return "test-fixture";
+  }
+
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
     const proc = spawn("node", [ECHO_SCRIPT], {
@@ -61,6 +66,7 @@ export class EchoAdapter implements AgentAdapter {
         ECHO_ROLE: config.role,
         ECHO_NODE_ID: config.role,
         ECHO_OUTPUT_DIR: cwd,
+        ...(ctx?.traceparent ? { TRACEPARENT: ctx.traceparent } : {}),
       },
     });
 
@@ -205,13 +211,13 @@ export class EchoAdapter implements AgentAdapter {
       : undefined;
 
     // Map exit code to structured error code
-    let errorCode: SigilErrorCode | undefined;
+    let errorCode: SygilErrorCode | undefined;
     if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SigilErrorCode.NODE_STALLED;
+      errorCode = SygilErrorCode.NODE_STALLED;
     } else if (exitCode === 124) {
-      errorCode = SigilErrorCode.NODE_TIMEOUT;
+      errorCode = SygilErrorCode.NODE_TIMEOUT;
     } else if (exitCode !== 0) {
-      errorCode = SigilErrorCode.NODE_CRASHED;
+      errorCode = SygilErrorCode.NODE_CRASHED;
     }
 
     return {
@@ -224,8 +230,8 @@ export class EchoAdapter implements AgentAdapter {
     };
   }
 
-  async resume(config: NodeConfig, _previousSession: AgentSession, _feedbackMessage: string): Promise<AgentSession> {
-    return this.spawn(config);
+  async resume(config: NodeConfig, _previousSession: AgentSession, _feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
+    return this.spawn(config, ctx);
   }
 
   async kill(session: AgentSession): Promise<void> {

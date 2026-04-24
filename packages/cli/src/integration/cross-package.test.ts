@@ -1,7 +1,7 @@
 /**
- * Cross-package integration tests — verifies the seams between @sigil/shared and CLI.
+ * Cross-package integration tests — verifies the seams between @sygil/shared and CLI.
  *
- * These tests import from @sigil/shared (not relative paths) to exercise
+ * These tests import from @sygil/shared (not relative paths) to exercise
  * the actual package boundary.
  */
 
@@ -10,16 +10,16 @@ import {
   WorkflowGraphSchema,
   GateConditionSchema,
   NodeConfigSchema,
-  SigilErrorCode,
-} from "@sigil/shared";
+  SygilErrorCode,
+} from "@sygil/shared";
 import type {
   WorkflowGraph,
   NodeConfig,
   EdgeConfig,
   WsServerEvent,
   WsClientEvent,
-  SigilError,
-} from "@sigil/shared";
+  SygilError,
+} from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -236,10 +236,10 @@ describe("event type coverage (compile-time verification)", () => {
   });
 });
 
-describe("SigilErrorCode integration", () => {
-  it("can create SigilError with error codes from shared", () => {
-    const err: SigilError = {
-      code: SigilErrorCode.NODE_TIMEOUT,
+describe("SygilErrorCode integration", () => {
+  it("can create SygilError with error codes from shared", () => {
+    const err: SygilError = {
+      code: SygilErrorCode.NODE_TIMEOUT,
       message: "Node planner exceeded 60s timeout",
       nodeId: "planner",
     };

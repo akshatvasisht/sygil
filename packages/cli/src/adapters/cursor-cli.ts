@@ -2,35 +2,40 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import type {
   AgentAdapter,
   AgentSession,
   AgentEvent,
   NodeConfig,
   NodeResult,
-} from "@sigil/shared";
-import { SigilErrorCode, STALL_EXIT_CODE } from "@sigil/shared";
+  SpawnContext,
+} from "@sygil/shared";
+import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
+import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
-
-/** Grace period in ms before emitting a stall event after stdout closes without process exit */
-const STALL_GRACE_MS = 5_000;
+import {
+  GETRESULT_KILL_GRACE_MS,
+  GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
+  STALL_GRACE_MS,
+} from "./constants.js";
+import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { makeAgentSession } from "./session.js";
 
 /** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
 
-/** Polling interval while waiting for process exit in getResult(). */
-const POLL_INTERVAL_MS = 50;
+/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream
+ * teardown should never legitimately exceed this; if it does, we force-kill so
+ * the workflow isn't pinned forever by an MCP server that pins the child. */
+const CURSOR_GETRESULT_TIMEOUT_MS = 10_000;
 
 /** Credential file paths checked to verify Cursor authentication. */
 const CURSOR_CREDENTIAL_PATHS = [
   ".cursor/credentials.json",
   ".cursor/auth.json",
 ] as const;
-
-/** Tools that require the --force flag in Cursor headless mode. */
-const FORCE_TOOLS = ["Write", "Edit", "Bash"] as const;
 
 interface CursorInternal {
   proc: ReturnType<typeof spawn>;
@@ -70,6 +75,11 @@ export class CursorCLIAdapter implements AgentAdapter {
       return false;
     }
 
+    // CURSOR_API_KEY bypasses the credential-file check
+    if (process.env["CURSOR_API_KEY"]) {
+      return true;
+    }
+
     // Check for Cursor authentication credentials
     const credentialsPaths = CURSOR_CREDENTIAL_PATHS.map((p) => join(homedir(), p));
 
@@ -77,12 +87,26 @@ export class CursorCLIAdapter implements AgentAdapter {
     if (!isAuthenticated) {
       logger.warn(
         "Cursor CLI adapter: 'agent' binary found but Cursor is not authenticated. " +
-        "Please sign in to Cursor first (~/.cursor/credentials.json not found)."
+        "Please sign in to Cursor first or set CURSOR_API_KEY."
       );
       return false;
     }
 
     return true;
+  }
+
+  async getVersion(): Promise<string | null> {
+    try {
+      const out = execSync("agent --version", {
+        encoding: "utf8",
+        timeout: 1_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const firstLine = out.split("\n")[0]?.trim();
+      return firstLine ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private _buildArgs(prompt: string, config: NodeConfig, resumeSessionId?: string): string[] {
@@ -92,31 +116,26 @@ export class CursorCLIAdapter implements AgentAdapter {
       args.push("--resume", resumeSessionId);
     }
 
-    args.push("-p", prompt, "--output-format", "stream-json", "--trust");
+    // --force is always required in headless mode: without it, any interactive
+    // trust prompt (including MCP tool invocations, not just writes) hangs the
+    // process indefinitely. See forum.cursor.com/t/150246 and cursor.com/docs/cli/headless.
+    args.push("-p", prompt, "--output-format", "stream-json", "--trust", "--force");
 
     if (config.model) args.push("--model", config.model);
-
-    if (config.tools?.length) {
-      // Cursor doesn't have granular tool flags — only --force for writes.
-      // If Write, Edit, or Bash is in allowed tools, add --force.
-      if (config.tools.some((t) => (FORCE_TOOLS as readonly string[]).includes(t))) {
-        args.push("--force");
-      }
-    }
 
     if (config.outputDir) args.push("--cwd", config.outputDir);
 
     return args;
   }
 
-  private _spawnWithArgs(config: NodeConfig, prompt: string, resumeSessionId?: string): AgentSession {
+  private _spawnWithArgs(config: NodeConfig, prompt: string, resumeSessionId?: string, ctx?: SpawnContext): AgentSession {
     const args = this._buildArgs(prompt, config, resumeSessionId);
     const cwd = config.outputDir ?? process.cwd();
 
     const proc = spawn("agent", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
     });
 
     const internal: CursorInternal = {
@@ -133,18 +152,10 @@ export class CursorCLIAdapter implements AgentAdapter {
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
-
-    return session;
+    return makeAgentSession(this.name, config.role, internal);
   }
 
-  async spawn(config: NodeConfig): Promise<AgentSession> {
+  async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
     const available = await this.isAvailable();
     if (!available) {
       throw new Error(
@@ -152,7 +163,22 @@ export class CursorCLIAdapter implements AgentAdapter {
       );
     }
 
-    return this._spawnWithArgs(config, config.prompt);
+    if (config.outputSchema) {
+      logger.info(
+        `cursor-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
+      );
+    }
+
+    // The cursor CLI has no documented tool allowlist flag; `NodeConfig.tools`
+    // is accepted for cross-adapter shape parity but has no runtime effect
+    // here. Warn so users don't silently assume tools are sandboxed.
+    if (config.tools && config.tools.length > 0) {
+      logger.warn(
+        `cursor-cli adapter ignores NodeConfig.tools (no upstream allowlist flag): ${config.tools.join(", ")}`
+      );
+    }
+
+    return this._spawnWithArgs(config, config.prompt, undefined, ctx);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -167,26 +193,21 @@ export class CursorCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    let lineBuffer = "";
+    const decoder = createLineDecoder();
 
     proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      for (const trimmed of decoder.feed(chunk)) {
         internal.stdout.push(trimmed);
-
         const event = this.parseLine(trimmed, internal);
         if (event) push(event);
       }
     });
 
     proc.stdout?.on("end", () => {
-      if (lineBuffer.trim()) {
-        internal.stdout.push(lineBuffer.trim());
-        const event = this.parseLine(lineBuffer.trim(), internal);
+      const trailing = decoder.flush();
+      if (trailing) {
+        internal.stdout.push(trailing);
+        const event = this.parseLine(trailing, internal);
         if (event) push(event);
       }
       stdoutClosed = true;
@@ -223,103 +244,17 @@ export class CursorCLIAdapter implements AgentAdapter {
   }
 
   private parseLine(line: string, internal: CursorInternal): AgentEvent | null {
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-
-    const type = parsed["type"] as string | undefined;
-
-    switch (type) {
-      case "system":
-        // { type: "system", subtype: "init" } — skip
-        return null;
-
-      case "assistant": {
-        const message = parsed["message"] as Record<string, unknown> | undefined;
-        if (!message) return null;
-        const content = message["content"];
-        if (!Array.isArray(content)) return null;
-
-        for (const block of content as Array<Record<string, unknown>>) {
-          const blockType = block["type"] as string | undefined;
-
-          if (blockType === "text") {
-            const text = String(block["text"] ?? "");
-            if (text) {
-              internal.outputText += text;
-              return { type: "text_delta", text };
-            }
-          }
-
-          if (blockType === "tool_use") {
-            const toolName = String(block["name"] ?? "");
-            const input = (block["input"] as Record<string, unknown>) ?? {};
-
-            // writeToolCall subtype — surface as file_write
-            const subtype = block["subtype"] as string | undefined;
-            if (subtype === "writeToolCall") {
-              return { type: "file_write", path: String(input["path"] ?? "") };
-            }
-
-            // readToolCall subtype — skip (read-only, no need to surface)
-            if (subtype === "readToolCall") {
-              return null;
-            }
-
-            return { type: "tool_call", tool: toolName, input };
-          }
-        }
-        return null;
-      }
-
-      case "tool": {
-        // { type: "tool", tool_use_id: "...", content: "..." }
-        const content = parsed["content"];
-        return {
-          type: "tool_result",
-          tool: String(parsed["tool_use_id"] ?? ""),
-          output: typeof content === "string" ? content : JSON.stringify(content),
-          success: true,
-        };
-      }
-
-      case "result": {
-        const subtype = parsed["subtype"] as string | undefined;
-        if (subtype === "success") {
-          // Capture result event for getResult()
-          internal.resultEvent = {
-            result: String(parsed["result"] ?? ""),
-            session_id: String(parsed["session_id"] ?? ""),
-            duration_ms: Number(parsed["duration_ms"] ?? 0),
-          };
-          return null;
-        }
-        if (subtype === "error") {
-          return { type: "error", message: String(parsed["error"] ?? "unknown error") };
-        }
-        return null;
-      }
-
-      default:
-        return null;
-    }
+    return dispatchEventLine(line, CURSOR_EVENT_MAPPING, internal);
   }
 
   async getResult(session: AgentSession): Promise<NodeResult> {
     const internal = session._internal as CursorInternal;
 
     if (!internal.done || internal.exitCode === null) {
-      // Poll rather than listening for "exit" because the stall path marks done=true
-      // without the process exiting — we need to handle both cases.
-      await new Promise<void>((resolve) => {
-        const check = (): void => {
-          if (internal.done) resolve();
-          else setTimeout(check, POLL_INTERVAL_MS);
-        };
-        check();
+      await waitForDoneOrTimeout(internal, {
+        timeoutMs: CURSOR_GETRESULT_TIMEOUT_MS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
     }
 
@@ -333,13 +268,13 @@ export class CursorCLIAdapter implements AgentAdapter {
       : undefined;
 
     // Map exit code to structured error code
-    let errorCode: SigilErrorCode | undefined;
+    let errorCode: SygilErrorCode | undefined;
     if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SigilErrorCode.NODE_STALLED;
+      errorCode = SygilErrorCode.NODE_STALLED;
     } else if (exitCode === 124) {
-      errorCode = SigilErrorCode.NODE_TIMEOUT;
+      errorCode = SygilErrorCode.NODE_TIMEOUT;
     } else if (exitCode !== 0) {
-      errorCode = SigilErrorCode.NODE_CRASHED;
+      errorCode = SygilErrorCode.NODE_CRASHED;
     }
 
     return {
@@ -354,12 +289,23 @@ export class CursorCLIAdapter implements AgentAdapter {
 
   async kill(session: AgentSession): Promise<void> {
     const internal = session._internal as CursorInternal;
-    if (!internal.done) {
+    // Guard on process liveness rather than internal.done. The stall path sets
+    // done=true before the process exits, so an `if (!internal.done)` check
+    // would skip termination and leak the child. `proc.killed` only means
+    // "signal was sent", not "process exited" — `proc.exitCode === null` is
+    // the only reliable liveness signal.
+    if (internal.proc.exitCode === null) {
+      // Clear any pending stall timer before killing so a stall event can't
+      // fire during the SIGTERM→SIGKILL grace window and land in the NDJSON
+      // replay stream after the scheduler has already decided to kill.
+      if (internal.stallTimer !== null) {
+        clearTimeout(internal.stallTimer);
+        internal.stallTimer = null;
+      }
       internal.proc.kill("SIGTERM");
-      // Wait up to 2s then SIGKILL if still running
       await new Promise<void>((resolve) => {
         const killTimeout = setTimeout(() => {
-          if (!internal.done) {
+          if (internal.proc.exitCode === null) {
             internal.proc.kill("SIGKILL");
           }
           resolve();
@@ -375,7 +321,8 @@ export class CursorCLIAdapter implements AgentAdapter {
   async resume(
     config: NodeConfig,
     previousSession: AgentSession,
-    feedbackMessage: string
+    feedbackMessage: string,
+    ctx?: SpawnContext
   ): Promise<AgentSession> {
     const available = await this.isAvailable();
     if (!available) {
@@ -389,17 +336,78 @@ export class CursorCLIAdapter implements AgentAdapter {
 
     if (sessionId) {
       // Resume the previous conversation using --resume <session_id>
-      return this._spawnWithArgs(config, feedbackMessage, sessionId);
+      return this._spawnWithArgs(config, feedbackMessage, sessionId, ctx);
     } else {
       // No session_id available — fall back to cold start with feedback context
       const newConfig: NodeConfig = {
         ...config,
         prompt: `${config.prompt}\n\nFeedback from previous attempt: ${feedbackMessage}`,
       };
-      return this.spawn(newConfig);
+      return this.spawn(newConfig, ctx);
     }
   }
 }
+
+const CURSOR_EVENT_MAPPING: EventMapping<Record<string, unknown>, CursorInternal> = {
+  system: () => null,
+
+  assistant: (raw, internal) => {
+    const message = raw["message"] as Record<string, unknown> | undefined;
+    if (!message) return null;
+    const content = message["content"];
+    if (!Array.isArray(content)) return null;
+
+    for (const block of content as Array<Record<string, unknown>>) {
+      const blockType = block["type"] as string | undefined;
+
+      if (blockType === "text") {
+        const text = String(block["text"] ?? "");
+        if (text) {
+          internal.outputText += text;
+          return { type: "text_delta", text };
+        }
+      }
+
+      if (blockType === "tool_use") {
+        const toolName = String(block["name"] ?? "");
+        const input = (block["input"] as Record<string, unknown>) ?? {};
+        const subtype = block["subtype"] as string | undefined;
+        if (subtype === "writeToolCall") {
+          return { type: "file_write", path: String(input["path"] ?? "") };
+        }
+        if (subtype === "readToolCall") return null;
+        return { type: "tool_call", tool: toolName, input };
+      }
+    }
+    return null;
+  },
+
+  tool: (raw) => {
+    const content = raw["content"];
+    return {
+      type: "tool_result",
+      tool: String(raw["tool_use_id"] ?? ""),
+      output: typeof content === "string" ? content : JSON.stringify(content),
+      success: true,
+    };
+  },
+
+  result: (raw, internal) => {
+    const subtype = raw["subtype"] as string | undefined;
+    if (subtype === "success") {
+      internal.resultEvent = {
+        result: String(raw["result"] ?? ""),
+        session_id: String(raw["session_id"] ?? ""),
+        duration_ms: Number(raw["duration_ms"] ?? 0),
+      };
+      return null;
+    }
+    if (subtype === "error") {
+      return { type: "error", message: String(raw["error"] ?? "unknown error") };
+    }
+    return null;
+  },
+};
 
 /**
  * Best-effort: try to extract the last JSON object from a text string.

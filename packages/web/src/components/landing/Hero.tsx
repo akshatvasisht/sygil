@@ -29,9 +29,9 @@ const COLOR_WARNING = "#f5a623";
 const NODE_W = 120;
 const NODE_H = 64;
 const NODES = [
-  { id: "planner", x: 10, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-5", role: "TDD planner", tools: 3 },
+  { id: "planner", x: 10, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-7", role: "TDD planner", tools: 3 },
   { id: "implementer", x: 195, y: 45, adapter: "codex", color: COLOR_CODEX, model: "o3", role: "Impl agent", tools: 5 },
-  { id: "reviewer", x: 380, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-5", role: "Code reviewer", tools: 2 },
+  { id: "reviewer", x: 380, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-7", role: "Code reviewer", tools: 2 },
 ];
 
 const EDGES: readonly { from: number; to: number; label: string | null; isLoop?: boolean }[] = [
@@ -391,7 +391,7 @@ const AnimatedDAG = memo(function AnimatedDAG() {
 
 /* -- Terminal line data (stable reference) ---- */
 const TERMINAL_LINES: { type: string; text: string }[] = [
-  { type: "prompt", text: "sigil run tdd-feature \"add OAuth2 login\"" },
+  { type: "prompt", text: "sygil run tdd-feature \"add OAuth2 login\"" },
   { type: "blank", text: "" },
   { type: "info", text: "Workflow: tdd-feature  run-id: r_8x92kf" },
   { type: "blank", text: "" },
@@ -563,7 +563,7 @@ export function Hero() {
               className="text-base sm:text-lg text-body/90 leading-relaxed mb-12 max-w-md animate-slide-up"
               style={{ animationDelay: "0.3s" }}
             >
-              Define workflows as JSON. Sigil executes every node, evaluates gates, retries on failure, and streams results to your terminal.
+              Define workflows as JSON. Sygil executes every node, evaluates gates, retries on failure, and streams results to your terminal.
             </p>
 
             <div
@@ -578,7 +578,7 @@ export function Hero() {
                 <ArrowRight size={14} strokeWidth={2.5} />
               </Link>
               <Link
-                href="https://github.com/akshatvasisht/sigil"
+                href="https://github.com/akshatvasisht/sygil"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="view-source-btn inline-flex items-center gap-2 font-mono text-sm uppercase tracking-wider text-dim hover:text-body border border-white/[0.1] hover:border-white/[0.18] px-7 py-3.5 min-h-[48px] rounded-lg transition-all duration-200 hover:bg-white/[0.03]"
@@ -603,7 +603,7 @@ export function Hero() {
                 <div className="w-1.5 h-1.5 rounded-full bg-accent-purple shadow-[0_0_6px_rgba(192,132,252,0.4)]" />
                 <span className="font-mono text-[10px] text-dim uppercase tracking-wider">Cursor</span>
               </div>
-              <span className="font-mono text-[10px] text-subtle">+ more</span>
+              <span className="font-mono text-[10px] text-dim">+ more</span>
             </div>
           </div>
 

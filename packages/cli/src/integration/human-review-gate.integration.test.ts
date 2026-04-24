@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { WsMonitorServer } from "../monitor/websocket.js";
 import { GateEvaluator } from "../gates/index.js";
-import type { GateConfig, NodeResult } from "@sigil/shared";
+import type { GateConfig, NodeResult } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,7 +25,7 @@ const servers: WsMonitorServer[] = [];
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-hr-gate-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-hr-gate-"));
   tempDirs.push(dir);
   return dir;
 }

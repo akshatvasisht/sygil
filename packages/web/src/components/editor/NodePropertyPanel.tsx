@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { X, Cpu, Trash2, AlertTriangle, ChevronDown, Copy, Clipboard } from "lucide-react";
-import type { NodeConfig, AdapterType, SandboxMode } from "@sigil/shared";
+import type { NodeConfig, AdapterType, SandboxMode, ProviderConfig, RetryPolicy, RetryableErrorClass } from "@sygil/shared";
+import { isFieldSupported } from "@sygil/shared";
 import type { NodeCardData } from "./NodeCard";
-
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const ADAPTER_OPTIONS: { value: AdapterType; label: string }[] = [
@@ -12,6 +12,8 @@ const ADAPTER_OPTIONS: { value: AdapterType; label: string }[] = [
   { value: "claude-cli", label: "claude-cli" },
   { value: "codex", label: "codex" },
   { value: "cursor", label: "cursor" },
+  { value: "gemini-cli", label: "gemini-cli" },
+  { value: "local-oai", label: "local-oai" },
 ];
 
 const SANDBOX_OPTIONS: { value: SandboxMode; label: string }[] = [
@@ -22,13 +24,13 @@ const SANDBOX_OPTIONS: { value: SandboxMode; label: string }[] = [
 
 const MODEL_PRESETS: Record<AdapterType, string[]> = {
   "claude-sdk": [
-    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
   ],
   "claude-cli": [
-    "claude-opus-4-6",
+    "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
@@ -36,6 +38,8 @@ const MODEL_PRESETS: Record<AdapterType, string[]> = {
   codex: ["gpt-4o", "gpt-4o-mini", "o3", "o3-mini", "o4-mini"],
   cursor: ["cursor-small", "gpt-4o"],
   echo: ["echo"],
+  "gemini-cli": ["gemini-2.5-pro", "gemini-2.5-flash"],
+  "local-oai": ["llama3.2", "qwen2.5", "mistral-nemo"],
 };
 
 const ADAPTER_ICON_COLOR: Record<string, string> = {
@@ -43,6 +47,8 @@ const ADAPTER_ICON_COLOR: Record<string, string> = {
   "claude-cli": "text-accent-blue",
   codex: "text-accent-green",
   cursor: "text-accent-purple",
+  "gemini-cli": "text-accent-cyan",
+  "local-oai": "text-accent-amber",
 };
 
 const TOOL_PRESETS: Record<AdapterType, string[]> = {
@@ -51,13 +57,15 @@ const TOOL_PRESETS: Record<AdapterType, string[]> = {
   codex: ["Read", "Write", "Edit", "Bash", "Grep", "Glob", "LS"],
   cursor: ["Read", "Write", "Edit"],
   echo: [],
+  "gemini-cli": ["shell", "read_file", "write_file", "google_search"],
+  "local-oai": [],
 };
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 interface SectionProps {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 function Section({ title, children }: SectionProps) {
   return (
@@ -72,7 +80,7 @@ function Section({ title, children }: SectionProps) {
 
 interface FieldProps {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }
 function Field({ label, children }: FieldProps) {
   return (
@@ -89,6 +97,18 @@ const inputCls =
 const selectCls =
   "w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright focus:outline-none focus:border-accent transition-colors duration-200 appearance-none cursor-pointer";
 
+// ── Field-support annotation ─────────────────────────────────────────────────
+
+function FieldSupportNote({ adapter, field }: { adapter: AdapterType; field: string }) {
+  const support = isFieldSupported(adapter, field);
+  if (support !== "ignored" && support !== "na") return null;
+  return (
+    <span className="ml-1.5 font-mono text-[10px] text-dim opacity-60">
+      N/A for this adapter
+    </span>
+  );
+}
+
 // ── Props ────────────────────────────────────────────────────────────────────
 
 interface NodePropertyPanelProps {
@@ -100,6 +120,24 @@ interface NodePropertyPanelProps {
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
+
+// Helper: split comma-separated string into trimmed non-empty array
+function splitComma(s: string): string[] {
+  return s.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+// Helper: check if any advanced field has a non-default value
+function hasAdvancedValue(config: NodeCardData): boolean {
+  return (
+    (config.providers !== undefined && (config.providers as unknown[]).length > 0) ||
+    config.retryPolicy !== undefined ||
+    config.modelTier !== undefined ||
+    ((config.writesContext as string[] | undefined)?.length ?? 0) > 0 ||
+    ((config.readsContext as string[] | undefined)?.length ?? 0) > 0 ||
+    ((config.expectedOutputs as string[] | undefined)?.length ?? 0) > 0 ||
+    config.outputSchema !== undefined
+  );
+}
 
 export function NodePropertyPanel({
   nodeId,
@@ -113,6 +151,7 @@ export function NodePropertyPanel({
   const [newDisallowedTool, setNewDisallowedTool] = useState("");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const [outputSchemaError, setOutputSchemaError] = useState<string | null>(null);
 
   // Dismiss the model dropdown when the user clicks anywhere outside it, so it
   // doesn't stay open while the user scrolls the rest of the property panel.
@@ -235,7 +274,7 @@ export function NodePropertyPanel({
                   </option>
                 ))}
               </select>
-              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-subtle pointer-events-none" />
+              <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
             </div>
           </Field>
           <Field label="Model">
@@ -253,7 +292,7 @@ export function NodePropertyPanel({
                   aria-label="Model presets"
                   aria-expanded={showModelDropdown}
                   aria-haspopup="true"
-                  className="bg-canvas border border-border rounded px-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-subtle hover:text-dim hover:border-border-bright transition-colors duration-200"
+                  className="bg-canvas border border-border rounded px-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-dim hover:text-body hover:border-border-bright transition-colors duration-200"
                   title="Presets"
                 >
                   <ChevronDown size={12} />
@@ -414,7 +453,7 @@ export function NodePropertyPanel({
           </div>
         </Section>
 
-        {/* Advanced */}
+        {/* Advanced — core limits + contract fields */}
         <Section title="Advanced">
           <Field label="Output directory">
             <input
@@ -459,7 +498,11 @@ export function NodePropertyPanel({
               }
             />
           </Field>
-          <Field label="Max budget (USD)">
+          <div className="mb-3 last:mb-0">
+            <label className="block font-mono text-[11px] text-dim mb-1">
+              Max budget (USD)
+              <FieldSupportNote adapter={adapter} field="maxBudgetUsd" />
+            </label>
             <input
               className={inputCls}
               type="number"
@@ -475,8 +518,12 @@ export function NodePropertyPanel({
                 })
               }
             />
-          </Field>
-          <Field label="Max turns">
+          </div>
+          <div className="mb-3 last:mb-0">
+            <label className="block font-mono text-[11px] text-dim mb-1">
+              Max turns
+              <FieldSupportNote adapter={adapter} field="maxTurns" />
+            </label>
             <input
               className={inputCls}
               type="number"
@@ -491,7 +538,7 @@ export function NodePropertyPanel({
                 })
               }
             />
-          </Field>
+          </div>
           {adapter === "codex" && (
             <Field label="Sandbox">
               <div className="relative">
@@ -512,11 +559,330 @@ export function NodePropertyPanel({
                     </option>
                   ))}
                 </select>
-                <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-subtle pointer-events-none" />
+                <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
               </div>
             </Field>
           )}
+
+          {/* Advanced <details>: resilience + context fields */}
+          <details
+            className="mt-3"
+            open={hasAdvancedValue(config)}
+          >
+            <summary className="font-mono text-[10px] text-dim uppercase tracking-widest cursor-pointer list-none flex items-center gap-1.5 py-1">
+              <ChevronDown size={10} className="details-marker transition-transform duration-200" />
+              More options (resilience + context)
+            </summary>
+            <div className="mt-3 space-y-3">
+
+              {/* modelTier */}
+              <div className="mb-3 last:mb-0">
+                <label className="block font-mono text-[11px] text-dim mb-1">
+                  Model tier
+                  <FieldSupportNote adapter={adapter} field="modelTier" />
+                </label>
+                <div className="relative">
+                  <select
+                    className={selectCls}
+                    value={(config.modelTier as string | undefined) ?? ""}
+                    aria-label="Model tier"
+                    onChange={(e) =>
+                      onUpdate({ modelTier: (e.target.value as "cheap" | "smart") || undefined })
+                    }
+                  >
+                    <option value="">-- none --</option>
+                    <option value="cheap">cheap</option>
+                    <option value="smart">smart</option>
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
+                </div>
+              </div>
+
+              {/* writesContext */}
+              <div className="mb-3 last:mb-0">
+                <label className="block font-mono text-[11px] text-dim mb-1">
+                  Writes context (comma-separated keys)
+                </label>
+                <input
+                  className={inputCls}
+                  placeholder="e.g. output, status"
+                  aria-label="Context keys this node writes"
+                  onBlur={(e) =>
+                    onUpdate({ writesContext: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
+                  }
+                  defaultValue={((config.writesContext as string[] | undefined) ?? []).join(", ")}
+                  key={`writes-${JSON.stringify(config.writesContext)}`}
+                />
+              </div>
+
+              {/* readsContext */}
+              <div className="mb-3 last:mb-0">
+                <label className="block font-mono text-[11px] text-dim mb-1">
+                  Reads context (comma-separated keys)
+                </label>
+                <input
+                  className={inputCls}
+                  placeholder="e.g. output"
+                  aria-label="Context keys this node reads"
+                  onBlur={(e) =>
+                    onUpdate({ readsContext: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
+                  }
+                  onChange={(e) => { void e; }}
+                  defaultValue={((config.readsContext as string[] | undefined) ?? []).join(", ")}
+                  key={`reads-${JSON.stringify(config.readsContext)}`}
+                />
+              </div>
+
+              {/* expectedOutputs */}
+              <div className="mb-3 last:mb-0">
+                <label className="block font-mono text-[11px] text-dim mb-1">
+                  Expected outputs (comma-separated)
+                </label>
+                <input
+                  className={inputCls}
+                  placeholder="e.g. report.md, summary.json"
+                  aria-label="Expected output filenames"
+                  onBlur={(e) =>
+                    onUpdate({ expectedOutputs: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
+                  }
+                  onChange={(e) => { void e; }}
+                  defaultValue={((config.expectedOutputs as string[] | undefined) ?? []).join(", ")}
+                  key={`expected-${JSON.stringify(config.expectedOutputs)}`}
+                />
+              </div>
+
+              {/* outputSchema */}
+              <div className="mb-3 last:mb-0">
+                <label className="block font-mono text-[11px] text-dim mb-1">
+                  Output schema (JSON)
+                  <FieldSupportNote adapter={adapter} field="outputSchema" />
+                </label>
+                <textarea
+                  className={`w-full bg-canvas border ${outputSchemaError ? "border-accent-red" : "border-border"} rounded px-2.5 py-1.5 font-mono text-xs text-bright placeholder:text-muted focus:outline-none focus:border-accent transition-colors duration-200 resize-none min-h-[64px]`}
+                  rows={3}
+                  placeholder='{"type":"object","properties":{"result":{"type":"string"}}}'
+                  aria-label="Output schema JSON"
+                  defaultValue={
+                    config.outputSchema
+                      ? JSON.stringify(config.outputSchema, null, 2)
+                      : ""
+                  }
+                  key={`schema-${JSON.stringify(config.outputSchema)}`}
+                  onBlur={(e) => {
+                    const val = e.target.value.trim();
+                    if (!val) {
+                      setOutputSchemaError(null);
+                      onUpdate({ outputSchema: undefined });
+                      return;
+                    }
+                    try {
+                      const parsed = JSON.parse(val) as Record<string, unknown>;
+                      setOutputSchemaError(null);
+                      onUpdate({ outputSchema: parsed });
+                    } catch {
+                      setOutputSchemaError("Invalid JSON");
+                    }
+                  }}
+                />
+                {outputSchemaError && (
+                  <p className="mt-0.5 font-mono text-[10px] text-accent-red flex items-center gap-1">
+                    <AlertTriangle size={10} />
+                    {outputSchemaError}
+                  </p>
+                )}
+              </div>
+
+              {/* retryPolicy sub-form */}
+              <div className="mb-3 last:mb-0">
+                <div className="font-mono text-[10px] text-dim uppercase tracking-widest mb-2">
+                  Retry policy
+                  <FieldSupportNote adapter={adapter} field="retryPolicy" />
+                </div>
+                <div className="space-y-2 pl-2 border-l border-border/40">
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="block font-mono text-[10px] text-dim mb-0.5">Max attempts</label>
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={1}
+                        aria-label="Retry max attempts"
+                        value={(config.retryPolicy as RetryPolicy | undefined)?.maxAttempts ?? ""}
+                        placeholder="3"
+                        onChange={(e) => {
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          onUpdate({ retryPolicy: e.target.value ? { ...prev, maxAttempts: Number(e.target.value) } : undefined });
+                        }}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block font-mono text-[10px] text-dim mb-0.5">Initial delay (ms)</label>
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={0}
+                        aria-label="Retry initial delay ms"
+                        value={(config.retryPolicy as RetryPolicy | undefined)?.initialDelayMs ?? ""}
+                        placeholder="1000"
+                        onChange={(e) => {
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          onUpdate({ retryPolicy: e.target.value ? { ...prev, initialDelayMs: Number(e.target.value) } : undefined });
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="block font-mono text-[10px] text-dim mb-0.5">Backoff multiplier</label>
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={1}
+                        step={0.1}
+                        aria-label="Retry backoff multiplier"
+                        value={(config.retryPolicy as RetryPolicy | undefined)?.backoffMultiplier ?? ""}
+                        placeholder="2"
+                        onChange={(e) => {
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          onUpdate({ retryPolicy: e.target.value ? { ...prev, backoffMultiplier: Number(e.target.value) } : undefined } );
+                        }}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block font-mono text-[10px] text-dim mb-0.5">Max delay (ms)</label>
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={0}
+                        aria-label="Retry max delay ms"
+                        value={(config.retryPolicy as RetryPolicy | undefined)?.maxDelayMs ?? ""}
+                        placeholder="30000"
+                        onChange={(e) => {
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          onUpdate({ retryPolicy: e.target.value ? { ...prev, maxDelayMs: Number(e.target.value) } : undefined });
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block font-mono text-[10px] text-dim mb-1">Retryable errors</label>
+                    <div className="flex gap-2">
+                      {(["transport", "rate_limit", "server_5xx"] as RetryableErrorClass[]).map((cls) => {
+                        const current = (config.retryPolicy as RetryPolicy | undefined)?.retryableErrors ?? [];
+                        const checked = current.includes(cls);
+                        return (
+                          <label key={cls} className="flex items-center gap-1 font-mono text-[10px] text-dim cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              aria-label={`Retryable: ${cls}`}
+                              onChange={() => {
+                                const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                                const next = checked
+                                  ? current.filter((c) => c !== cls)
+                                  : [...current, cls];
+                                onUpdate({ retryPolicy: { ...prev, retryableErrors: next.length > 0 ? next : undefined } });
+                              }}
+                            />
+                            {cls}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* providers array editor */}
+              <div className="mb-3 last:mb-0">
+                <div className="font-mono text-[10px] text-dim uppercase tracking-widest mb-2">
+                  Providers
+                  <FieldSupportNote adapter={adapter} field="providers" />
+                </div>
+                {((config.providers as ProviderConfig[] | undefined) ?? []).map((p, i) => (
+                  <div key={i} className="flex gap-1 items-center mb-1.5">
+                    <div className="relative flex-1">
+                      <select
+                        className={`${selectCls} text-[10px] py-1`}
+                        aria-label={`Provider ${i + 1} adapter`}
+                        value={p.adapter}
+                        onChange={(e) => {
+                          const updated = [...(config.providers as ProviderConfig[] ?? [])];
+                          updated[i] = { ...p, adapter: e.target.value as AdapterType };
+                          onUpdate({ providers: updated });
+                        }}
+                      >
+                        {ADAPTER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </div>
+                    <input
+                      className={`${inputCls} flex-1 py-1 text-[10px]`}
+                      value={p.model ?? ""}
+                      placeholder="model"
+                      aria-label={`Provider ${i + 1} model`}
+                      onChange={(e) => {
+                        const updated = [...(config.providers as ProviderConfig[] ?? [])];
+                        updated[i] = { ...p, model: e.target.value || undefined };
+                        onUpdate({ providers: updated });
+                      }}
+                    />
+                    <input
+                      className={`${inputCls} w-14 py-1 text-[10px]`}
+                      type="number"
+                      min={0}
+                      value={p.priority}
+                      placeholder="prio"
+                      aria-label={`Provider ${i + 1} priority`}
+                      onChange={(e) => {
+                        const updated = [...(config.providers as ProviderConfig[] ?? [])];
+                        updated[i] = { ...p, priority: Number(e.target.value) };
+                        onUpdate({ providers: updated });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = (config.providers as ProviderConfig[] ?? []).filter((_, j) => j !== i);
+                        onUpdate({ providers: updated.length > 0 ? updated : undefined });
+                      }}
+                      aria-label={`Remove provider ${i + 1}`}
+                      className="p-1 text-dim hover:text-accent-red transition-colors duration-200 min-h-[36px] min-w-[36px] flex items-center justify-center"
+                    >
+                      <X size={9} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const prev = (config.providers as ProviderConfig[] | undefined) ?? [];
+                    onUpdate({ providers: [...prev, { adapter: "claude-sdk", priority: prev.length }] });
+                  }}
+                  className="font-mono text-[10px] text-dim hover:text-body border border-dashed border-border/50 rounded px-2 py-1 transition-colors duration-200"
+                >
+                  + Add provider
+                </button>
+              </div>
+            </div>
+          </details>
         </Section>
+
+        {/* Raw JSON pane — read-only live view */}
+        <div className="border-b border-border pb-4 mb-4">
+          <div className="font-mono text-[10px] text-dim uppercase tracking-widest mb-2">Raw JSON</div>
+          <pre
+            className="bg-canvas border border-border rounded px-3 py-2 font-mono text-[10px] text-dim overflow-x-auto whitespace-pre-wrap break-all max-h-48"
+            aria-label="Raw node JSON"
+          >
+            {JSON.stringify(
+              Object.fromEntries(
+                Object.entries(config).filter(([k]) => !["executionState"].includes(k))
+              ),
+              null,
+              2
+            )}
+          </pre>
+        </div>
       </div>
 
       {/* Delete node */}

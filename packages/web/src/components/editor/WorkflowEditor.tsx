@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   ReactFlow,
   Background,
@@ -28,7 +29,6 @@ import {
   Play,
   X,
   Terminal,
-  Copy,
   Check,
   Workflow,
   ChevronLeft,
@@ -42,17 +42,17 @@ import { EdgeGatePanel } from "./EdgeGatePanel";
 import { NodePropertyPanel } from "./NodePropertyPanel";
 import { NodePalette } from "./NodePalette";
 import { useWorkflowEditor, type NodeArchetype } from "@/hooks/useWorkflowEditor";
-import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sigil/shared";
+import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sygil/shared";
 
 // ── Custom edge ──────────────────────────────────────────────────────────────
 
-interface SigilEdgeData {
+interface SygilEdgeData {
   edgeConfig: EdgeConfig;
   isSelected?: boolean;
   [key: string]: unknown;
 }
 
-function SigilEdge(props: EdgeProps) {
+function SygilEdge(props: EdgeProps) {
   const {
     sourceX,
     sourceY,
@@ -64,7 +64,7 @@ function SigilEdge(props: EdgeProps) {
     markerEnd,
     style,
   } = props;
-  const edgeData = data as SigilEdgeData | undefined;
+  const edgeData = data as SygilEdgeData | undefined;
   const config = edgeData?.edgeConfig;
 
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -127,7 +127,7 @@ function SigilEdge(props: EdgeProps) {
 // ── Node / edge type maps ────────────────────────────────────────────────────
 
 const NODE_TYPES = { nodeCard: NodeCard };
-const EDGE_TYPES = { sigil: SigilEdge };
+const EDGE_TYPES = { sygil: SygilEdge };
 
 // ── Empty sidebar hint ───────────────────────────────────────────────────────
 
@@ -158,46 +158,64 @@ function EmptySelectionHint({ nodeCount }: { nodeCount: number }) {
 // ── Run modal ────────────────────────────────────────────────────────────────
 
 interface RunModalProps {
-  workflowName: string;
+  workflow: WorkflowGraph;
   onClose: () => void;
 }
 
-function RunModal({ workflowName, onClose }: RunModalProps) {
-  const [copied, setCopied] = useState(false);
+function RunModal({ workflow, onClose }: RunModalProps) {
+  const router = useRouter();
   const closeRef = useRef<HTMLButtonElement>(null);
-  const copyRef = useRef<HTMLButtonElement>(null);
-  const cmd = `sigil run ./${workflowName}.json "your task here"`;
+  const [params, setParams] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (workflow.parameters) {
+      for (const [key, def] of Object.entries(workflow.parameters)) {
+        if (def.default != null) initial[key] = String(def.default);
+      }
+    }
+    return initial;
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Trap focus inside the dialog immediately so keyboard users don't need to
-  // Tab through the backdrop to reach the close button.
+  const paramEntries = workflow.parameters ? Object.entries(workflow.parameters) : [];
+
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(cmd).catch((err: unknown) => {
-      // Clipboard API can be blocked by permissions or missing HTTPS — log so
-      // the developer can see it, but don't surface an error to the user since
-      // they can still copy the command manually.
-      console.error("Failed to copy command to clipboard:", err);
-    });
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  // Confine Tab navigation to this dialog to meet WCAG 2.1 SC 2.1.2 (No Keyboard Trap
-  // inversion: keyboard *must* be trapped inside a modal while it is open).
   function handleFocusTrap(e: React.KeyboardEvent) {
     if (e.key === "Escape") { onClose(); return; }
-    if (e.key !== "Tab") return;
-    const focusable = [closeRef.current, copyRef.current].filter(Boolean) as HTMLElement[];
-    if (focusable.length === 0) return;
-    const first = focusable[0]!;
-    const last = focusable[focusable.length - 1]!;
-    if (e.shiftKey) {
-      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
-    } else {
-      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await fetch("/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workflow,
+          parameters: params,
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json() as Record<string, unknown>;
+        const msg = typeof json.error === "string" ? json.error : `HTTP ${res.status}`;
+        setError(msg);
+        return;
+      }
+      const json = await res.json() as { runId?: string; authToken?: string };
+      const runId = json.runId ?? "";
+      const token = json.authToken ?? "";
+      const url = `/monitor?run=${encodeURIComponent(runId)}&workflow=${encodeURIComponent(workflow.name)}&token=${encodeURIComponent(token)}`;
+      router.push(url);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -218,7 +236,9 @@ function RunModal({ workflowName, onClose }: RunModalProps) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <Terminal size={14} className="text-accent-green" />
-            <span id="run-modal-title" className="font-mono text-sm text-bright font-medium">Run workflow</span>
+            <span id="run-modal-title" className="font-mono text-sm text-bright font-medium">
+              Run — {workflow.name}
+            </span>
           </div>
           <button
             ref={closeRef}
@@ -231,33 +251,60 @@ function RunModal({ workflowName, onClose }: RunModalProps) {
         </div>
 
         {/* Body */}
-        <div id="run-modal-desc" className="px-5 py-5 space-y-4">
-          <ol className="space-y-2 font-mono text-xs text-dim list-decimal list-inside">
-            <li>Export the workflow JSON (use the Export button in the toolbar)</li>
-            <li>
-              Run the following command:
-            </li>
-          </ol>
+        <form id="run-modal-desc" className="px-5 py-5 space-y-4" onSubmit={handleSubmit}>
+          {paramEntries.length > 0 ? (
+            <div className="space-y-3">
+              {paramEntries.map(([key, def]) => (
+                <div key={key}>
+                  <label className="block font-mono text-[11px] text-dim mb-1">
+                    {key}
+                    {def.required && <span className="text-accent-red ml-1">*</span>}
+                  </label>
+                  {def.description && (
+                    <p className="font-mono text-[10px] text-dim mb-1 opacity-70">{def.description}</p>
+                  )}
+                  <input
+                    type={def.type === "number" ? "number" : "text"}
+                    required={def.required ?? false}
+                    value={params[key] ?? ""}
+                    onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
+                    placeholder={def.default != null ? String(def.default) : `Enter ${key}…`}
+                    className="w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright placeholder:text-muted focus:outline-none focus:border-accent transition-colors duration-200"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="font-mono text-xs text-dim">
+              This workflow has no parameters. Click Run to start.
+            </p>
+          )}
 
-          {/* Command block */}
-          <div className="bg-canvas border border-border rounded-lg px-4 py-3 flex items-start justify-between gap-3 code-block-premium">
-            <code className="font-mono text-xs text-accent-green break-all">{cmd}</code>
+          {error && (
+            <div className="flex items-start gap-2 bg-accent-red/10 border border-accent-red/30 rounded-lg px-3 py-2">
+              <AlertTriangle size={12} className="text-accent-red shrink-0 mt-0.5" />
+              <span className="font-mono text-xs text-accent-red">{error}</span>
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
             <button
-              ref={copyRef}
-              type="button"
-              onClick={handleCopy}
-              aria-label="Copy command"
-              className="shrink-0 p-2.5 -m-1 rounded hover:bg-surface text-dim hover:text-bright transition-colors duration-200 min-h-[44px] min-w-[44px] flex items-center justify-center"
-              title="Copy"
+              type="submit"
+              disabled={submitting}
+              className="flex-1 flex items-center justify-center gap-2 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono text-xs px-4 min-h-[44px] rounded-lg transition-colors duration-200"
             >
-              {copied ? (
-                <Check size={13} className="text-accent-green" />
-              ) : (
-                <Copy size={13} />
-              )}
+              <Play size={12} fill="currentColor" />
+              {submitting ? "Starting…" : "Run workflow"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 min-h-[44px] rounded-lg border border-border bg-canvas text-dim font-mono text-xs hover:border-border-bright transition-colors duration-200"
+            >
+              Cancel
             </button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );
@@ -373,8 +420,12 @@ export function WorkflowEditor({
   useEffect(() => {
     if (isMonitor) return;
     function handleKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Skip when focus is inside a contenteditable region — native
+      // browser shortcuts (undo, duplicate-line, etc.) must win.
+      if (el?.isContentEditable) return;
 
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
@@ -386,6 +437,9 @@ export function WorkflowEditor({
         e.preventDefault();
         editor.redo();
       } else if (e.key === "d" && mod) {
+        // Ctrl+D on a focused button hijacks the native bookmark shortcut
+        // without doing anything useful — the canvas isn't the target.
+        if (tag === "BUTTON") return;
         e.preventDefault();
         if (editor.selectedNodeId) {
           editor.duplicateNode(editor.selectedNodeId);
@@ -499,7 +553,7 @@ export function WorkflowEditor({
     (event: React.DragEvent) => {
       event.preventDefault();
       const archetype = event.dataTransfer.getData(
-        "application/sigil-node-type"
+        "application/sygil-node-type"
       ) as NodeArchetype;
       if (!archetype) return;
       if (!rfInstance) return;
@@ -837,7 +891,8 @@ export function WorkflowEditor({
           onPaneContextMenu={isMonitor ? undefined : (e) => { e.preventDefault(); const menuWidth = 160; const menuHeight = 50; const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8); const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8); setContextMenu({ x, y, type: "canvas" }); }}
           onEdgeContextMenu={isMonitor ? undefined : (e, edge) => { e.preventDefault(); const menuWidth = 160; const menuHeight = 50; const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8); const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8); setContextMenu({ x, y, type: "edge", edgeId: edge.id }); }}
           isValidConnection={(connection) => {
-            if (connection.source === connection.target) return false;
+            // Self-loops are valid: the scheduler handles `source === target`
+            // correctly, and the Ralph template depends on it.
             return !editor.edges.some(
               e => e.source === connection.source && e.target === connection.target
             );
@@ -858,7 +913,7 @@ export function WorkflowEditor({
           style={{ background: "transparent" }}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{
-            type: "sigil",
+            type: "sygil",
             markerEnd: {
               type: MarkerType.ArrowClosed,
               width: 14,
@@ -1034,7 +1089,7 @@ export function WorkflowEditor({
       {/* Run modal */}
       {showRunModal && (
         <RunModal
-          workflowName={editor.workflowName}
+          workflow={editor.exportWorkflow()}
           onClose={() => setShowRunModal(false)}
         />
       )}

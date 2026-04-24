@@ -9,7 +9,14 @@ vi.mock("../utils/workflow.js", () => ({
   loadWorkflow: vi.fn(),
 }));
 
+// Mock WorkflowGraphSchema so we can test the safeParse path directly.
+vi.mock("@sygil/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sygil/shared")>();
+  return { ...actual };
+});
+
 import { loadWorkflow } from "../utils/workflow.js";
+import { WorkflowGraphSchema } from "@sygil/shared";
 
 const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
 
@@ -24,6 +31,7 @@ describe("validateCommand", () => {
   let consoleErrorSpy: MockInstance<any[], any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy return types vary per target
   let processExitSpy: MockInstance<any[], never>;
+  let safeParseOriginal: typeof WorkflowGraphSchema.safeParse;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -35,6 +43,7 @@ describe("validateCommand", () => {
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(
       (_code?: string | number | null | undefined) => undefined as never
     );
+    safeParseOriginal = WorkflowGraphSchema.safeParse.bind(WorkflowGraphSchema);
   });
 
   afterEach(() => {
@@ -45,7 +54,10 @@ describe("validateCommand", () => {
     mockLoadWorkflow.mockResolvedValue({
       version: "1",
       name: "test-workflow",
-      nodes: { nodeA: {}, nodeB: {} },
+      nodes: {
+        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hello" },
+        nodeB: { adapter: "echo", model: "test", role: "assistant", prompt: "world" },
+      },
       edges: [{ id: "a-to-b", from: "nodeA", to: "nodeB" }],
     });
 
@@ -92,6 +104,7 @@ describe("validateCommand", () => {
   });
 
   it("logs error and exits 1 when schema validation fails (missing required field)", async () => {
+    // loadWorkflow itself throws when schema validation fails
     mockLoadWorkflow.mockRejectedValue(
       new Error("Workflow validation failed:\n  - nodes: At least one node is required")
     );
@@ -101,6 +114,36 @@ describe("validateCommand", () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining("Workflow validation failed")
     );
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("prints issues as '• path: message' format when safeParse fails on loaded data", async () => {
+    // Return data that passes loadWorkflow but fails safeParse (we spy on safeParse)
+    const validLooking = {
+      version: "1",
+      name: "test-workflow",
+      nodes: {
+        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hi" },
+      },
+      edges: [],
+    };
+    mockLoadWorkflow.mockResolvedValue(validLooking);
+
+    // Override safeParse to simulate a schema failure on re-validation
+    vi.spyOn(WorkflowGraphSchema, "safeParse").mockReturnValueOnce({
+      success: false,
+      error: {
+        issues: [
+          { path: ["nodes", "nodeA", "timeoutMs"], message: "Expected positive number" },
+        ],
+      },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await validateCommand("workflow.json");
+
+    const allErrors = consoleErrorSpy.mock.calls.flat().join("\n");
+    expect(allErrors).toContain("• nodes.nodeA.timeoutMs: Expected positive number");
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -119,7 +162,9 @@ describe("validateCommand", () => {
     mockLoadWorkflow.mockResolvedValue({
       version: "1",
       name: "test",
-      nodes: { nodeA: {} },
+      nodes: {
+        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hi" },
+      },
       edges: [],
     });
 

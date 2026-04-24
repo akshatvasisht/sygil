@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readConfig, writeConfig, readConfigSafe } from "./config.js";
-import type { SigilConfig } from "./config.js";
+import type { SygilConfig } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -12,7 +12,7 @@ import type { SigilConfig } from "./config.js";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-config-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-config-test-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -24,15 +24,17 @@ afterEach(async () => {
   }
 });
 
-function makeValidConfig(): SigilConfig {
+function makeValidConfig(): SygilConfig {
   return {
     version: "1",
     adapters: {
       "claude-sdk": { available: true },
       "claude-cli": { available: false, note: "claude not in PATH" },
       codex: { available: false, note: "codex not in PATH" },
-      cursor: { available: false, note: "Phase 2" },
+      cursor: { available: false, note: "agent not in PATH" },
       echo: { available: true },
+      "gemini-cli": { available: false, note: "gemini not in PATH" },
+      "local-oai": { available: false, note: "no local server" },
     },
     defaultAdapter: "claude-sdk",
     detectedAt: new Date().toISOString(),
@@ -78,12 +80,12 @@ describe("config utils", () => {
     await expect(readConfig()).rejects.toThrow();
   });
 
-  it("writeConfig creates the .sigil directory if missing", async () => {
+  it("writeConfig creates the .sygil directory if missing", async () => {
     const dir = await makeTempDir();
     vi.spyOn(process, "cwd").mockReturnValue(dir);
 
     const config = makeValidConfig();
-    // Should not throw even though .sigil dir doesn't exist yet
+    // Should not throw even though .sygil dir doesn't exist yet
     await expect(writeConfig(config)).resolves.toBeUndefined();
 
     // Verify the file was created

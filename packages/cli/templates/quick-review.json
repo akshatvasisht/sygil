@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
   "version": "1",
   "name": "quick-review",
   "description": "Fast 2-node demo: analyze code → write summary (under 1 minute)",

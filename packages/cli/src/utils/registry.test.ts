@@ -118,7 +118,7 @@ describe("listUserTemplates", () => {
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
 
-    const dir = await mkdtemp(join(tmpdir(), "sigil-registry-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "sygil-registry-test-"));
     try {
       await writeFile(join(dir, "template-a.json"), "{}", "utf8");
       await writeFile(join(dir, "template-b.json"), "{}", "utf8");
@@ -138,7 +138,7 @@ describe("listUserTemplates", () => {
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
 
-    const dir = await mkdtemp(join(tmpdir(), "sigil-registry-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "sygil-registry-test-"));
     try {
       await writeFile(join(dir, "my-template.json"), "{}", "utf8");
 

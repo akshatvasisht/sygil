@@ -1,46 +1,33 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EventEmitter } from "node:events";
 import { CodexCLIAdapter } from "./codex-cli.js";
-import type { AgentSession } from "@sigil/shared";
-import { makeFakeProc, pushLines } from "./__test-helpers__.js";
+import type { AgentSession } from "@sygil/shared";
+import {
+  collectEvents,
+  makeFakeProc,
+  makeSession as makeSessionEnvelope,
+  pushLines,
+} from "./__test-helpers__.js";
+import { logger } from "../utils/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Build a fake AgentSession backed by a fake process */
-function makeSession(adapter: CodexCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
-  return {
-    id: "test-session-id",
-    nodeId: "test-node",
-    adapter: "codex",
-    startedAt: new Date(),
-    _internal: {
-      proc,
-      outputLines: [],
-      exitCode: null,
-      done: false,
-      eventQueue: [],
-      resolve: null,
-      totalCostUsd: 0,
-      outputText: "",
-      tokenUsage: { input: 0, output: 0 },
-      stallTimer: null,
-      maxQueueSize: 1000,
-    },
-  };
-}
-
-/** Collect all events from the stream, waiting for it to finish */
-async function collectEvents(
-  adapter: CodexCLIAdapter,
-  session: AgentSession
-): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const events: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const ev of adapter.stream(session)) {
-    events.push(ev as { type: string; [k: string]: unknown });
-  }
-  return events;
+function makeSession(_adapter: CodexCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
+  return makeSessionEnvelope("codex", {
+    proc,
+    outputLines: [],
+    exitCode: null,
+    done: false,
+    eventQueue: [],
+    resolve: null,
+    totalCostUsd: 0,
+    outputText: "",
+    tokenUsage: { input: 0, output: 0 },
+    stallTimer: null,
+    maxQueueSize: 1000,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +258,23 @@ describe("CodexCLIAdapter", () => {
       expect(typeof session.id).toBe("string");
       expect(session.startedAt).toBeInstanceOf(Date);
     });
+
+    it("injects TRACEPARENT into child env when SpawnContext is passed", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      await adapter.spawn(
+        { adapter: "codex", model: "o4-mini", role: "agent", prompt: "task" },
+        { traceparent: "00-abc-def-01", traceId: "abc", spanId: "def" },
+      );
+
+      const opts = mockSpawn.mock.calls[0]![2] as { env: Record<string, string> };
+      expect(opts.env["TRACEPARENT"]).toBe("00-abc-def-01");
+    });
+
+    // Cross-adapter "warns on non-empty tools" coverage lives in
+    // adapters/tools-allowlist-warns.test.ts (describe.each over codex /
+    // cursor / gemini-cli).
   });
 
   // -------------------------------------------------------------------------
@@ -505,6 +509,32 @@ describe("CodexCLIAdapter", () => {
       expect(result).not.toHaveProperty("costUsd");
       expect(result).not.toHaveProperty("tokenUsage");
     });
+
+    it("force-kills and returns within the timeout budget when the child never marks done", async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeFakeProc();
+        const session = makeSession(adapter, proc);
+        // internal.done stays false, exitCode stays null — simulates the stuck-teardown case.
+
+        const resultPromise = adapter.getResult(session);
+
+        // Advance past CODEX_GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
+        await vi.advanceTimersByTimeAsync(10_000);
+        // SIGTERM should have been sent immediately on timeout.
+        expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+
+        // The child never exits — advance past GETRESULT_KILL_GRACE_MS (2_000).
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+
+        const result = await resultPromise;
+        // Force-teardown path synthesizes exitCode=1 when the child never reported one.
+        expect(result.exitCode).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -517,13 +547,27 @@ describe("CodexCLIAdapter", () => {
       expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
     });
 
-    it("does not send SIGTERM when already done", async () => {
+    // Kill gates on process liveness (proc.exitCode / proc.killed), NOT on
+    // internal.done — the stall path flips internal.done=true BEFORE the
+    // process exits.
+    it("does not send SIGTERM when the process is already dead", async () => {
+      const proc = makeFakeProc();
+      proc.exitCode = 0;
+      const session = makeSession(adapter, proc);
+
+      await adapter.kill(session);
+      expect(proc.kill).not.toHaveBeenCalled();
+    });
+
+    it("still sends SIGTERM when internal.done is true but the process is alive (stall-path leak)", async () => {
       const proc = makeFakeProc();
       const session = makeSession(adapter, proc);
       (session._internal as { done: boolean }).done = true;
 
-      await adapter.kill(session);
-      expect(proc.kill).not.toHaveBeenCalled();
+      const killPromise = adapter.kill(session);
+      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+      proc.emit("exit", 0);
+      await killPromise;
     });
   });
 

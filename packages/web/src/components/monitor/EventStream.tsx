@@ -11,16 +11,33 @@ import {
   AlertCircle,
   GitBranch,
   Play,
+  Pause,
   CheckCircle2,
   XCircle,
   Eye,
   CheckSquare,
+  Zap,
+  Database,
+  Webhook,
 } from "lucide-react";
-import type { WsServerEvent } from "@sigil/shared";
+import type { WsServerEvent, WsClientEvent } from "@sygil/shared";
 
 interface EventStreamProps {
   events: WsServerEvent[];
   autoScroll?: boolean;
+  /**
+   * Count of events dropped off the oldest end of the client-side buffer.
+   * When > 0, a "N events truncated" banner is rendered at the top of the scrollable
+   * list so operators know the view is not complete.
+   */
+  truncatedCount?: number;
+  /**
+   * When provided, human_review_request events render as interactive
+   * HumanReviewCard components with Approve/Reject buttons.
+   */
+  sendControl?: (event: WsClientEvent) => void;
+  /** workflowId needed for human review control events. */
+  workflowId?: string | null;
 }
 
 function formatTimestamp(iso: string): string {
@@ -37,13 +54,97 @@ function truncate(str: string, n: number): string {
   return str.length > n ? str.slice(0, n) + "…" : str;
 }
 
+// ── HumanReviewCard ───────────────────────────────────────────────────────────
+
+interface HumanReviewCardProps {
+  event: Extract<WsServerEvent, { type: "human_review_request" }>;
+  timestamp: string;
+  allEvents: WsServerEvent[];
+  sendControl?: (event: WsClientEvent) => void;
+  workflowId?: string | null;
+}
+
+function HumanReviewCard({ event, timestamp, allEvents, sendControl, workflowId }: HumanReviewCardProps) {
+  const [localDecision, setLocalDecision] = useState<"approved" | "rejected" | null>(null);
+
+  // Check if a response event already exists in the stream for this edgeId
+  const responseEvent = allEvents.find(
+    (e): e is Extract<WsServerEvent, { type: "human_review_response" }> =>
+      e.type === "human_review_response" && e.edgeId === event.edgeId
+  );
+  const resolved = responseEvent
+    ? (responseEvent.approved ? "approved" : "rejected")
+    : localDecision;
+
+  const baseClass = "flex flex-col gap-2 px-4 py-3 font-mono text-[12px] border-b border-border/40 last:border-b-0";
+
+  if (resolved) {
+    return (
+      <div className={`${baseClass}`}>
+        <div className="flex items-start gap-3">
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <CheckSquare size={12} className={resolved === "approved" ? "text-accent-green shrink-0 mt-0.5" : "text-accent-red shrink-0 mt-0.5"} />
+          <span className="text-dim">Human review {resolved} — {event.edgeId}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${baseClass} bg-accent-amber/5 border-l-2 border-l-accent-amber`}>
+      <div className="flex items-start gap-3">
+        <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+        <Eye size={12} className="text-accent-amber shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-accent-amber">Human review requested</div>
+          <div className="text-dim mt-1 text-[11px] leading-relaxed">{event.edgeId}</div>
+          {event.prompt && (
+            <div className="text-body mt-1 text-[11px] leading-relaxed whitespace-pre-wrap">{event.prompt}</div>
+          )}
+          {sendControl && workflowId && (
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => {
+                  sendControl({ type: "human_review_approve", workflowId, edgeId: event.edgeId });
+                  setLocalDecision("approved");
+                }}
+                aria-label="Approve human review"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded bg-accent-green/15 hover:bg-accent-green/25 text-accent-green border border-accent-green/30 text-[11px] transition-colors duration-200"
+              >
+                <CheckCircle2 size={11} />
+                Approve
+              </button>
+              <button
+                onClick={() => {
+                  sendControl({ type: "human_review_reject", workflowId, edgeId: event.edgeId });
+                  setLocalDecision("rejected");
+                }}
+                aria-label="Reject human review"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded bg-accent-red/15 hover:bg-accent-red/25 text-accent-red border border-accent-red/30 text-[11px] transition-colors duration-200"
+              >
+                <XCircle size={11} />
+                Reject
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── EventRow ──────────────────────────────────────────────────────────────────
+
 interface EventRowProps {
   event: WsServerEvent;
   timestamp: string;
   isRecent: boolean;
+  allEvents?: WsServerEvent[];
+  sendControl?: (event: WsClientEvent) => void;
+  workflowId?: string | null;
 }
 
-function EventRow({ event, timestamp, isRecent }: EventRowProps) {
+function EventRow({ event, timestamp, isRecent, allEvents = [], sendControl, workflowId }: EventRowProps) {
   const baseClass = `flex items-start gap-3 px-4 py-2 font-mono text-[12px] border-b border-border/40 last:border-b-0${isRecent ? " animate-stream-in" : ""}`;
 
   switch (event.type) {
@@ -185,6 +286,94 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
               </div>
             </div>
           );
+        case "adapter_failover":
+          return (
+            <div className={`${baseClass} bg-accent-amber/5`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <AlertTriangle size={12} className="text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-amber">adapter_failover</span>
+                <span className="text-dim ml-2">
+                  {inner.fromAdapter} → {inner.toAdapter}
+                </span>
+                <span className="text-accent-amber/70 ml-2">({inner.reason})</span>
+              </div>
+            </div>
+          );
+        case "retry_scheduled":
+          return (
+            <div className={`${baseClass} bg-accent-amber/5`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <AlertTriangle size={12} className="text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-amber">retry_scheduled</span>
+                <span className="text-dim ml-2">
+                  attempt {inner.attempt}→{inner.nextAttempt}
+                </span>
+                <span className="text-accent-amber/70 ml-2">
+                  in {inner.delayMs}ms ({inner.reason})
+                </span>
+              </div>
+            </div>
+          );
+        case "context_set":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <Database size={12} className="text-accent-cyan shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-cyan">context_set</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+                <span className="text-dim ml-2 text-[11px]">
+                  = {truncate(JSON.stringify(inner.value), 80)}
+                </span>
+              </div>
+            </div>
+          );
+        case "hook_result":
+          return (
+            <div className={`${baseClass} ${inner.exitCode !== 0 ? "bg-accent-red/5" : ""}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <Webhook size={12} className={inner.exitCode !== 0 ? "text-accent-red shrink-0 mt-0.5" : "text-accent-cyan shrink-0 mt-0.5"} />
+              <div>
+                <span className={inner.exitCode !== 0 ? "text-accent-red" : "text-accent-cyan"}>
+                  hook {inner.hook}
+                </span>
+                <span className="text-dim ml-2">
+                  → exit={inner.exitCode} ({inner.durationMs}ms)
+                </span>
+              </div>
+            </div>
+          );
+        case "sync_acquire":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <span className="text-accent-cyan shrink-0 mt-0.5 text-[12px]">⊕</span>
+              <div>
+                <span className="text-dim">sync_acquire</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+                <span className="text-dim ml-2 text-[11px]">limit={inner.limit}</span>
+              </div>
+            </div>
+          );
+        case "sync_release":
+          return (
+            <div className={`${baseClass}`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <span className="text-dim shrink-0 mt-0.5 text-[12px]">⊖</span>
+              <div>
+                <span className="text-dim">sync_release</span>
+                <kbd className="ml-2 font-mono text-[10px] bg-surface px-1.5 py-0.5 rounded border border-border text-body">
+                  {inner.key}
+                </kbd>
+              </div>
+            </div>
+          );
         default:
           return null;
       }
@@ -268,15 +457,13 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
 
     case "human_review_request":
       return (
-        <div className={`${baseClass} bg-accent-amber/8 border-l-2 border-accent-amber`}>
-          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
-          <Eye size={12} className="text-accent-amber shrink-0 mt-0.5" />
-          <div>
-            <span className="text-accent-amber font-medium">human_review</span>
-            <span className="text-dim ml-2">{event.edgeId}</span>
-            <span className="text-body ml-2">{event.prompt}</span>
-          </div>
-        </div>
+        <HumanReviewCard
+          event={event}
+          timestamp={timestamp}
+          allEvents={allEvents}
+          sendControl={sendControl}
+          workflowId={workflowId}
+        />
       );
 
     case "human_review_response":
@@ -293,12 +480,60 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
         </div>
       );
 
+    case "circuit_breaker": {
+      const bg =
+        event.state === "open" ? "bg-accent-red/8" :
+        event.state === "half_open" ? "bg-accent-amber/5" :
+        "bg-accent-green/5";
+      const color =
+        event.state === "open" ? "text-accent-red" :
+        event.state === "half_open" ? "text-accent-amber" :
+        "text-accent-green";
+      return (
+        <div className={`${baseClass} ${bg}`} role="status" aria-live={event.state === "open" ? "assertive" : "polite"}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Zap size={12} className={`${color} shrink-0 mt-0.5`} />
+          <div>
+            <span className={color}>circuit_breaker</span>
+            <span className="text-dim ml-2">{event.adapterType}</span>
+            <span className={`${color} ml-2`}>→ {event.state}</span>
+            {event.reason && (
+              <span className="text-dim ml-2">({event.reason})</span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    case "workflow_paused":
+      return (
+        <div className={`${baseClass} bg-accent-amber/5`}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Pause size={12} className="text-accent-amber shrink-0 mt-0.5" />
+          <span className="text-accent-amber">workflow paused</span>
+        </div>
+      );
+
+    case "workflow_resumed":
+      return (
+        <div className={`${baseClass} bg-accent-green/3`}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Play size={12} className="text-accent-green shrink-0 mt-0.5" />
+          <span className="text-accent-green">workflow resumed</span>
+        </div>
+      );
+
+    case "metrics_tick":
+      // Metrics ticks arrive ~1Hz and drive MetricsStrip directly; surfacing
+      // them inline would drown out node events.
+      return null;
+
     default:
       return null;
   }
 }
 
-export function EventStream({ events, autoScroll = true }: EventStreamProps) {
+export function EventStream({ events, autoScroll = true, truncatedCount = 0, sendControl, workflowId }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<string>("all");
 
@@ -357,6 +592,18 @@ export function EventStream({ events, autoScroll = true }: EventStreamProps) {
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
       >
+        {truncatedCount > 0 && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-2 px-4 py-1.5 bg-accent-amber/5 border-b border-accent-amber/20 font-mono text-[10px] text-accent-amber uppercase tracking-widest"
+          >
+            <AlertTriangle size={10} className="shrink-0" />
+            <span>
+              {truncatedCount.toLocaleString()} events truncated · oldest dropped
+            </span>
+          </div>
+        )}
         {filteredEvents.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <span className="text-dim text-xs font-mono">
@@ -370,6 +617,9 @@ export function EventStream({ events, autoScroll = true }: EventStreamProps) {
               event={event}
               timestamp={event.timestamp ? formatTimestamp(event.timestamp) : "--:--:--"}
               isRecent={i >= filteredEvents.length - 10}
+              allEvents={events}
+              sendControl={sendControl}
+              workflowId={workflowId}
             />
           ))
         )}

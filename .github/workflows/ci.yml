@@ -29,3 +29,6 @@ jobs:
         run: |
           cd packages/shared && npx tsc --noEmit
           cd ../cli && npx tsc --noEmit
+
+      - name: Validate published JSON schema is in sync
+        run: npm run validate:schema

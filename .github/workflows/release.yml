@@ -9,6 +9,14 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      # `id-token: write` enables both:
+      #   - npm provenance attestations (`npm publish --provenance`)
+      #   - keyless Sigstore signing of the bundled templates (issue #43)
+      # Both mechanisms share one OIDC trust chain.
+      contents: write
+      id-token: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +30,25 @@ jobs:
 
       - run: npm run build
 
+      # Sign bundled templates (issue #43) so the sidecars ride inside the
+      # tarball that `npm publish` uploads. Runtime verification
+      # (SYGIL_VERIFY_TEMPLATES=1) checks these against this workflow's OIDC
+      # identity. Skip when there is nothing to publish — changesets/action
+      # will no-op anyway, but signing is cheap and idempotent.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign bundled templates (keyless Sigstore)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for tpl in packages/cli/templates/*.json; do
+            cosign sign-blob \
+              --yes \
+              --bundle "${tpl}.sigstore.json" \
+              "$tpl"
+          done
+
       - uses: changesets/action@v1
         with:
           publish: npm run release
@@ -30,3 +57,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # npm provenance needs `id-token: write` (granted above) AND this
+          # env flag. The CLI's publishConfig sets --provenance explicitly,
+          # but we also export it here so workspace packages honoured by the
+          # changesets publish script pick it up without per-package opt-in.
+          NPM_CONFIG_PROVENANCE: "true"

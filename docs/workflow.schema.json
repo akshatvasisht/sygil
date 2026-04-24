@@ -1,0 +1,579 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Workflow schema version string; authored templates currently use \"1.0\"."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable workflow name; shown in the monitor title and CLI logs."
+    },
+    "description": {
+      "description": "Optional longer description surfaced in share bundles and the editor.",
+      "type": "string"
+    },
+    "nodes": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "adapter": {
+            "type": "string",
+            "enum": [
+              "claude-sdk",
+              "claude-cli",
+              "codex",
+              "cursor",
+              "echo",
+              "gemini-cli",
+              "local-oai"
+            ],
+            "description": "Agent adapter to spawn; controls how the prompt is executed and which CLI/SDK is used.",
+            "x-category": "core"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model ID passed to the adapter; resolved from modelTier before scheduler start when a tier mapping exists.",
+            "x-category": "core"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Free-form label shown in the monitor and logs; no behavioral effect.",
+            "x-category": "core"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Prompt text; supports {{parameters.X}}, {{nodes.X.output}}, and {{ctx.X}} interpolation.",
+            "x-category": "core"
+          },
+          "tools": {
+            "description": "Allowlist of tool names the agent may call; adapter support varies — see ADAPTER_MATRIX.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-category": "contract"
+          },
+          "disallowedTools": {
+            "description": "Blocklist of tool names the agent must not call; adapter support mirrors tools.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-category": "contract"
+          },
+          "outputDir": {
+            "description": "Working directory for file-based gate checks; defaults to the run's working directory.",
+            "type": "string",
+            "x-category": "contract"
+          },
+          "expectedOutputs": {
+            "description": "Paths (outputDir-relative) expected to exist after the node completes; surfaced to gates and monitors.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-category": "contract"
+          },
+          "outputSchema": {
+            "description": "JSON Schema the node's structured output must conform to; adapters that support strict mode enforce it provider-side.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "x-category": "contract"
+          },
+          "maxTurns": {
+            "description": "Upper bound on agent turns; adapter support varies — several CLIs ignore this field.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "x-category": "limits"
+          },
+          "maxBudgetUsd": {
+            "description": "Cost ceiling in USD; node fails with a budget error when exceeded (adapters that report cost).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "x-category": "limits"
+          },
+          "timeoutMs": {
+            "description": "Wall-clock timeout; node is cancelled via SIGTERM→SIGKILL when exceeded.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "x-category": "limits"
+          },
+          "idleTimeoutMs": {
+            "description": "Idle timeout; node is cancelled when no AgentEvent is received for this long.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "x-category": "limits"
+          },
+          "sandbox": {
+            "description": "Filesystem permission boundary for sandbox-aware adapters (codex, cursor).",
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "full-access"
+            ],
+            "x-category": "contract"
+          },
+          "providers": {
+            "description": "Failover list; scheduler tries providers in priority order on transient errors and takes precedence over top-level adapter.",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "adapter": {
+                  "type": "string",
+                  "enum": [
+                    "claude-sdk",
+                    "claude-cli",
+                    "codex",
+                    "cursor",
+                    "echo",
+                    "gemini-cli",
+                    "local-oai"
+                  ],
+                  "description": "Adapter type to use for this provider attempt."
+                },
+                "model": {
+                  "description": "Model ID for this provider; falls back to the node's top-level model when omitted.",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Lower numbers run first; ties break by declaration order."
+                }
+              },
+              "required": [
+                "adapter",
+                "priority"
+              ],
+              "additionalProperties": false
+            },
+            "x-category": "resilience"
+          },
+          "modelTier": {
+            "description": "Symbolic tier resolved at workflow-load time via .sygil/config.json > tiers; overrides model with the mapped value.",
+            "type": "string",
+            "enum": [
+              "cheap",
+              "smart"
+            ],
+            "x-category": "resilience"
+          },
+          "writesContext": {
+            "description": "Allowlist of sharedContext keys this node may write via context_set events; unlisted writes are dropped.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "x-category": "context"
+          },
+          "readsContext": {
+            "description": "sharedContext keys interpolated into the prompt via {{ctx.<key>}}; missing keys resolve to empty string.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "x-category": "context"
+          },
+          "retryPolicy": {
+            "description": "Per-provider retry loop for transient errors; deterministic jitter preserves replay.",
+            "type": "object",
+            "properties": {
+              "maxAttempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991,
+                "description": "Total attempts including the first; 1 disables retries."
+              },
+              "initialDelayMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Delay before the second attempt; subsequent delays multiply by backoffMultiplier."
+              },
+              "backoffMultiplier": {
+                "type": "number",
+                "minimum": 1,
+                "description": "Multiplier applied between attempts; 1 = constant delay, 2 = classic exponential."
+              },
+              "maxDelayMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Upper bound on computed delay; must be >= initialDelayMs."
+              },
+              "retryableErrors": {
+                "description": "Opt-in whitelist of transient error classes; omitted = all three classes retry.",
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "transport",
+                    "rate_limit",
+                    "server_5xx"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "maxAttempts",
+              "initialDelayMs",
+              "backoffMultiplier",
+              "maxDelayMs"
+            ],
+            "additionalProperties": false,
+            "x-category": "resilience"
+          },
+          "synchronization": {
+            "description": "Workflow-scoped sync primitive: mutex (1 concurrent) or semaphore (N concurrent) keyed by arbitrary string. Acquired before the adapter pool slot.",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mutex": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "mutex"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "semaphore": {
+                    "type": "object",
+                    "properties": {
+                      "key": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "limit"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "semaphore"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "x-category": "resilience"
+          }
+        },
+        "required": [
+          "adapter",
+          "model",
+          "role",
+          "prompt"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Node definitions keyed by stable node ID; order is irrelevant to execution."
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique edge identifier; used for gate attribution in the monitor and logs.",
+            "x-category": "core"
+          },
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Source node ID; must match a key in workflow.nodes.",
+            "x-category": "core"
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Destination node ID; must match a key in workflow.nodes.",
+            "x-category": "core"
+          },
+          "gate": {
+            "description": "Conditions evaluated after the source node completes; failure blocks traversal.",
+            "type": "object",
+            "properties": {
+              "conditions": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "exit_code"
+                        },
+                        "value": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Expected exit code — gate passes when the node's exit code matches."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "value"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pass when the upstream node's exit code equals the expected value."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "file_exists"
+                        },
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Path relative to the node's outputDir; absolute paths and traversal are rejected."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "path"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pass when a file exists at the given path within the node's outputDir."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "regex"
+                        },
+                        "filePath": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Path (outputDir-relative) to a file whose contents are tested against the pattern."
+                        },
+                        "pattern": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "JavaScript-flavoured regex compiled with default flags."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "filePath",
+                        "pattern"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pass when a regex matches anywhere in the target file's contents."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "script"
+                        },
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Executable gate script; must resolve inside outputDir or templates/gates/."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "path"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pass when the gate script exits with code 0; receives SYGIL_EXIT_CODE/OUTPUT_DIR/OUTPUT in env."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "human_review"
+                        },
+                        "prompt": {
+                          "description": "Reviewer-facing question; defaults to a generic approve/reject prompt.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pause the workflow until a human approves or rejects via CLI or monitor."
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "spec_compliance"
+                        },
+                        "specPath": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Path to the spec markdown; must resolve inside outputDir or templates/specs/."
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "exact",
+                            "superset"
+                          ],
+                          "description": "exact = output must match spec verbatim; superset = spec must be covered by output."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "specPath",
+                        "mode"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Pass when the upstream node's output conforms to the named spec."
+                    }
+                  ]
+                },
+                "description": "AND-joined conditions; every condition must pass for the gate to pass."
+              }
+            },
+            "required": [
+              "conditions"
+            ],
+            "additionalProperties": false,
+            "x-category": "core"
+          },
+          "contract": {
+            "description": "Output contract enforced on the source node's structured output before traversal.",
+            "type": "object",
+            "properties": {
+              "outputSchema": {
+                "description": "JSON Schema the upstream node's output must satisfy before traversing this edge.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "inputMapping": {
+                "description": "Legacy field → field mapping from upstream output into downstream context.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false,
+            "x-category": "core"
+          },
+          "isLoopBack": {
+            "description": "True for back-edges that create loops; requires maxRetries.",
+            "type": "boolean",
+            "x-category": "resilience"
+          },
+          "maxRetries": {
+            "description": "Upper bound on loop-back traversals for this edge; required when isLoopBack is true.",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "x-category": "resilience"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Directed edges between nodes; gates and contracts are attached here, not on nodes."
+    },
+    "parameters": {
+      "description": "Run-time parameters surfaced as CLI flags and editor form fields.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean"
+            ],
+            "description": "Parameter primitive type; governs how CLI flags are parsed."
+          },
+          "description": {
+            "description": "Human-readable description shown in help text and the editor's Run modal.",
+            "type": "string"
+          },
+          "required": {
+            "description": "When true, the parameter must be provided at run time; no default is consulted.",
+            "type": "boolean"
+          },
+          "default": {
+            "description": "Value used when the parameter is omitted at run time; type must match the declared type."
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "name",
+    "nodes",
+    "edges"
+  ],
+  "additionalProperties": false,
+  "$id": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
+  "title": "Sygil Workflow Graph"
+}

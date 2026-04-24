@@ -9,7 +9,7 @@ vi.mock("../utils/registry.js", () => ({
   searchTemplates: vi.fn(),
   installTemplate: vi.fn(),
   listUserTemplates: vi.fn(),
-  USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sigil/templates"),
+  USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sygil/templates"),
 }));
 
 import {
@@ -138,7 +138,7 @@ describe("registryCommand", () => {
     it("installs a template from the registry", async () => {
       const entry = makeEntry({ name: "install-me" });
       mockFetchRegistryIndex.mockResolvedValue(makeIndex([entry]));
-      mockInstallTemplate.mockResolvedValue("/home/test/.sigil/templates/install-me.json");
+      mockInstallTemplate.mockResolvedValue("/home/test/.sygil/templates/install-me.json");
 
       // Mock fetch for the template download
       const mockFetch = vi.fn().mockResolvedValue({

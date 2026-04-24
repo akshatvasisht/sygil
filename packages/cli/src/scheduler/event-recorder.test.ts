@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { mkdtemp, rm, readFile, readdir, mkdir } from "node:fs/promises";
+import { rm, readFile, readdir, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { EventRecorder } from "./event-recorder.js";
-import type { AgentEvent, RecordedEvent } from "@sigil/shared";
+import * as loggerModule from "../utils/logger.js";
+import type { RecordedEvent } from "@sygil/shared";
+import { makeEvent, makeTempDir as makeTempDirHelper } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -11,32 +12,8 @@ import type { AgentEvent, RecordedEvent } from "@sigil/shared";
 
 const tempDirs: string[] = [];
 
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-recorder-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function makeEvent(type: AgentEvent["type"], extra?: Record<string, unknown>): AgentEvent {
-  switch (type) {
-    case "tool_call":
-      return { type: "tool_call", tool: "bash", input: { cmd: "ls" }, ...extra };
-    case "tool_result":
-      return { type: "tool_result", tool: "bash", output: "file.txt", success: true, ...extra };
-    case "file_write":
-      return { type: "file_write", path: "/tmp/out.txt", ...extra };
-    case "text_delta":
-      return { type: "text_delta", text: "hello", ...extra };
-    case "cost_update":
-      return { type: "cost_update", totalCostUsd: 0.05, ...extra };
-    case "error":
-      return { type: "error", message: "something broke", ...extra };
-    case "stall":
-      return { type: "stall", reason: "no output for 60s", ...extra };
-    default:
-      return { type: "shell_exec", command: "ls", exitCode: 0, ...extra };
-  }
-}
+const makeTempDir = (): Promise<string> =>
+  makeTempDirHelper(tempDirs, "sygil-recorder-test-");
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -227,6 +204,116 @@ describe("EventRecorder", () => {
     const runDir = await makeTempDir();
     const events = await EventRecorder.readNodeEvents(runDir, "nonexistent");
     expect(events).toHaveLength(0);
+  });
+
+  describe("malformed NDJSON resilience", () => {
+    it("skips malformed lines and returns valid events", async () => {
+      const runDir = await makeTempDir();
+      const eventsDir = join(runDir, "events");
+      await mkdir(eventsDir, { recursive: true });
+
+      const valid1: RecordedEvent = {
+        timestamp: 1,
+        nodeId: "n1",
+        event: { type: "tool_call", tool: "bash", input: { cmd: "ls" } },
+      };
+      const valid2: RecordedEvent = {
+        timestamp: 2,
+        nodeId: "n1",
+        event: { type: "text_delta", text: "hello" },
+      };
+      const content = [
+        JSON.stringify(valid1),
+        "{not json",
+        JSON.stringify(valid2),
+      ].join("\n") + "\n";
+
+      await writeFile(join(eventsDir, "n1.ndjson"), content, "utf8");
+
+      const warnSpy = vi.spyOn(loggerModule.logger, "warn").mockImplementation(() => undefined);
+
+      const events = await EventRecorder.readNodeEvents(runDir, "n1");
+
+      expect(events).toHaveLength(2);
+      expect(events[0]!.event.type).toBe("tool_call");
+      expect(events[1]!.event.type).toBe("text_delta");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Skipping malformed NDJSON line"),
+      );
+    });
+
+    it("tolerates a truncated final line (simulated crash mid-append)", async () => {
+      const runDir = await makeTempDir();
+      const eventsDir = join(runDir, "events");
+      await mkdir(eventsDir, { recursive: true });
+
+      const valid: RecordedEvent = {
+        timestamp: 1,
+        nodeId: "n1",
+        event: { type: "tool_call", tool: "bash", input: {} },
+      };
+      // valid event on line 1, half-written JSON on line 2 (no trailing newline)
+      const content = JSON.stringify(valid) + '\n{"timestamp":2,"nodeId":"n1","even';
+
+      await writeFile(join(eventsDir, "n1.ndjson"), content, "utf8");
+
+      vi.spyOn(loggerModule.logger, "warn").mockImplementation(() => undefined);
+
+      await expect(
+        EventRecorder.readNodeEvents(runDir, "n1"),
+      ).resolves.toHaveLength(1);
+    });
+
+    it("returns empty array when every line is malformed but does not throw", async () => {
+      const runDir = await makeTempDir();
+      const eventsDir = join(runDir, "events");
+      await mkdir(eventsDir, { recursive: true });
+
+      await writeFile(
+        join(eventsDir, "n1.ndjson"),
+        "{broken\n{also broken\n",
+        "utf8",
+      );
+
+      vi.spyOn(loggerModule.logger, "warn").mockImplementation(() => undefined);
+
+      const events = await EventRecorder.readNodeEvents(runDir, "n1");
+      expect(events).toEqual([]);
+    });
+
+    it("readAllEvents degrades gracefully when one node file has corruption", async () => {
+      const runDir = await makeTempDir();
+      const eventsDir = join(runDir, "events");
+      await mkdir(eventsDir, { recursive: true });
+
+      const good: RecordedEvent = {
+        timestamp: 10,
+        nodeId: "good",
+        event: { type: "text_delta", text: "ok" },
+      };
+      await writeFile(
+        join(eventsDir, "good.ndjson"),
+        JSON.stringify(good) + "\n",
+        "utf8",
+      );
+
+      const partialValid: RecordedEvent = {
+        timestamp: 20,
+        nodeId: "broken",
+        event: { type: "tool_call", tool: "bash", input: {} },
+      };
+      await writeFile(
+        join(eventsDir, "broken.ndjson"),
+        JSON.stringify(partialValid) + "\n{garbage\n",
+        "utf8",
+      );
+
+      vi.spyOn(loggerModule.logger, "warn").mockImplementation(() => undefined);
+
+      const all = await EventRecorder.readAllEvents(runDir);
+      expect(all).toHaveLength(2);
+      expect(all.map((e) => e.nodeId).sort()).toEqual(["broken", "good"]);
+    });
   });
 
   it("concurrent recording for multiple nodes does not interleave", async () => {

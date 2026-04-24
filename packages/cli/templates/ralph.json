@@ -1,0 +1,51 @@
+{
+  "$schema": "https://raw.githubusercontent.com/akshatvasisht/sygil/main/docs/workflow.schema.json",
+  "version": "1",
+  "name": "ralph",
+  "description": "Ralph loop (Geoffrey Huntley, ghuntley.com/ralph): one worker iterates on fix_plan.md until every TODO is checked. Self-loop with a budget gate (maxRetries: 50) and a script gate (`gates/ralph-done.sh`) that re-queues the worker while `- [ ]` lines remain and exits the loop once none are left. The plan filename is hardcoded to `fix_plan.md` so the script gate can find it with no parameter plumbing — if you rename, edit the gate script to match. To swap adapters (codex, cursor, gemini-cli, local-oai), edit the `worker.adapter` field directly — the enum cannot be parameterized through `{{...}}` because schema validation runs before interpolation.",
+  "parameters": {
+    "model": {
+      "type": "string",
+      "description": "Model name passed to the adapter (adapter-specific).",
+      "default": "sonnet"
+    },
+    "promptFile": {
+      "type": "string",
+      "description": "Path to PROMPT.md — the standing instructions read at every iteration.",
+      "default": "./PROMPT.md"
+    },
+    "specsDir": {
+      "type": "string",
+      "description": "Directory of deterministic project specs the worker reads before acting.",
+      "default": "./specs"
+    }
+  },
+  "nodes": {
+    "worker": {
+      "adapter": "claude-cli",
+      "model": "{{model}}",
+      "role": "You are a patient iterative engineer in a Ralph loop. Each iteration: read PROMPT.md, pick the top unchecked TODO from fix_plan.md, read the relevant specs, apply ONE focused change, verify, and check the TODO off. Never do more than one TODO per iteration — the loop is your patience.",
+      "prompt": "Ralph iteration.\n\n1. Read {{promptFile}} for standing instructions.\n2. Read fix_plan.md. Find the FIRST unchecked TODO (line matching `- [ ]`). If none remain, exit immediately without changes — the loop's done-gate will detect completion and stop.\n3. Read any files under {{specsDir}} that are relevant to the TODO.\n4. Apply exactly ONE focused change that addresses the TODO. Write code, add tests, update docs — whatever the TODO asks for.\n5. Verify: run the project's test command (check README / package.json for the right invocation). If anything fails, fix it before proceeding.\n6. Check the TODO off in fix_plan.md: change `- [ ]` to `- [x]` on that line only. Do not rewrite unrelated lines.\n7. If you learned something non-obvious (a failing test shape, a hidden constraint, a surprising build flag), append one bullet to AGENT.md so future iterations inherit it.\n\nStop conditions (any one):\n- All TODOs checked → the loop's done-gate passes → workflow exits.\n- The TODO needs architectural input a loop can't provide → mark it `- [!]` with a one-line reason and move on.\n\nHard rules: do NOT start multiple TODOs in one iteration. Do NOT make changes unrelated to the current TODO. The loop is cumulative — small, correct steps compound.",
+      "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+      "readsContext": ["currentTask"],
+      "writesContext": ["currentTask"],
+      "maxTurns": 25,
+      "timeoutMs": 600000,
+      "idleTimeoutMs": 90000
+    }
+  },
+  "edges": [
+    {
+      "id": "ralph-iterate",
+      "from": "worker",
+      "to": "worker",
+      "isLoopBack": true,
+      "maxRetries": 50,
+      "gate": {
+        "conditions": [
+          { "type": "script", "path": "gates/ralph-done.sh" }
+        ]
+      }
+    }
+  ]
+}

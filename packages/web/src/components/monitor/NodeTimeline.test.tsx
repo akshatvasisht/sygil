@@ -5,28 +5,28 @@ import {
   type NodeTimelineEntry,
   type HumanReviewTimelineEntry,
 } from "./NodeTimeline";
-
-// Mock lucide-react icons
-vi.mock("lucide-react", () => {
-  const icon = (name: string) => {
-    const Comp = (_props: Record<string, unknown>) => <span data-testid={`icon-${name}`} />;
-    Comp.displayName = name;
-    return Comp;
-  };
-  return {
-    CheckCircle2: icon("check-circle"),
-    Circle: icon("circle"),
-    XCircle: icon("x-circle"),
-    Loader2: icon("loader"),
-    ChevronDown: icon("chevron-down"),
-    ChevronRight: icon("chevron-right"),
-    FileText: icon("file-text"),
-    Terminal: icon("terminal"),
-    Wrench: icon("wrench"),
-    AlertTriangle: icon("alert-triangle"),
-    DollarSign: icon("dollar"),
-    Clock3: icon("clock"),
-  };
+vi.mock("lucide-react", async () => {
+  const { buildLucideIconMocks } = await import("../__mocks__/lucide-react");
+  return buildLucideIconMocks([
+    ["CheckCircle2", "check-circle"],
+    ["Circle", "circle"],
+    ["XCircle", "x-circle"],
+    ["Loader2", "loader"],
+    ["ChevronDown", "chevron-down"],
+    ["ChevronRight", "chevron-right"],
+    ["FileText", "file-text"],
+    ["Terminal", "terminal"],
+    ["Wrench", "wrench"],
+    ["AlertTriangle", "alert-triangle"],
+    ["DollarSign", "dollar"],
+    ["Clock3", "clock"],
+    ["Snowflake", "snowflake"],
+    ["Ban", "ban"],
+    ["Clock", "clock-icon"],
+    ["ArrowRight", "arrow-right"],
+    ["Database", "database"],
+    ["Webhook", "webhook"],
+  ]);
 });
 
 function makeEntry(overrides: Partial<NodeTimelineEntry> = {}): NodeTimelineEntry {
@@ -216,5 +216,85 @@ describe("NodeTimeline", () => {
 
     expect(screen.getByText("Edit")).toBeInTheDocument();
     expect(screen.getByText("npm test")).toBeInTheDocument();
+  });
+
+  // Per-node expanded detail used to drop five AgentEvent
+  // variants silently. Operators expanding a node row didn't see retries,
+  // failovers, stalls, shared-context writes, or hook results even though
+  // those events were already in the entry's `events` array.
+  describe("EventBadge variant coverage", () => {
+    it("renders stall, adapter_failover, retry_scheduled, context_set, hook_result badges", () => {
+      const entries = [
+        makeEntry({
+          nodeId: "all-events",
+          events: [
+            { type: "stall", reason: "no output for 30s" },
+            {
+              type: "adapter_failover",
+              fromAdapter: "claude-sdk",
+              toAdapter: "claude-cli",
+              reason: "transport",
+            },
+            {
+              type: "retry_scheduled",
+              attempt: 1,
+              nextAttempt: 2,
+              delayMs: 5000,
+              reason: "server_5xx",
+            },
+            { type: "context_set", key: "review_passed", value: true },
+            {
+              type: "hook_result",
+              hook: "preNode",
+              exitCode: 0,
+              stdout: "",
+              stderr: "",
+              durationMs: 12,
+            },
+          ],
+        }),
+      ];
+      render(
+        <NodeTimeline entries={entries} selectedNodeId={null} onSelectNode={vi.fn()} />
+      );
+      fireEvent.click(screen.getByText("all-events"));
+
+      expect(screen.getByText(/stalled: no output for 30s/)).toBeInTheDocument();
+      expect(screen.getByText(/claude-sdk → claude-cli/)).toBeInTheDocument();
+      expect(screen.getByText(/retry 2 in 5000ms/)).toBeInTheDocument();
+      expect(screen.getByText("review_passed")).toBeInTheDocument();
+      expect(screen.getByText("hook preNode")).toBeInTheDocument();
+    });
+  });
+
+  // Status union now includes `cached` and `cancelled` so
+  // cache hits and aborted runs are visually distinct from genuine completion
+  // or adapter failure.
+  describe("status union coverage", () => {
+    it("renders a cached node with distinct styling", () => {
+      render(
+        <NodeTimeline
+          entries={[makeEntry({ nodeId: "memoed", status: "cached" })]}
+          selectedNodeId={null}
+          onSelectNode={vi.fn()}
+        />
+      );
+      const label = screen.getByText("memoed");
+      expect(label).toHaveClass("text-accent-cyan");
+      expect(screen.getByTestId("icon-snowflake")).toBeInTheDocument();
+    });
+
+    it("renders a cancelled node with distinct styling", () => {
+      render(
+        <NodeTimeline
+          entries={[makeEntry({ nodeId: "aborted", status: "cancelled" })]}
+          selectedNodeId={null}
+          onSelectNode={vi.fn()}
+        />
+      );
+      const label = screen.getByText("aborted");
+      expect(label).toHaveClass("line-through");
+      expect(screen.getByTestId("icon-ban")).toBeInTheDocument();
+    });
   });
 });

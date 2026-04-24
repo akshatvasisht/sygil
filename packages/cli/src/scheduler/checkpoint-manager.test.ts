@@ -10,36 +10,8 @@ import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { WorkflowRunState, NodeResult } from "@sigil/shared";
 import { CheckpointManager, CHECKPOINT_DEBOUNCE_MS } from "./checkpoint-manager.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeRunState(overrides: Partial<WorkflowRunState> = {}): WorkflowRunState {
-  return {
-    id: randomUUID(),
-    workflowName: "test-workflow",
-    workflowPath: "",
-    status: "running",
-    startedAt: new Date().toISOString(),
-    completedNodes: [],
-    nodeResults: {},
-    totalCostUsd: 0,
-    retryCounters: {},
-    ...overrides,
-  };
-}
-
-function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {
-  return {
-    output: "test output",
-    exitCode: 0,
-    durationMs: 100,
-    ...overrides,
-  };
-}
+import { makeRunState, makeNodeResult } from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Test setup
@@ -48,7 +20,7 @@ function makeNodeResult(overrides: Partial<NodeResult> = {}): NodeResult {
 let testDir: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-ckpt-test-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-ckpt-test-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   vi.useFakeTimers();
 });
@@ -71,7 +43,7 @@ describe("CheckpointManager", () => {
     mgr.markDirty(state);
 
     // Before debounce fires, file should not exist
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     await expect(readFile(filePath, "utf8")).rejects.toThrow();
 
     // Advance past debounce and wait for the background write to complete
@@ -100,7 +72,7 @@ describe("CheckpointManager", () => {
     await vi.advanceTimersByTimeAsync(CHECKPOINT_DEBOUNCE_MS + 10);
     await mgr.waitForWrite();
 
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
 
@@ -123,7 +95,7 @@ describe("CheckpointManager", () => {
     // flush immediately — don't advance timers
     await mgr.flush();
 
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
     expect(parsed.status).toBe("completed");
@@ -151,7 +123,7 @@ describe("CheckpointManager", () => {
     await mgr.flush();
 
     // Verify that the directory exists and all writes succeeded
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
     expect(parsed.completedNodes).toContain("nodeA");
@@ -190,7 +162,7 @@ describe("CheckpointManager", () => {
     await mgr.flush();
 
     const nodeFilePath = join(
-      testDir, ".sigil", "runs", state.id, "nodes", "nodeA.json"
+      testDir, ".sygil", "runs", state.id, "nodes", "nodeA.json"
     );
     const raw = await readFile(nodeFilePath, "utf8");
     const parsed = JSON.parse(raw);
@@ -259,7 +231,7 @@ describe("CheckpointManager", () => {
     await vi.advanceTimersByTimeAsync(CHECKPOINT_DEBOUNCE_MS + 10);
     await mgr.waitForWrite();
 
-    const filePath = join(testDir, ".sigil", "runs", `${state1.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state1.id}.json`);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
     // The last markDirty should win
@@ -285,7 +257,7 @@ describe("CheckpointManager", () => {
     await mgrGood.flush();
     expect(mgrGood.lastError).toBeUndefined();
 
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw);
     expect(parsed.id).toBe(state.id);
@@ -312,7 +284,7 @@ describe("CheckpointManager", () => {
 
   // 11. getLastError() returns the last write error
   it("getLastError() returns the error after a failed write", async () => {
-    const invalidDir = join(tmpdir(), `sigil-ckpt-test-\0invalid`);
+    const invalidDir = join(tmpdir(), `sygil-ckpt-test-\0invalid`);
     const state = makeRunState();
     const mgr = new CheckpointManager(invalidDir);
 
@@ -349,7 +321,31 @@ describe("CheckpointManager", () => {
     // Advance past debounce — write should NOT happen since we disposed
     await vi.advanceTimersByTimeAsync(CHECKPOINT_DEBOUNCE_MS + 10);
 
-    const filePath = join(testDir, ".sigil", "runs", `${state.id}.json`);
+    const filePath = join(testDir, ".sygil", "runs", `${state.id}.json`);
     await expect(readFile(filePath, "utf8")).rejects.toThrow();
+  });
+
+  // Atomic-write — after a successful flush, the runs directory
+  // must contain only the committed file, not the intermediate `.tmp.*` one
+  // used by `writeFileAtomic`. A stale tmp would signal a rename failure that
+  // silently left behind a half-written file.
+  it("leaves no .tmp orphan in the runs directory after successful writes", async () => {
+    const state = makeRunState();
+    const result = makeNodeResult();
+    const mgr = new CheckpointManager(testDir);
+
+    mgr.markDirty(state);
+    mgr.markNodeResult(state.id, "nodeA", result);
+    await mgr.flush();
+
+    const runsDir = join(testDir, ".sygil", "runs");
+    const runsEntries = await readdir(runsDir);
+    expect(runsEntries.some((n) => n.includes(".tmp."))).toBe(false);
+
+    const nodesDir = join(runsDir, state.id, "nodes");
+    const nodesEntries = await readdir(nodesDir);
+    expect(nodesEntries.some((n) => n.includes(".tmp."))).toBe(false);
+
+    mgr.dispose();
   });
 });

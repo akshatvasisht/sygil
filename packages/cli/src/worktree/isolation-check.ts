@@ -1,4 +1,4 @@
-import type { NodeConfig } from "@sigil/shared";
+import type { NodeConfig } from "@sygil/shared";
 
 /**
  * Tool names that can modify the filesystem or execute arbitrary commands.

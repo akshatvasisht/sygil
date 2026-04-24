@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { getAdapter } from "../adapters/index.js";
-import type { AdapterType, WorkflowRunState } from "@sigil/shared";
+import type { AdapterType, WorkflowRunState } from "@sygil/shared";
 
 const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor"];
 
@@ -61,7 +61,7 @@ export async function listCommand(): Promise<void> {
   }
 
   const bundledTemplatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
-  const userTemplatesDir = join(homedir(), ".sigil", "templates");
+  const userTemplatesDir = join(homedir(), ".sygil", "templates");
 
   const [bundledTemplates, userTemplates] = await Promise.all([
     scanTemplatesDir(bundledTemplatesDir, "bundled"),
@@ -94,13 +94,13 @@ export async function listCommand(): Promise<void> {
   // --- Recent Runs ---
   console.log(`\n${chalk.underline("Recent runs")}`);
 
-  const configDir = process.env["SIGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sigil");
+  const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
   const runsDir = join(configDir, "runs");
   let runFiles: string[];
   try {
     runFiles = await readdir(runsDir);
   } catch {
-    console.log(chalk.dim("  No runs found (run `sigil run <workflow>` to start one)"));
+    console.log(chalk.dim("  No runs found (run `sygil run <workflow>` to start one)"));
     return;
   }
 
@@ -133,9 +133,10 @@ export async function listCommand(): Promise<void> {
       const cost =
         state.totalCostUsd > 0 ? chalk.dim(` $${state.totalCostUsd.toFixed(4)}`) : "";
 
+      const shortId = state.id.length > 12 ? state.id.slice(0, 12) + "…" : state.id;
       console.log(
         `  ${colorFn(state.status.padEnd(10))} ` +
-          `${chalk.bold(state.id.slice(0, 8))}  ` +
+          `${chalk.bold(shortId)}  ` +
           `${chalk.cyan(state.workflowName.padEnd(20))} ` +
           `${chalk.dim(startedAt)}${cost}`
       );
@@ -144,5 +145,7 @@ export async function listCommand(): Promise<void> {
     }
   }
 
+  console.log(chalk.dim("\nRun IDs are truncated to 12 characters above. Full run IDs are shown in"));
+  console.log(chalk.dim(".sygil/runs/<id>.json filenames; paste the full file name (minus .json) into `sygil resume`."));
   console.log("");
 }

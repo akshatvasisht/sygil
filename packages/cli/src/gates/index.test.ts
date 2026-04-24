@@ -1,9 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { writeFile, rm, mkdtemp, chmod } from "node:fs/promises";
+import { writeFile, rm, chmod } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { GateEvaluator } from "./index.js";
-import type { NodeResult } from "@sigil/shared";
+import { makeNodeResult, makeTempDir as makeTempDirHelper } from "../scheduler/__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -11,19 +10,11 @@ import type { NodeResult } from "@sigil/shared";
 
 const evaluator = new GateEvaluator();
 
-const defaultResult: NodeResult = {
-  output: "test output",
-  exitCode: 0,
-  durationMs: 100,
-};
+const defaultResult = makeNodeResult();
 
 const tempDirs: string[] = [];
 
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-gate-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const makeTempDir = (): Promise<string> => makeTempDirHelper(tempDirs, "sygil-gate-test-");
 
 afterEach(async () => {
   // Clean up temp dirs in reverse order (deepest first)
@@ -38,24 +29,17 @@ afterEach(async () => {
 
 describe("GateEvaluator", () => {
   describe("exit_code condition", () => {
-    it("passes when exit code matches", async () => {
+    it.each([
+      { label: "passes when exit code matches", actual: 0, passed: true, reason: /matches expected/ },
+      { label: "fails when exit code does not match", actual: 1, passed: false, reason: /does not match expected/ },
+    ])("$label", async ({ actual, passed, reason }) => {
       const result = await evaluator.evaluate(
         { conditions: [{ type: "exit_code", value: 0 }] },
-        { ...defaultResult, exitCode: 0 },
+        { ...defaultResult, exitCode: actual },
         "/tmp"
       );
-      expect(result.passed).toBe(true);
-      expect(result.reason).toMatch(/matches expected/);
-    });
-
-    it("fails when exit code does not match", async () => {
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "exit_code", value: 0 }] },
-        { ...defaultResult, exitCode: 1 },
-        "/tmp"
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/does not match expected/);
+      expect(result.passed).toBe(passed);
+      expect(result.reason).toMatch(reason);
     });
   });
 
@@ -197,13 +181,13 @@ describe("GateEvaluator", () => {
       expect(result.reason).toMatch(/failed/);
     });
 
-    it("passes SIGIL_EXIT_CODE env var to script", async () => {
+    it("passes SYGIL_EXIT_CODE env var to script", async () => {
       const dir = await makeTempDir();
       const scriptPath = join(dir, "check-env.sh");
-      // Script passes only if SIGIL_EXIT_CODE is 0
+      // Script passes only if SYGIL_EXIT_CODE is 0
       await writeFile(
         scriptPath,
-        '#!/bin/sh\n[ "$SIGIL_EXIT_CODE" = "0" ] && exit 0 || exit 1\n',
+        '#!/bin/sh\n[ "$SYGIL_EXIT_CODE" = "0" ] && exit 0 || exit 1\n',
         "utf8"
       );
       await chmod(scriptPath, 0o755);
@@ -221,6 +205,54 @@ describe("GateEvaluator", () => {
         dir
       );
       expect(failResult.passed).toBe(false);
+    });
+
+    it("falls back to the bundled templates dir when the script is not present in the outputDir", async () => {
+      // Bundled template gates (e.g. ralph.json → gates/ralph-done.sh,
+      // optimize.json → gates/check-budget.sh) are shipped in the CLI tarball
+      // but are NOT copied by `sygil export`. The resolver falls back to the
+      // bundled `templates/<scriptPath>` so those templates run out-of-the-box
+      // without requiring the user to copy gates/ into their working dir.
+      const dir = await makeTempDir();
+      // Pick a real bundled gate that we know ships with the CLI. Its
+      // behavior-under-missing-config is non-zero exit (fails closed), which
+      // is fine — we only need to verify the file was found + executed.
+      const result = await evaluator.evaluate(
+        { conditions: [{ type: "script", path: "gates/check-budget.sh" }] },
+        defaultResult,
+        dir,
+      );
+      // Either passes or fails based on the bundled script's own logic — the
+      // important signal is that the reason string references the bundled
+      // path, proving the fallback resolver found it.
+      expect(result.reason).toMatch(/templates\/gates\/check-budget\.sh/);
+    });
+
+    it("does NOT forward arbitrary SYGIL_* vars from the parent env", async () => {
+      const dir = await makeTempDir();
+      const scriptPath = join(dir, "leak-check.sh");
+      // Fails if SYGIL_SECRET is leaked from the parent environment.
+      await writeFile(
+        scriptPath,
+        '#!/bin/sh\n[ -z "$SYGIL_SECRET" ] && exit 0 || exit 1\n',
+        "utf8",
+      );
+      await chmod(scriptPath, 0o755);
+
+      const originalSecret = process.env["SYGIL_SECRET"];
+      process.env["SYGIL_SECRET"] = "leaked-api-key";
+
+      try {
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "script", path: scriptPath }] },
+          defaultResult,
+          dir,
+        );
+        expect(result.passed).toBe(true);
+      } finally {
+        if (originalSecret === undefined) delete process.env["SYGIL_SECRET"];
+        else process.env["SYGIL_SECRET"] = originalSecret;
+      }
     });
   });
 
@@ -311,21 +343,13 @@ describe("GateEvaluator", () => {
   // ---------------------------------------------------------------------------
 
   describe("file_exists — path traversal prevention", () => {
-    it("rejects absolute path outside outputDir", async () => {
+    it.each([
+      ["absolute", "/etc/passwd"],
+      ["relative traversal", "../../etc/passwd"],
+    ])("rejects %s path outside outputDir", async (_label, path) => {
       const dir = await makeTempDir();
       const result = await evaluator.evaluate(
-        { conditions: [{ type: "file_exists", path: "/etc/passwd" }] },
-        defaultResult,
-        dir
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/resolves outside the output directory/);
-    });
-
-    it("rejects relative traversal path outside outputDir", async () => {
-      const dir = await makeTempDir();
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "file_exists", path: "../../etc/passwd" }] },
+        { conditions: [{ type: "file_exists", path }] },
         defaultResult,
         dir
       );
@@ -348,21 +372,13 @@ describe("GateEvaluator", () => {
   });
 
   describe("regex — path traversal prevention", () => {
-    it("rejects absolute path outside outputDir", async () => {
+    it.each([
+      ["absolute", "/etc/passwd"],
+      ["relative traversal", "../../etc/passwd"],
+    ])("rejects %s path outside outputDir", async (_label, filePath) => {
       const dir = await makeTempDir();
       const result = await evaluator.evaluate(
-        { conditions: [{ type: "regex", filePath: "/etc/passwd", pattern: "root" }] },
-        defaultResult,
-        dir
-      );
-      expect(result.passed).toBe(false);
-      expect(result.reason).toMatch(/resolves outside the output directory/);
-    });
-
-    it("rejects relative traversal path outside outputDir", async () => {
-      const dir = await makeTempDir();
-      const result = await evaluator.evaluate(
-        { conditions: [{ type: "regex", filePath: "../../etc/passwd", pattern: "root" }] },
+        { conditions: [{ type: "regex", filePath, pattern: "root" }] },
         defaultResult,
         dir
       );
@@ -447,6 +463,131 @@ describe("GateEvaluator", () => {
       );
 
       expect(result.passed).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // spec_compliance condition
+  // ---------------------------------------------------------------------------
+
+  describe("spec_compliance condition", () => {
+    describe("exact mode", () => {
+      it("passes when output matches spec line-for-line", async () => {
+        const dir = await makeTempDir();
+        await writeFile(
+          join(dir, "spec.md"),
+          "# API\n- endpoint: /health\n- returns: 200\n",
+          "utf8"
+        );
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "exact" }] },
+          { ...defaultResult, output: "# API\n- endpoint: /health\n- returns: 200\n" },
+          dir
+        );
+        expect(result.passed).toBe(true);
+        expect(result.reason).toMatch(/exact/);
+      });
+
+      it("ignores leading/trailing whitespace and blank lines", async () => {
+        const dir = await makeTempDir();
+        await writeFile(join(dir, "spec.md"), "alpha\nbeta\n", "utf8");
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "exact" }] },
+          { ...defaultResult, output: "\n  alpha  \n\nbeta\n\n" },
+          dir
+        );
+        expect(result.passed).toBe(true);
+      });
+
+      it("fails when a line is missing", async () => {
+        const dir = await makeTempDir();
+        await writeFile(join(dir, "spec.md"), "alpha\nbeta\ngamma\n", "utf8");
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "exact" }] },
+          { ...defaultResult, output: "alpha\nbeta\n" },
+          dir
+        );
+        expect(result.passed).toBe(false);
+        expect(result.reason).toMatch(/differs/);
+      });
+
+      it("fails when order differs", async () => {
+        const dir = await makeTempDir();
+        await writeFile(join(dir, "spec.md"), "alpha\nbeta\n", "utf8");
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "exact" }] },
+          { ...defaultResult, output: "beta\nalpha\n" },
+          dir
+        );
+        expect(result.passed).toBe(false);
+      });
+    });
+
+    describe("superset mode", () => {
+      it("passes when output contains every spec line in any order", async () => {
+        const dir = await makeTempDir();
+        await writeFile(join(dir, "spec.md"), "## endpoints\n- /health\n- /ready\n", "utf8");
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "superset" }] },
+          {
+            ...defaultResult,
+            output: "# API spec\n## endpoints\n- /ready\n- /health\n- /metrics (new)\n",
+          },
+          dir
+        );
+        expect(result.passed).toBe(true);
+        expect(result.reason).toMatch(/covers/);
+      });
+
+      it("fails when a spec line is absent from the output", async () => {
+        const dir = await makeTempDir();
+        await writeFile(join(dir, "spec.md"), "required: A\nrequired: B\nrequired: C\n", "utf8");
+
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath: "spec.md", mode: "superset" }] },
+          { ...defaultResult, output: "required: A\nrequired: B\n" },
+          dir
+        );
+        expect(result.passed).toBe(false);
+        expect(result.reason).toMatch(/missing/);
+        expect(result.reason).toMatch(/required: C/);
+      });
+    });
+
+    describe("path traversal prevention", () => {
+      it.each([
+        ["absolute", "/etc/passwd", "exact" as const],
+        ["relative traversal", "../../etc/passwd", "superset" as const],
+      ])("rejects %s path outside outputDir", async (_label, specPath, mode) => {
+        const dir = await makeTempDir();
+        const result = await evaluator.evaluate(
+          { conditions: [{ type: "spec_compliance", specPath, mode }] },
+          defaultResult,
+          dir
+        );
+        expect(result.passed).toBe(false);
+        expect(result.reason).toMatch(/resolves outside the output directory/);
+      });
+
+      it("fails cleanly when spec file is missing", async () => {
+        const dir = await makeTempDir();
+        const result = await evaluator.evaluate(
+          {
+            conditions: [
+              { type: "spec_compliance", specPath: "no-such-spec.md", mode: "exact" },
+            ],
+          },
+          defaultResult,
+          dir
+        );
+        expect(result.passed).toBe(false);
+        expect(result.reason).toMatch(/cannot (stat|read) spec/);
+      });
     });
   });
 });

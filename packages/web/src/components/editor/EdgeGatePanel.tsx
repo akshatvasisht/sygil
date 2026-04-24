@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { X, GitBranch, RefreshCw, CheckSquare, Pencil, Eye, Plus, ChevronDown } from "lucide-react";
-import type { EdgeConfig, GateCondition, GateConfig } from "@sigil/shared";
+import type { EdgeConfig, GateCondition, GateConfig } from "@sygil/shared";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,18 @@ function ConditionRow({
             )}
           </div>
         );
+      case "spec_compliance":
+        return (
+          <div>
+            <div className="font-mono text-xs text-accent-blue mb-0.5">spec_compliance</div>
+            <div className="font-mono text-[11px] text-dim">
+              spec: <span className="text-bright">{condition.specPath}</span>
+            </div>
+            <div className="font-mono text-[11px] text-dim mt-0.5">
+              mode: <span className="text-bright">{condition.mode}</span>
+            </div>
+          </div>
+        );
     }
   })();
 
@@ -93,6 +105,7 @@ function ConditionRow({
     regex: "bg-accent-amber",
     script: "bg-accent-purple",
     human_review: "bg-dim",
+    spec_compliance: "bg-accent-blue",
   };
 
   return (
@@ -126,6 +139,7 @@ const CONDITION_TYPES: { value: ConditionType; label: string }[] = [
   { value: "regex", label: "regex" },
   { value: "script", label: "script" },
   { value: "human_review", label: "human_review" },
+  { value: "spec_compliance", label: "spec_compliance" },
 ];
 
 interface AddConditionFormProps {
@@ -141,6 +155,8 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
   const [regexError, setRegexError] = useState("");
   const [scriptPath, setScriptPath] = useState("");
   const [hrPrompt, setHrPrompt] = useState("");
+  const [specPath, setSpecPath] = useState("");
+  const [specMode, setSpecMode] = useState<"exact" | "superset">("superset");
 
   function handleAdd() {
     let cond: GateCondition | null = null;
@@ -161,6 +177,8 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
       cond = { type: "script", path: scriptPath.trim() };
     } else if (type === "human_review") {
       cond = { type: "human_review", prompt: hrPrompt.trim() || undefined };
+    } else if (type === "spec_compliance" && specPath.trim()) {
+      cond = { type: "spec_compliance", specPath: specPath.trim(), mode: specMode };
     }
     if (cond) {
       onAdd(cond);
@@ -171,6 +189,8 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
       setRegexPattern("");
       setScriptPath("");
       setHrPrompt("");
+      setSpecPath("");
+      setSpecMode("superset");
     }
   }
 
@@ -193,7 +213,7 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
             </option>
           ))}
         </select>
-        <ChevronDown size={11} className="absolute right-2 top-1/2 -translate-y-1/2 text-subtle pointer-events-none" />
+        <ChevronDown size={11} className="absolute right-2 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
       </div>
 
       {/* Fields per type */}
@@ -254,6 +274,29 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
           placeholder="Optional review prompt"
           onChange={(e) => setHrPrompt(e.target.value)}
         />
+      )}
+      {type === "spec_compliance" && (
+        <>
+          <input
+            className={inputCls}
+            value={specPath}
+            aria-label="Spec file path"
+            placeholder="Spec file path (e.g. templates/specs/api.md)"
+            onChange={(e) => setSpecPath(e.target.value)}
+          />
+          <div className="relative">
+            <select
+              className="w-full bg-canvas border border-border rounded px-2 py-1 font-mono text-xs text-bright focus:outline-none focus:border-accent transition-colors duration-200 appearance-none cursor-pointer"
+              value={specMode}
+              aria-label="Spec compliance mode"
+              onChange={(e) => setSpecMode(e.target.value as "exact" | "superset")}
+            >
+              <option value="superset">superset — output covers every spec line</option>
+              <option value="exact">exact — output equals spec line-for-line</option>
+            </select>
+            <ChevronDown size={11} className="absolute right-2 top-1/2 -translate-y-1/2 text-dim pointer-events-none" />
+          </div>
+        </>
       )}
 
       <button

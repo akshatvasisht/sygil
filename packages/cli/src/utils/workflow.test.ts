@@ -3,7 +3,7 @@ import { writeFile, unlink, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadWorkflow, interpolateWorkflow } from "./workflow.js";
-import type { WorkflowGraph } from "@sigil/shared";
+import type { WorkflowGraph } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,7 +41,7 @@ function validWorkflow(): object {
 const tempFiles: string[] = [];
 
 async function writeTempWorkflow(content: object | string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "sigil-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "sygil-test-"));
   const filePath = join(dir, "workflow.json");
   const text = typeof content === "string" ? content : JSON.stringify(content);
   await writeFile(filePath, text, "utf8");
@@ -365,6 +365,56 @@ describe("interpolateWorkflow — JSON injection prevention", () => {
     expect(result.name).toBe("valid-name");
   });
 
+  it("`{{{{foo}}}}` escapes to literal `{{foo}}` without requiring a parameter", () => {
+    const graph = makeGraph("Literal placeholder: {{{{foo}}}}");
+    const result = interpolateWorkflow(graph, {});
+    expect(result.nodes["only"]?.prompt).toBe("Literal placeholder: {{foo}}");
+  });
+
+  it("escapes survive alongside real interpolation in the same string", () => {
+    const graph = makeGraph("Use {{name}} to replace {{{{name}}}}");
+    const result = interpolateWorkflow(graph, { name: "actualValue" });
+    expect(result.nodes["only"]?.prompt).toBe("Use actualValue to replace {{name}}");
+  });
+
+  it("escape mechanism handles multiple escaped placeholders", () => {
+    const graph = makeGraph("{{{{a}}}} and {{{{b}}}} but not {{c}}");
+    const result = interpolateWorkflow(graph, { c: "real" });
+    expect(result.nodes["only"]?.prompt).toBe("{{a}} and {{b}} but not real");
+  });
+
+  it("doubled braces without interpolation target still render literally", () => {
+    // Ensure an escaped `{{foo}}` does NOT fail the "missing parameter" check.
+    const graph = makeGraph("Template syntax: {{{{unknown}}}}");
+    expect(() => interpolateWorkflow(graph, {})).not.toThrow();
+  });
+
+  it("parameter values that contain {{otherParam}} are NOT recursively expanded", () => {
+    // Defense-in-depth: JS `String.prototype.replace(/g, fn)` does not scan
+    // the replacement content for further matches. If that ever changed (spec
+    // or implementation bug), a param value like `{{evil}}` would become an
+    // injection vector — a caller could sneak arbitrary placeholders into
+    // another param's value and have them interpolated in a second pass.
+    const graph = makeGraph("Task: {{task}}");
+    const result = interpolateWorkflow(graph, {
+      task: "Plan this: {{otherParam}}",
+      otherParam: "SHOULD_NOT_APPEAR",
+    });
+    expect(result.nodes["only"]?.prompt).toBe("Task: Plan this: {{otherParam}}");
+    expect(result.nodes["only"]?.prompt).not.toContain("SHOULD_NOT_APPEAR");
+  });
+
+  it("sentinel-shaped strings in param values survive round-trip", () => {
+    // The 3-pass escape uses ` SYGIL_ESC_OPEN ` / `_CLOSE` as
+    // sentinels. JSON.stringify escapes raw null bytes as ` ` (6-char
+    // escape), so a user's prompt containing these bytes cannot collide with
+    // the in-flight sentinel. Test the round-trip.
+    const graph = makeGraph("Contains: {{val}}");
+    const weird = " SYGIL_ESC_OPEN  and  SYGIL_ESC_CLOSE ";
+    const result = interpolateWorkflow(graph, { val: weird });
+    expect(result.nodes["only"]?.prompt).toBe(`Contains: ${weird}`);
+  });
+
   it("normal parameter substitution still works after the fix", () => {
     const graph: WorkflowGraph = {
       version: "1",
@@ -390,5 +440,62 @@ describe("interpolateWorkflow — JSON injection prevention", () => {
     expect(result.name).toBe("my-app");
     expect(result.nodes["planner"]?.prompt).toBe("Plan implement auth for my-app");
     expect(result.nodes["planner"]?.outputDir).toBe("/workspace/output");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadWorkflow + SYGIL_VERIFY_TEMPLATES integration
+// ---------------------------------------------------------------------------
+
+describe("loadWorkflow — Sigstore verification opt-in", () => {
+  const createdFiles: string[] = [];
+  const original = process.env["SYGIL_VERIFY_TEMPLATES"];
+
+  afterEach(async () => {
+    for (const f of createdFiles) {
+      await unlink(f).catch(() => undefined);
+    }
+    createdFiles.length = 0;
+    if (original === undefined) delete process.env["SYGIL_VERIFY_TEMPLATES"];
+    else process.env["SYGIL_VERIFY_TEMPLATES"] = original;
+  });
+
+  it("does not touch the sidecar path when SYGIL_VERIFY_TEMPLATES is unset", async () => {
+    delete process.env["SYGIL_VERIFY_TEMPLATES"];
+    const dir = await mkdtemp(join(tmpdir(), "sygil-wfload-"));
+    const path = join(dir, "wf.json");
+    await writeFile(path, JSON.stringify(validWorkflow()), "utf8");
+    createdFiles.push(path);
+    // Even a garbage sidecar is ignored when verification is off.
+    const sidecar = `${path}.sigstore.json`;
+    await writeFile(sidecar, "not json", "utf8");
+    createdFiles.push(sidecar);
+
+    const wf = await loadWorkflow(path);
+    expect(wf.name).toBe("test-workflow");
+  });
+
+  it("loads a user-authored workflow without a sidecar when verification is enabled (fail-open)", async () => {
+    process.env["SYGIL_VERIFY_TEMPLATES"] = "1";
+    const dir = await mkdtemp(join(tmpdir(), "sygil-wfload-"));
+    const path = join(dir, "user.json");
+    await writeFile(path, JSON.stringify(validWorkflow()), "utf8");
+    createdFiles.push(path);
+
+    const wf = await loadWorkflow(path);
+    expect(wf.name).toBe("test-workflow");
+  });
+
+  it("rejects a workflow when the sidecar is malformed and verification is enabled", async () => {
+    process.env["SYGIL_VERIFY_TEMPLATES"] = "1";
+    const dir = await mkdtemp(join(tmpdir(), "sygil-wfload-"));
+    const path = join(dir, "wf.json");
+    await writeFile(path, JSON.stringify(validWorkflow()), "utf8");
+    createdFiles.push(path);
+    const sidecar = `${path}.sigstore.json`;
+    await writeFile(sidecar, "not-json{", "utf8");
+    createdFiles.push(sidecar);
+
+    await expect(loadWorkflow(path)).rejects.toThrow(/Template signature verification failed/);
   });
 });

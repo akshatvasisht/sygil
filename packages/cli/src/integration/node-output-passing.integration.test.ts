@@ -13,124 +13,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { WorkflowScheduler } from "../scheduler/index.js";
-import type {
-  AgentAdapter,
-  AgentSession,
-  AgentEvent,
-  NodeConfig,
-  NodeResult,
-  WorkflowGraph,
-  AdapterType,
-  WsServerEvent,
-} from "@sigil/shared";
-import type { WsMonitorServer } from "../monitor/websocket.js";
-
-// ---------------------------------------------------------------------------
-// Helpers — mirrors contract-validation.integration.test.ts patterns
-// ---------------------------------------------------------------------------
-
-function makeSession(nodeId: string): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter: "mock",
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-function makeNodeConfig(nodeId: string, overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test",
-    role: nodeId,
-    prompt: `prompt for ${nodeId}`,
-    ...overrides,
-  };
-}
-
-interface MockAdapterOptions {
-  result?: Partial<NodeResult>;
-  /** Called on spawn with the resolved config — use to capture the prompt. */
-  onSpawn?: (config: NodeConfig) => void;
-}
-
-function createMockAdapter(options: MockAdapterOptions = {}): AgentAdapter {
-  const result: NodeResult = {
-    output: "mock output",
-    exitCode: 0,
-    durationMs: 1,
-    ...options.result,
-  };
-
-  return {
-    name: "mock",
-    async isAvailable() { return true; },
-    async spawn(config) {
-      options.onSpawn?.(config);
-      return makeSession(config.role);
-    },
-    async resume(_config, session) { return session; },
-    async *stream(_session): AsyncGenerator<AgentEvent> { /* no events */ },
-    async getResult(_session) { return result; },
-    async kill(_session) { /* no-op */ },
-  };
-}
-
-/**
- * Routing adapter factory that dispatches per-node adapter calls
- * using config.role (which equals nodeId via makeNodeConfig).
- */
-function makeRoutingAdapterFactory(
-  adaptersByNodeId: Record<string, AgentAdapter>
-): (_type: AdapterType) => AgentAdapter {
-  return (_type: AdapterType): AgentAdapter => ({
-    name: "mock",
-    async isAvailable() { return true; },
-    async spawn(config) {
-      const a = adaptersByNodeId[config.role];
-      return a ? a.spawn(config) : makeSession(config.role);
-    },
-    async resume(config, session, feedback) {
-      const a = adaptersByNodeId[session.nodeId];
-      return a ? a.resume(config, session, feedback) : session;
-    },
-    async *stream(session): AsyncGenerator<AgentEvent> {
-      const a = adaptersByNodeId[session.nodeId];
-      if (a) yield* a.stream(session);
-    },
-    async getResult(session) {
-      const a = adaptersByNodeId[session.nodeId];
-      return a
-        ? a.getResult(session)
-        : { output: "", exitCode: 0, durationMs: 1 };
-    },
-    async kill(session) {
-      const a = adaptersByNodeId[session.nodeId];
-      if (a) await a.kill(session);
-    },
-  });
-}
-
-function createMockMonitor(): WsMonitorServer & { events: WsServerEvent[] } {
-  const events: WsServerEvent[] = [];
-  return {
-    events,
-    emit(event: WsServerEvent) { events.push(event); },
-    async start() { return 0; },
-    async stop() {},
-    getPort() { return null; },
-    getAuthToken() { return "test-token"; },
-    onClientControl: undefined,
-  } as unknown as WsMonitorServer & { events: WsServerEvent[] };
-}
-
-function eventsOfType<T extends WsServerEvent["type"]>(
-  events: WsServerEvent[],
-  type: T
-): Extract<WsServerEvent, { type: T }>[] {
-  return events.filter((e): e is Extract<WsServerEvent, { type: T }> => e.type === type);
-}
+import type { WorkflowGraph } from "@sygil/shared";
+import {
+  createMockAdapter,
+  createMockMonitor,
+  createNodeRoutingAdapterFactory,
+  makeNodeConfigForNode as makeNodeConfig,
+  monitorEventsOfType as eventsOfType,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
 // Test lifecycle
@@ -140,7 +30,7 @@ let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-nodepass-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-nodepass-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -174,7 +64,7 @@ describe("node output passing", () => {
       ],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: { output: "hello from A", exitCode: 0, durationMs: 1 },
       }),
@@ -212,7 +102,7 @@ describe("node output passing", () => {
       ],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: {
           output: "done",
@@ -250,7 +140,7 @@ describe("node output passing", () => {
       edges: [],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: { output: "out", exitCode: 0, durationMs: 1 },
       }),
@@ -300,7 +190,7 @@ describe("node output passing", () => {
       ],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: { output: "planned", exitCode: 0, durationMs: 1 },
       }),
@@ -458,7 +348,7 @@ describe("node output passing", () => {
       ],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: {
           output: "done",
@@ -501,7 +391,7 @@ describe("node output passing", () => {
       ],
     };
 
-    const factory = makeRoutingAdapterFactory({
+    const factory = createNodeRoutingAdapterFactory({
       nodeA: createMockAdapter({
         result: {
           output: "done",

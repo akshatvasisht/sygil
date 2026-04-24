@@ -1,7 +1,7 @@
-# Sigil
+# Sygil
 
 
-[![npm version](https://img.shields.io/npm/v/sigil.svg)](https://www.npmjs.com/package/sigil)
+[![npm version](https://img.shields.io/npm/v/sygil.svg)](https://www.npmjs.com/package/sygil)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js ≥20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 
@@ -9,10 +9,10 @@ Deterministic orchestration for probabilistic coding agents.
 
 ## What it is
 
-Sigil is a TypeScript/Node.js CLI tool that runs multi-agent coding workflows as
+Sygil is a TypeScript/Node.js CLI tool that runs multi-agent coding workflows as
 deterministic graph executions. You define a **Workflow Graph** in `workflow.json`
 — nodes are agent sessions, edges carry gates that determine whether to advance,
-retry, or fail. Sigil drives the agents, evaluates the gates, and checkpoints
+retry, or fail. Sygil drives the agents, evaluates the gates, and checkpoints
 state so runs are resumable.
 
 ## Core concepts
@@ -28,36 +28,36 @@ state so runs are resumable.
 - **Contract** — optional schema validation and input mapping on edges. Ensures
   structured output from one node conforms to a JSON schema before passing to
   the next.
-- **Adapter** — a thin interface over a specific agent runtime. Sigil calls
+- **Adapter** — a thin interface over a specific agent runtime. Sygil calls
   `spawn`, `stream`, `getResult`, `resume`, and `kill` on whichever adapter is
   configured per node.
 
 ## Quick start
 
 ```bash
-npm install -g sigil
+npm install -g sygil
 cd my-project
-sigil init
-sigil run tdd-feature "add OAuth2 login"
+sygil init
+sygil run tdd-feature "add OAuth2 login"
 ```
 
 ## CLI commands
 
 | Command | Description |
 |---|---|
-| `sigil init` | Check adapter availability and write initial config |
-| `sigil run <workflow> [task]` | Run a workflow file or built-in template |
-| `sigil validate <workflow>` | Validate a workflow.json without running it |
-| `sigil resume <run-id>` | Resume a checkpointed run from `.sigil/runs/` |
-| `sigil replay <run-id>` | Replay recorded events from a previous run |
-| `sigil list` | List available adapters and recent workflow runs |
-| `sigil export <template> <output>` | Copy a bundled template to a file |
-| `sigil import-template <file>` | Import a workflow template from a URL or local path |
-| `sigil registry list` | List templates available in the remote registry |
-| `sigil registry search <query>` | Search the remote registry by name or tag |
-| `sigil registry install <name>` | Download a registry template to `~/.sigil/templates/` |
+| `sygil init` | Check adapter availability and write initial config |
+| `sygil run <workflow> [task]` | Run a workflow file or built-in template |
+| `sygil validate <workflow>` | Validate a workflow.json without running it |
+| `sygil resume <run-id>` | Resume a checkpointed run from `.sygil/runs/` |
+| `sygil replay <run-id>` | Replay recorded events from a previous run |
+| `sygil list` | List available adapters and recent workflow runs |
+| `sygil export <template> <output>` | Copy a bundled template to a file |
+| `sygil import-template <file>` | Import a workflow template from a URL or local path |
+| `sygil registry list` | List templates available in the remote registry |
+| `sygil registry search <query>` | Search the remote registry by name or tag |
+| `sygil registry install <name>` | Download a registry template to `~/.sygil/templates/` |
 
-### Options for `sigil run`
+### Options for `sygil run`
 
 ```
 --param key=value   Set a workflow parameter (repeatable)
@@ -67,10 +67,10 @@ sigil run tdd-feature "add OAuth2 login"
 --verbose           Print all agent events to stdout
 --no-open           Do not automatically open the monitor in a browser
 --no-monitor        Disable the web monitor entirely (headless/CI mode)
---config <path>     Path to sigil.config.json (default: ./sigil.config.json)
+--config <path>     Path to sygil.config.json (default: ./sygil.config.json)
 ```
 
-### Options for `sigil replay`
+### Options for `sygil replay`
 
 ```
 --node <nodeId>     Only replay events from this node
@@ -84,10 +84,10 @@ sigil run tdd-feature "add OAuth2 login"
 | `claude-sdk` | Claude Agent SDK (primary) | Yes | Application-level (outputDir restriction) |
 | `codex` | Codex CLI subprocess | Yes | OS-level (Seatbelt on macOS, Landlock on Linux) |
 | `claude-cli` | Claude CLI subprocess (fallback) | Partial | Application-level |
-| `cursor` | Cursor CLI | No | None (Phase 2) |
+| `cursor` | Cursor CLI | No | None |
 | `echo` | Deterministic stub (testing only) | Yes | None |
 
-The adapter is set per node in `workflow.json`. `sigil init` checks which
+The adapter is set per node in `workflow.json`. `sygil init` checks which
 adapters are available in the current environment.
 
 ## Web UI
@@ -100,7 +100,7 @@ The `packages/web` Next.js app ships three views:
 - `/monitor` — real-time execution monitor; connects to the CLI's WebSocket
   server via the `?ws=<port>&token=<token>` URL parameter.
 
-The monitor UI is embedded in the CLI binary — `sigil run` serves it
+The monitor UI is embedded in the CLI binary — `sygil run` serves it
 automatically and auto-opens the browser. No separate web server needed.
 
 ## Bundled templates
@@ -113,18 +113,18 @@ automatically and auto-opens the browser. No separate web server needed.
 
 ## Run state and checkpointing
 
-Each run is assigned a UUID. State is written to `.sigil/runs/<id>.json` after
-every node completion and on pause. Use `sigil resume <run-id>` to continue from
-the last completed node after a crash or cancellation. Use `sigil replay <run-id>`
+Each run is assigned a UUID. State is written to `.sygil/runs/<id>.json` after
+every node completion and on pause. Use `sygil resume <run-id>` to continue from
+the last completed node after a crash or cancellation. Use `sygil replay <run-id>`
 to replay recorded events from a completed run for debugging.
 
 ## Monorepo structure
 
 ```
 packages/
-  cli/          Node.js CLI binary — package name: sigil
-  shared/       Shared types, Zod schemas, contract validator — package name: @sigil/shared
-  web/          Next.js 14 web UI — package name: @sigil/web
+  cli/          Node.js CLI binary — package name: sygil
+  shared/       Shared types, Zod schemas, contract validator — package name: @sygil/shared
+  web/          Next.js 14 web UI — package name: @sygil/web
 ```
 
 ## Documentation

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import WebSocket from "ws";
 import chalk from "chalk";
-import type { WsServerEvent, EdgeConfig } from "@sigil/shared";
+import type { WsServerEvent, EdgeConfig } from "@sygil/shared";
 import type {
   TerminalMonitorState,
   NodeMonitorState,
@@ -31,7 +31,7 @@ function parseWsUrl(raw: string): {
 }
 
 async function readActiveMonitor(): Promise<ActiveMonitorInfo | null> {
-  const configDir = process.env["SIGIL_CONFIG_DIR"] || ".sigil";
+  const configDir = process.env["SYGIL_CONFIG_DIR"] || ".sygil";
   const filePath = join(configDir, "active-monitor.json");
   try {
     const raw = await readFile(filePath, "utf-8");
@@ -120,9 +120,10 @@ export async function monitorCommand(
     if (!info) {
       console.error(
         chalk.red(
-          "No active workflow found. Start one with 'sigil run' or pass --url."
+          "No active workflow found. Start one with 'sygil run' or pass --url."
         )
       );
+      console.error(chalk.dim("Recent runs: sygil list"));
       process.exit(1);
     }
     wsUrl = `ws://127.0.0.1:${info.port}?token=${info.token}`;

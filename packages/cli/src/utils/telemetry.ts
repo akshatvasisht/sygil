@@ -1,7 +1,7 @@
 import https from "node:https";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SigilConfig } from "./config.js";
+import type { SygilConfig } from "./config.js";
 
 const TELEMETRY_ENDPOINT = "https://telemetry.sigil.dev/v1/event";
 const TELEMETRY_TIMEOUT_MS = 3000;
@@ -45,13 +45,13 @@ export function trackEvent(name: string, props: Record<string, unknown> = {}): v
   req.end();
 }
 
-function readConfigSync(): SigilConfig | null {
+function readConfigSync(): SygilConfig | null {
   try {
     const configDir =
-      process.env["SIGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sigil");
+      process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
     const configPath = join(configDir, "config.json");
     const raw = readFileSync(configPath, "utf8");
-    return JSON.parse(raw) as SigilConfig;
+    return JSON.parse(raw) as SygilConfig;
   } catch {
     return null;
   }

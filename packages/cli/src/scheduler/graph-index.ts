@@ -1,4 +1,4 @@
-import type { WorkflowGraph, EdgeConfig } from "@sigil/shared";
+import type { WorkflowGraph, EdgeConfig } from "@sygil/shared";
 
 /**
  * Pre-indexed graph topology for O(1) edge lookups.

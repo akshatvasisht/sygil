@@ -37,27 +37,27 @@ const STEPS = [
   {
     number: "01",
     title: "Install",
-    description: "Install sigil globally with npm.",
-    code: "npm install -g sigil",
+    description: "Install sygil globally with npm.",
+    code: "npm install -g sygil",
     output: null,
   },
   {
     number: "02",
     title: "Initialize",
-    description: "Run sigil init inside your project to scaffold a workflow file and detect installed adapters.",
-    code: "cd my-project && sigil init",
+    description: "Run sygil init inside your project to scaffold a workflow file and detect installed adapters.",
+    code: "cd my-project && sygil init",
     output: `Detected adapters:
   ✓ claude-sdk  (ANTHROPIC_API_KEY set)
   ✓ codex       (codex CLI found at /usr/local/bin/codex)
   ✗ cursor      (not installed)
 
-Created sigil.yaml — edit it to define your workflow.`,
+Created sygil.yaml — edit it to define your workflow.`,
   },
   {
     number: "03",
     title: "Run",
-    description: "Execute a workflow with a goal. Sigil prints a live monitor URL you can open in the browser.",
-    code: 'sigil run tdd-feature "add OAuth2 login"',
+    description: "Execute a workflow with a goal. Sygil prints a live monitor URL you can open in the browser.",
+    code: 'sygil run tdd-feature "add OAuth2 login"',
     output: `Starting workflow: tdd-feature
 Goal: "add OAuth2 login"
 

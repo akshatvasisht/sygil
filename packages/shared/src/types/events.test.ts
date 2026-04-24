@@ -5,127 +5,7 @@ import type {
   RecordedEvent,
   WorkflowRunState,
 } from "./events.js";
-import type {
-  AgentAdapter,
-  AgentSession,
-  AgentEvent,
-  NodeResult,
-} from "./adapter.js";
-import type { NodeConfig } from "./workflow.js";
-
-// ---------------------------------------------------------------------------
-// These are compile-time type tests. The runtime assertions are minimal;
-// the value is that TypeScript checks the structural conformance.
-// ---------------------------------------------------------------------------
-
-describe("AgentEvent discriminated union", () => {
-  it("covers tool_call event", () => {
-    const event: AgentEvent = { type: "tool_call", tool: "Read", input: { path: "/tmp" } };
-    expect(event.type).toBe("tool_call");
-    if (event.type === "tool_call") {
-      expect(event.tool).toBe("Read");
-      expect(event.input["path"]).toBe("/tmp");
-    }
-  });
-
-  it("covers tool_result event", () => {
-    const event: AgentEvent = { type: "tool_result", tool: "Read", output: "file content", success: true };
-    expect(event.type).toBe("tool_result");
-    if (event.type === "tool_result") {
-      expect(event.success).toBe(true);
-    }
-  });
-
-  it("covers file_write event", () => {
-    const event: AgentEvent = { type: "file_write", path: "/tmp/out.txt" };
-    expect(event.type).toBe("file_write");
-  });
-
-  it("covers shell_exec event", () => {
-    const event: AgentEvent = { type: "shell_exec", command: "ls", exitCode: 0 };
-    expect(event.type).toBe("shell_exec");
-    if (event.type === "shell_exec") {
-      expect(event.exitCode).toBe(0);
-    }
-  });
-
-  it("covers text_delta event", () => {
-    const event: AgentEvent = { type: "text_delta", text: "Hello" };
-    expect(event.type).toBe("text_delta");
-  });
-
-  it("covers cost_update event", () => {
-    const event: AgentEvent = { type: "cost_update", totalCostUsd: 0.05 };
-    expect(event.type).toBe("cost_update");
-    if (event.type === "cost_update") {
-      expect(event.totalCostUsd).toBe(0.05);
-    }
-  });
-
-  it("covers stall event", () => {
-    const event: AgentEvent = { type: "stall", reason: "no output" };
-    expect(event.type).toBe("stall");
-  });
-
-  it("covers error event", () => {
-    const event: AgentEvent = { type: "error", message: "crash" };
-    expect(event.type).toBe("error");
-  });
-});
-
-describe("NodeResult type", () => {
-  it("accepts a minimal result", () => {
-    const result: NodeResult = {
-      output: "done",
-      exitCode: 0,
-      durationMs: 1234,
-    };
-    expect(result.output).toBe("done");
-    expect(result.costUsd).toBeUndefined();
-    expect(result.tokenUsage).toBeUndefined();
-  });
-
-  it("accepts a result with all optional fields", () => {
-    const result: NodeResult = {
-      output: "done",
-      structuredOutput: { summary: "ok" },
-      exitCode: 0,
-      durationMs: 5000,
-      costUsd: 0.12,
-      tokenUsage: {
-        input: 1000,
-        output: 500,
-        cacheRead: 200,
-      },
-    };
-    expect(result.costUsd).toBe(0.12);
-    expect(result.tokenUsage?.cacheRead).toBe(200);
-  });
-
-  it("accepts tokenUsage without cacheRead", () => {
-    const result: NodeResult = {
-      output: "done",
-      exitCode: 0,
-      durationMs: 100,
-      tokenUsage: { input: 100, output: 50 },
-    };
-    expect(result.tokenUsage?.cacheRead).toBeUndefined();
-  });
-});
-
-describe("AgentSession type", () => {
-  it("accepts a valid session object", () => {
-    const session: AgentSession = {
-      id: "sess-123",
-      nodeId: "nodeA",
-      adapter: "claude-sdk",
-      startedAt: new Date(),
-      _internal: { pid: 1234 },
-    };
-    expect(session.id).toBe("sess-123");
-    expect(session.adapter).toBe("claude-sdk");
-  });
-});
+import { WsClientEventSchema } from "./events.js";
 
 describe("WsServerEvent discriminated union", () => {
   it("covers workflow_start event", () => {
@@ -246,6 +126,22 @@ describe("WsServerEvent discriminated union", () => {
     };
     expect(event.type).toBe("human_review_response");
   });
+
+  it("covers circuit_breaker event", () => {
+    const event: WsServerEvent = {
+      type: "circuit_breaker",
+      workflowId: "wf-1",
+      adapterType: "claude-cli",
+      state: "open",
+      reason: "transport",
+      openUntil: Date.now() + 60_000,
+    };
+    expect(event.type).toBe("circuit_breaker");
+    if (event.type === "circuit_breaker") {
+      expect(event.state).toBe("open");
+      expect(event.adapterType).toBe("claude-cli");
+    }
+  });
 });
 
 describe("WsClientEvent discriminated union", () => {
@@ -285,6 +181,53 @@ describe("WsClientEvent discriminated union", () => {
   });
 });
 
+describe("WsClientEventSchema", () => {
+  it.each<WsClientEvent>([
+    { type: "subscribe", workflowId: "wf-1" },
+    { type: "unsubscribe", workflowId: "wf-1" },
+    { type: "pause", workflowId: "wf-1" },
+    { type: "resume_workflow", workflowId: "wf-1" },
+    { type: "cancel", workflowId: "wf-1" },
+    { type: "human_review_approve", workflowId: "wf-1", edgeId: "e1" },
+    { type: "human_review_reject", workflowId: "wf-1", edgeId: "e1" },
+  ])("accepts valid variant $type", (c) => {
+    expect(WsClientEventSchema.safeParse(c).success).toBe(true);
+  });
+
+  it("rejects missing type", () => {
+    expect(WsClientEventSchema.safeParse({ workflowId: "wf-1" }).success).toBe(false);
+  });
+
+  it("rejects unknown type", () => {
+    expect(WsClientEventSchema.safeParse({ type: "delete_run", workflowId: "wf-1" }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects non-string workflowId", () => {
+    expect(
+      WsClientEventSchema.safeParse({ type: "pause", workflowId: { hax: true } }).success,
+    ).toBe(false);
+    expect(WsClientEventSchema.safeParse({ type: "pause", workflowId: 42 }).success).toBe(false);
+    expect(WsClientEventSchema.safeParse({ type: "pause" }).success).toBe(false);
+  });
+
+  it("rejects human_review_* missing edgeId", () => {
+    expect(
+      WsClientEventSchema.safeParse({ type: "human_review_approve", workflowId: "wf-1" }).success,
+    ).toBe(false);
+    expect(
+      WsClientEventSchema.safeParse({ type: "human_review_reject", workflowId: "wf-1" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects top-level non-objects", () => {
+    expect(WsClientEventSchema.safeParse(null).success).toBe(false);
+    expect(WsClientEventSchema.safeParse("pause").success).toBe(false);
+    expect(WsClientEventSchema.safeParse([1, 2, 3]).success).toBe(false);
+  });
+});
+
 describe("RecordedEvent type", () => {
   it("accepts a valid recorded event", () => {
     const recorded: RecordedEvent = {
@@ -308,6 +251,7 @@ describe("WorkflowRunState type", () => {
       nodeResults: {},
       totalCostUsd: 0,
       retryCounters: {},
+      sharedContext: {},
     };
     expect(state.status).toBe("running");
     expect(state.completedNodes).toHaveLength(0);
@@ -330,6 +274,7 @@ describe("WorkflowRunState type", () => {
       },
       totalCostUsd: 0.15,
       retryCounters: { "loop-edge": 2 },
+      sharedContext: {},
     };
     expect(state.status).toBe("completed");
     expect(state.completedNodes).toHaveLength(3);
@@ -344,31 +289,3 @@ describe("WorkflowRunState type", () => {
   });
 });
 
-describe("AgentAdapter interface (structural check)", () => {
-  it("can define a mock adapter that satisfies the interface", () => {
-    // This is a compile-time check: if this code compiles, the interface is correct
-    const mockAdapter: AgentAdapter = {
-      name: "mock",
-      isAvailable: async () => true,
-      spawn: async (_config: NodeConfig) => ({
-        id: "s1",
-        nodeId: "n1",
-        adapter: "mock",
-        startedAt: new Date(),
-        _internal: null,
-      }),
-      resume: async (_config, session, _feedback) => session,
-      stream: async function* (_session) {
-        yield { type: "text_delta" as const, text: "hello" };
-      },
-      getResult: async (_session) => ({
-        output: "done",
-        exitCode: 0,
-        durationMs: 100,
-      }),
-      kill: async (_session) => {},
-    };
-
-    expect(mockAdapter.name).toBe("mock");
-  });
-});

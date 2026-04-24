@@ -45,8 +45,8 @@ const PALETTE_ENTRIES: PaletteEntry[] = [
     label: "Custom",
     description: "Configurable agent",
     badgeLabel: "custom",
-    badgeCls: "bg-muted/20 text-subtle border-muted/30",
-    dotCls: "bg-subtle",
+    badgeCls: "bg-muted/20 text-dim border-muted/30",
+    dotCls: "bg-dim",
   },
 ];
 
@@ -76,7 +76,7 @@ export function NodePalette({ onLoadWorkflow, onAddNode }: NodePaletteProps) {
     event: React.DragEvent<HTMLDivElement>,
     archetype: NodeArchetype
   ) {
-    event.dataTransfer.setData("application/sigil-node-type", archetype);
+    event.dataTransfer.setData("application/sygil-node-type", archetype);
     event.dataTransfer.effectAllowed = "copy";
   }
 
@@ -137,7 +137,7 @@ export function NodePalette({ onLoadWorkflow, onAddNode }: NodePaletteProps) {
                 </span>
                 <GripVertical
                   size={11}
-                  className="text-muted group-hover:text-subtle transition-colors duration-200"
+                  className="text-muted group-hover:text-dim transition-colors duration-200"
                 />
               </div>
 

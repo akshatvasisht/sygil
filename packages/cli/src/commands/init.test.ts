@@ -232,4 +232,102 @@ describe("initCommand", () => {
     const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
     expect(writtenConfig.adapters["cursor"]?.available).toBe(false);
   });
+
+  it("preserves existing tiers when re-running init", async () => {
+    mockReadConfig.mockResolvedValue({
+      version: "1",
+      adapters: {},
+      defaultAdapter: null,
+      detectedAt: new Date().toISOString(),
+      tiers: { cheap: "claude-haiku-4-5", smart: "claude-opus-4-7" },
+    });
+
+    await initCommand();
+
+    const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
+    expect(writtenConfig.tiers).toEqual({
+      cheap: "claude-haiku-4-5",
+      smart: "claude-opus-4-7",
+    });
+  });
+
+  it("preserves existing hooks when re-running init", async () => {
+    mockReadConfig.mockResolvedValue({
+      version: "1",
+      adapters: {},
+      defaultAdapter: null,
+      detectedAt: new Date().toISOString(),
+      hooks: { preNode: "./scripts/pre.sh", postGate: "./scripts/post.sh" },
+    });
+
+    await initCommand();
+
+    const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
+    expect(writtenConfig.hooks).toEqual({
+      preNode: "./scripts/pre.sh",
+      postGate: "./scripts/post.sh",
+    });
+  });
+
+  it("omits tiers and hooks from written config when no existing config", async () => {
+    mockReadConfig.mockResolvedValue(null);
+
+    await initCommand();
+
+    const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
+    expect(writtenConfig.tiers).toBeUndefined();
+    expect(writtenConfig.hooks).toBeUndefined();
+  });
+
+  it("preserves tiers, hooks, and telemetry together when all exist", async () => {
+    mockReadConfig.mockResolvedValue({
+      version: "1",
+      adapters: {},
+      defaultAdapter: null,
+      detectedAt: new Date().toISOString(),
+      telemetry: { enabled: true },
+      tiers: { cheap: "claude-haiku-4-5" },
+      hooks: { preNode: "./pre.sh" },
+    });
+
+    await initCommand({});
+
+    const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
+    expect(writtenConfig.telemetry).toEqual({ enabled: true });
+    expect(writtenConfig.tiers).toEqual({ cheap: "claude-haiku-4-5" });
+    expect(writtenConfig.hooks).toEqual({ preNode: "./pre.sh" });
+  });
+
+  it("warns when existing config is unreadable (non-ENOENT) and proceeds with defaults", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // SyntaxError from JSON.parse — has no `.code` field, so the ENOENT
+    // discriminator in init.ts correctly treats it as an unreadable-config error.
+    mockReadConfig.mockRejectedValue(new SyntaxError("Unexpected token } in JSON"));
+
+    await initCommand({});
+
+    const warning = warnSpy.mock.calls.flat().join("\n");
+    expect(warning).toContain("unreadable");
+    // Hand-authored tiers/hooks are dropped (can't be recovered from corrupt file)
+    const [writtenConfig] = mockWriteConfig.mock.calls[0]! as [Parameters<typeof writeConfig>[0]];
+    expect(writtenConfig.tiers).toBeUndefined();
+    expect(writtenConfig.hooks).toBeUndefined();
+
+    warnSpy.mockRestore();
+  });
+
+  it("does NOT warn when existing config is absent (ENOENT)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const enoentErr = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+    mockReadConfig.mockRejectedValue(enoentErr);
+
+    await initCommand({});
+
+    // First run is expected to have no prior config; should NOT print the
+    // "unreadable" warning to users initializing for the first time.
+    const warning = warnSpy.mock.calls.flat().join("\n");
+    expect(warning).not.toContain("unreadable");
+
+    warnSpy.mockRestore();
+  });
 });

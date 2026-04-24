@@ -1,5 +1,5 @@
 /**
- * Content-addressable node memoization for Sigil workflows.
+ * Content-addressable node memoization for Sygil workflows.
  *
  * Computes a SHA-256 hash of a node's effective inputs (prompt, adapter, model,
  * tools, resolved input mappings, upstream output hashes). If a cache entry
@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { EdgeConfig, NodeResult } from "@sigil/shared";
+import type { EdgeConfig, NodeResult } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Constants

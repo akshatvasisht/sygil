@@ -2,8 +2,8 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Bot, Code, Terminal, MousePointer, Radio } from "lucide-react";
-import type { AdapterType, NodeExecutionStatus } from "@sigil/shared";
+import { Bot, Code, Terminal, MousePointer, Radio, Sparkles, Server } from "lucide-react";
+import type { AdapterType, NodeExecutionStatus } from "@sygil/shared";
 
 export type NodeStatus = "idle" | "running" | "completed" | "failed" | "gate";
 
@@ -26,9 +26,11 @@ export interface NodeCardData {
 const ADAPTER_ICON: Record<AdapterType, { icon: typeof Bot; color: string }> = {
   "claude-sdk": { icon: Bot, color: "text-accent-blue" },
   codex: { icon: Code, color: "text-accent-green" },
-  "claude-cli": { icon: Terminal, color: "text-subtle" },
+  "claude-cli": { icon: Terminal, color: "text-dim" },
   cursor: { icon: MousePointer, color: "text-accent-purple" },
   echo: { icon: Radio, color: "text-dim" },
+  "gemini-cli": { icon: Sparkles, color: "text-accent-cyan" },
+  "local-oai": { icon: Server, color: "text-accent-amber" },
 };
 
 function execBorder(execState: NodeExecutionStatus | undefined, status: NodeStatus): string {

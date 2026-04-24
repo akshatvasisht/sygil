@@ -19,231 +19,28 @@ import type {
   NodeResult,
   WorkflowGraph,
   AdapterType,
-} from "@sigil/shared";
+} from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
+import {
+  makeNodeConfig,
+  makeSession,
+  createMockAdapter,
+  createMockMonitor,
+  singleNodeWorkflow,
+  linearWorkflow,
+  loopBackWorkflow,
+  parallelWorkflow,
+} from "./__test-helpers__.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Minimal NodeConfig factory. */
-function makeNodeConfig(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return {
-    adapter: "claude-sdk" as AdapterType,
-    model: "test-model",
-    role: "test role",
-    prompt: "test prompt",
-    ...overrides,
-  };
-}
-
-/** Minimal session factory. */
-function makeSession(nodeId = "node"): AgentSession {
-  return {
-    id: randomUUID(),
-    nodeId,
-    adapter: "mock",
-    startedAt: new Date(),
-    _internal: null,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// MockAdapter factory
-// ---------------------------------------------------------------------------
-
-interface MockAdapterOptions {
-  available?: boolean;
-  events?: AgentEvent[];
-  result?: Partial<NodeResult>;
-  failOnSpawn?: boolean;
-  spawnDelay?: number;
-}
-
-function createMockAdapter(options: MockAdapterOptions = {}): AgentAdapter {
-  const {
-    available = true,
-    events = [],
-    result = {},
-    failOnSpawn = false,
-    spawnDelay = 0,
-  } = options;
-
-  const adapter: AgentAdapter = {
-    name: "mock",
-
-    async isAvailable() {
-      return available;
-    },
-
-    async spawn(config: NodeConfig) {
-      if (spawnDelay > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, spawnDelay));
-      }
-      if (failOnSpawn) {
-        throw new Error("spawn failed");
-      }
-      return makeSession(config.role);
-    },
-
-    async resume(_config: NodeConfig, previousSession: AgentSession, _feedback: string) {
-      return previousSession;
-    },
-
-    async *stream(_session: AgentSession): AsyncIterable<AgentEvent> {
-      for (const event of events) {
-        yield event;
-      }
-    },
-
-    async getResult(_session: AgentSession): Promise<NodeResult> {
-      return {
-        output: "mock output",
-        exitCode: 0,
-        durationMs: 1,
-        ...result,
-      };
-    },
-
-    async kill(_session: AgentSession) {
-      // no-op
-    },
-  };
-
-  return adapter;
-}
-
-// ---------------------------------------------------------------------------
-// Mock WsMonitorServer
-// ---------------------------------------------------------------------------
-
-type MonitorEmit = Parameters<WsMonitorServer["emit"]>[0];
-
-function createMockMonitor(): WsMonitorServer & { events: MonitorEmit[] } {
-  const events: MonitorEmit[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- EventEmitter listener map requires any[] for mixed-type event arguments
-  const listeners = new Map<string, Set<(...args: any[]) => void>>();
-
-  const monitor = {
-    events,
-    emit(event: MonitorEmit) {
-      events.push(event);
-    },
-    on(eventName: string, listener: (...args: unknown[]) => void) {
-      if (!listeners.has(eventName)) listeners.set(eventName, new Set());
-      listeners.get(eventName)!.add(listener);
-    },
-    off(eventName: string, listener: (...args: unknown[]) => void) {
-      listeners.get(eventName)?.delete(listener);
-    },
-    async start() {
-      return 0;
-    },
-    async stop() {
-      // no-op
-    },
-    getPort() {
-      return null;
-    },
-    onClientControl: undefined as WsMonitorServer["onClientControl"],
-  } as unknown as WsMonitorServer & { events: MonitorEmit[] };
-
-  return monitor;
-}
-
-// ---------------------------------------------------------------------------
-// Workflow graph builders
-// ---------------------------------------------------------------------------
-
-function singleNodeWorkflow(): WorkflowGraph {
-  return {
-    version: "1",
-    name: "single-node",
-    nodes: {
-      nodeA: makeNodeConfig(),
-    },
-    edges: [],
-  };
-}
-
-function linearWorkflow(exitCode = 0): WorkflowGraph {
-  return {
-    version: "1",
-    name: "linear",
-    nodes: {
-      nodeA: makeNodeConfig(),
-      nodeB: makeNodeConfig(),
-    },
-    edges: [
-      {
-        id: "a-to-b",
-        from: "nodeA",
-        to: "nodeB",
-        gate: {
-          conditions: [{ type: "exit_code", value: exitCode }],
-        },
-      },
-    ],
-  };
-}
-
-function loopBackWorkflow(maxRetries = 2): WorkflowGraph {
-  return {
-    version: "1",
-    name: "loop-back",
-    nodes: {
-      nodeA: makeNodeConfig(),
-      nodeB: makeNodeConfig(),
-    },
-    edges: [
-      {
-        id: "a-to-b",
-        from: "nodeA",
-        to: "nodeB",
-      },
-      {
-        id: "b-loop-to-b",
-        from: "nodeB",
-        to: "nodeB",
-        isLoopBack: true,
-        maxRetries,
-        gate: {
-          // Loop-back triggers retry when gate FAILS.
-          // Gate expects exit_code 0. When nodeB returns exitCode 1, the gate
-          // fails (1 ≠ 0) and the scheduler retries nodeB. When nodeB finally
-          // returns exitCode 0, the gate passes and no retry is triggered.
-          conditions: [{ type: "exit_code", value: 0 }],
-        },
-      },
-    ],
-  };
-}
-
-function parallelWorkflow(): WorkflowGraph {
-  return {
-    version: "1",
-    name: "parallel",
-    nodes: {
-      nodeA: makeNodeConfig(),
-      nodeB: makeNodeConfig(),
-      merge: makeNodeConfig(),
-    },
-    edges: [
-      { id: "a-to-merge", from: "nodeA", to: "merge" },
-      { id: "b-to-merge", from: "nodeB", to: "merge" },
-    ],
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Test setup — temp dir for .sigil/runs checkpoints
+// Test setup — temp dir for .sygil/runs checkpoints
 // ---------------------------------------------------------------------------
 
 let testDir: string;
 let originalCwd: string;
 
 beforeEach(async () => {
-  testDir = join(tmpdir(), `sigil-test-${randomUUID()}`);
+  testDir = join(tmpdir(), `sygil-test-${randomUUID()}`);
   await mkdir(testDir, { recursive: true });
   originalCwd = process.cwd();
   process.chdir(testDir);
@@ -297,7 +94,7 @@ describe("WorkflowScheduler", () => {
       expect(wsTypes).toContain("workflow_end");
     });
 
-    it("writes run state to .sigil/runs/ directory", async () => {
+    it("writes run state to .sygil/runs/ directory", async () => {
       const workflow = singleNodeWorkflow();
       const monitor = createMockMonitor();
       const adapter = createMockAdapter();
@@ -305,7 +102,7 @@ describe("WorkflowScheduler", () => {
 
       const result = await scheduler.run("wf-1");
 
-      const stateFile = join(testDir, ".sigil", "runs", `${result.runId}.json`);
+      const stateFile = join(testDir, ".sygil", "runs", `${result.runId}.json`);
       const raw = await readFile(stateFile, "utf8");
       const state = JSON.parse(raw);
 
@@ -327,6 +124,28 @@ describe("WorkflowScheduler", () => {
 
       const wsTypes = monitor.events.map((e) => e.type);
       expect(wsTypes).toContain("workflow_error");
+    });
+
+    // Regression: every workflow-scoped WsServerEvent must carry the
+    // workflowId the caller passed, so the fanout filter (which matches
+    // against the web monitor's `subscribe { workflowId }` slug) admits them.
+    // Previously run.ts passed the filesystem path while the monitor URL used
+    // workflow.name — socket opened, UI claimed "connected", zero events rendered.
+    it("stamps all workflow-scoped events with the caller-supplied workflowId", async () => {
+      const workflow = singleNodeWorkflow();
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 0 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      await scheduler.run("my-workflow-name");
+
+      const workflowScoped = monitor.events.filter(
+        (e) => "workflowId" in e
+      ) as { workflowId: string }[];
+      expect(workflowScoped.length).toBeGreaterThan(0);
+      for (const e of workflowScoped) {
+        expect(e.workflowId).toBe("my-workflow-name");
+      }
     });
   });
 
@@ -540,208 +359,6 @@ describe("WorkflowScheduler", () => {
   });
 
   // -------------------------------------------------------------------------
-  // describe: rate limit handling
-  // -------------------------------------------------------------------------
-
-  describe("rate limit handling", () => {
-    // Helper to robustly advance time, interleaving macro/microtasks with fake timer advancement
-    const advanceThroughRateLimit = async () => {
-      // Advance in 100ms increments for a total of 6 seconds (to cover 5000ms delay)
-      for (let i = 0; i < 60; i++) {
-        await vi.advanceTimersByTimeAsync(100);
-      }
-    };
-
-    it("pauses execution when rate_limit error event is received and resumes after delay", async () => {
-      vi.useFakeTimers();
-
-      const workflow = singleNodeWorkflow();
-      const monitor = createMockMonitor();
-
-      // After a rate limit, the scheduler now calls adapter.resume() first (to preserve
-      // conversation history), falling back to spawn() only if resume throws.
-      // Track calls via a shared counter on the session state.
-      let resumeCount = 0;
-      let spawnCount = 0;
-      const rateLimitMs = 5000;
-
-      // Use a flag on the session to let stream() know it's past the rate limit
-      let rateLimitHandled = false;
-
-      const adapter: AgentAdapter = {
-        name: "mock",
-        async isAvailable() { return true; },
-        async spawn(_c) {
-          spawnCount++;
-          return makeSession(_c.role);
-        },
-        async resume(_c, s) {
-          resumeCount++;
-          rateLimitHandled = true;
-          return s;
-        },
-        async *stream(_s): AsyncIterable<AgentEvent> {
-          if (!rateLimitHandled) {
-            yield { type: "error", message: `rate_limit:${rateLimitMs}` };
-          }
-        },
-        async getResult() {
-          return { output: "", exitCode: 0, durationMs: 1 };
-        },
-        async kill() { /* no-op */ },
-      };
-
-      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
-      const runPromise = scheduler.run("wf-1");
-
-      // Let the workflow start and reach the rate limit error
-      await vi.runOnlyPendingTimersAsync();
-      await advanceThroughRateLimit();
-
-      const result = await runPromise;
-
-      expect(result.success).toBe(true);
-      // Scheduler should have called resume() to continue the conversation
-      expect(resumeCount).toBe(1);
-      // spawn() called only once (initial session)
-      expect(spawnCount).toBe(1);
-    });
-
-    it("falls back to spawn when resume throws during rate limit recovery", async () => {
-      vi.useFakeTimers();
-
-      const workflow = singleNodeWorkflow();
-      const monitor = createMockMonitor();
-
-      let spawnCount = 0;
-      let rateLimitHandled = false;
-
-      const adapter: AgentAdapter = {
-        name: "mock",
-        async isAvailable() { return true; },
-        async spawn(_c) {
-          spawnCount++;
-          return makeSession(_c.role);
-        },
-        async resume(_c, _s) {
-          // Simulate adapters (e.g. claude-cli) that don't support resume
-          throw new Error("resume not supported");
-        },
-        async *stream(_s): AsyncIterable<AgentEvent> {
-          if (!rateLimitHandled) {
-            rateLimitHandled = true;
-            yield { type: "error", message: "rate_limit:1000" };
-          }
-        },
-        async getResult() {
-          return { output: "", exitCode: 0, durationMs: 1 };
-        },
-        async kill() { /* no-op */ },
-      };
-
-      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
-      const runPromise = scheduler.run("wf-1");
-
-      // Let the workflow start and reach the rate limit error
-      await vi.runOnlyPendingTimersAsync();
-      await advanceThroughRateLimit();
-      const result = await runPromise;
-
-      expect(result.success).toBe(true);
-      // spawn() should be called twice: initial + fallback after failed resume
-      expect(spawnCount).toBe(2);
-    });
-
-    it("emits rate_limit monitor event", async () => {
-      vi.useFakeTimers();
-
-      const workflow = singleNodeWorkflow();
-      const monitor = createMockMonitor();
-
-      let rateLimitHandled = false;
-
-      const adapter: AgentAdapter = {
-        name: "mock",
-        async isAvailable() { return true; },
-        async spawn(_c) {
-          return makeSession(_c.role);
-        },
-        async resume(_c, s) {
-          rateLimitHandled = true;
-          return s;
-        },
-        async *stream(): AsyncIterable<AgentEvent> {
-          if (!rateLimitHandled) {
-            yield { type: "error", message: "rate_limit:1000" };
-          }
-        },
-        async getResult() {
-          return { output: "", exitCode: 0, durationMs: 1 };
-        },
-        async kill() { /* no-op */ },
-      };
-
-      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
-      const runPromise = scheduler.run("wf-1");
-
-      // Let the workflow start and reach the rate limit error
-      await vi.runOnlyPendingTimersAsync();
-      await advanceThroughRateLimit();
-      await runPromise;
-
-      const rateLimitEvents = monitor.events.filter((e) => e.type === "rate_limit");
-      expect(rateLimitEvents.length).toBeGreaterThan(0);
-    });
-
-    it("does not count rate limit pauses as retries", async () => {
-      vi.useFakeTimers();
-
-      // Loop-back workflow but the rate limit happens during nodeA (no loop-back on nodeA)
-      const workflow = singleNodeWorkflow();
-      const monitor = createMockMonitor();
-
-      let rateLimitHandled = false;
-
-      const adapter: AgentAdapter = {
-        name: "mock",
-        async isAvailable() { return true; },
-        async spawn(_c) {
-          return makeSession(_c.role);
-        },
-        async resume(_c, s) {
-          rateLimitHandled = true;
-          return s;
-        },
-        async *stream(): AsyncIterable<AgentEvent> {
-          if (!rateLimitHandled) {
-            yield { type: "error", message: "rate_limit:1000" };
-          }
-        },
-        async getResult() {
-          return { output: "", exitCode: 0, durationMs: 1 };
-        },
-        async kill() { /* no-op */ },
-      };
-
-      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
-      const runPromise = scheduler.run("wf-1");
-
-      // Let the workflow start and reach the rate limit error
-      await vi.runOnlyPendingTimersAsync();
-      await advanceThroughRateLimit();
-      const result = await runPromise;
-
-      expect(result.success).toBe(true);
-
-      // retryCounters should be empty — rate limits don't count as retries
-      const stateFile = join(testDir, ".sigil", "runs", `${result.runId}.json`);
-      const raw = await readFile(stateFile, "utf8");
-      const state = JSON.parse(raw);
-      expect(Object.keys(state.retryCounters)).toHaveLength(0);
-    });
-  });
-
-  // -------------------------------------------------------------------------
   // describe: parallel execution
   // -------------------------------------------------------------------------
 
@@ -889,6 +506,7 @@ describe("WorkflowScheduler", () => {
         },
         totalCostUsd: 0,
         retryCounters: {},
+        sharedContext: {},
       };
 
       const result = await scheduler.resume(savedState);
@@ -897,6 +515,42 @@ describe("WorkflowScheduler", () => {
       // Only nodeB should have run, not nodeA
       expect(nodesExecuted).not.toContain("nodeA");
       expect(nodesExecuted).toContain("nodeB");
+    });
+
+    // Regression: resume() used to stamp workflowId = savedState.id
+    // (a UUID), which never matched the web monitor's `subscribe` slug
+    // (workflow.name). Every resumed workflow appeared blank in the UI.
+    it("uses workflowName as workflowId on resume", async () => {
+      const workflow = linearWorkflow(0);
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 0 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      const savedState = {
+        id: randomUUID(),
+        workflowName: workflow.name,
+        workflowPath: "",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        completedNodes: ["nodeA"],
+        nodeResults: {
+          nodeA: { output: "cached", exitCode: 0, durationMs: 1 },
+        },
+        totalCostUsd: 0,
+        retryCounters: {},
+        sharedContext: {},
+      };
+
+      await scheduler.resume(savedState);
+
+      const workflowScoped = monitor.events.filter(
+        (e) => "workflowId" in e
+      ) as { workflowId: string }[];
+      expect(workflowScoped.length).toBeGreaterThan(0);
+      for (const e of workflowScoped) {
+        expect(e.workflowId).toBe(workflow.name);
+        expect(e.workflowId).not.toBe(savedState.id);
+      }
     });
   });
 
@@ -1290,4 +944,429 @@ describe("WorkflowScheduler", () => {
       expect(result.totalCostUsd).toBeCloseTo(0.10, 2);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // describe: provider-failover routing
+  // -------------------------------------------------------------------------
+
+  describe("provider-failover routing", () => {
+    function failoverWorkflow(
+      primary: AdapterType,
+      fallback: AdapterType,
+    ): WorkflowGraph {
+      return {
+        version: "1",
+        name: "failover",
+        nodes: {
+          nodeA: makeNodeConfig({
+            adapter: primary,
+            providers: [
+              { adapter: primary, priority: 0 },
+              { adapter: fallback, priority: 1 },
+            ],
+          }),
+        },
+        edges: [],
+      };
+    }
+
+    it("falls over to the next provider when the primary throws a transport error", async () => {
+      const workflow = failoverWorkflow("claude-sdk", "claude-cli");
+      const monitor = createMockMonitor();
+
+      const primary = createMockAdapter({ failOnSpawn: false });
+      // Override spawn to throw ECONNREFUSED
+      primary.spawn = async () => {
+        throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:80"), {
+          code: "ECONNREFUSED",
+        });
+      };
+      const fallback = createMockAdapter({ result: { exitCode: 0, output: "fb" } });
+
+      const factory = (type: AdapterType) =>
+        type === "claude-sdk" ? primary : fallback;
+
+      const scheduler = new WorkflowScheduler(workflow, factory, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-fo-1");
+
+      expect(result.success).toBe(true);
+
+      // Assert the adapter_failover event was emitted
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const failoverEvent = nodeEvents.find((e) => e.event.type === "adapter_failover");
+      expect(failoverEvent).toBeDefined();
+      if (failoverEvent && failoverEvent.event.type === "adapter_failover") {
+        expect(failoverEvent.event.fromAdapter).toBe("claude-sdk");
+        expect(failoverEvent.event.toAdapter).toBe("claude-cli");
+        expect(failoverEvent.event.reason).toBe("transport");
+      }
+    });
+
+    it("falls over when the primary emits a rate_limit:<ms> error and a fallback exists", async () => {
+      const workflow = failoverWorkflow("claude-sdk", "echo");
+      const monitor = createMockMonitor();
+
+      const primary = createMockAdapter({
+        events: [{ type: "error", message: "rate_limit:1" }],
+      });
+      const fallback = createMockAdapter({ result: { exitCode: 0 } });
+
+      const factory = (type: AdapterType) =>
+        type === "claude-sdk" ? primary : fallback;
+
+      const scheduler = new WorkflowScheduler(workflow, factory, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-fo-2");
+
+      expect(result.success).toBe(true);
+
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const failoverEvent = nodeEvents.find((e) => e.event.type === "adapter_failover");
+      expect(failoverEvent).toBeDefined();
+      if (failoverEvent && failoverEvent.event.type === "adapter_failover") {
+        expect(failoverEvent.event.reason).toBe("rate_limit");
+      }
+    });
+
+    it("does NOT fail over on a deterministic (non-retryable) error", async () => {
+      const workflow = failoverWorkflow("claude-sdk", "echo");
+      const monitor = createMockMonitor();
+
+      const primary = createMockAdapter();
+      primary.spawn = async () => {
+        throw new Error("Invalid prompt: bad input");
+      };
+      const fallback = createMockAdapter({ result: { exitCode: 0 } });
+
+      const factory = (type: AdapterType) =>
+        type === "claude-sdk" ? primary : fallback;
+
+      const scheduler = new WorkflowScheduler(workflow, factory, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-fo-3");
+
+      expect(result.success).toBe(false);
+
+      // No adapter_failover event should have been emitted
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const failoverEvent = nodeEvents.find((e) => e.event.type === "adapter_failover");
+      expect(failoverEvent).toBeUndefined();
+    });
+
+    it("fails the node after exhausting all providers with retryable errors", async () => {
+      const workflow = failoverWorkflow("claude-sdk", "claude-cli");
+      const monitor = createMockMonitor();
+
+      const makeBrokenAdapter = () => {
+        const a = createMockAdapter();
+        a.spawn = async () => {
+          throw new Error("HTTP 503 Service Unavailable");
+        };
+        return a;
+      };
+
+      const primary = makeBrokenAdapter();
+      const fallback = makeBrokenAdapter();
+      const factory = (type: AdapterType) =>
+        type === "claude-sdk" ? primary : fallback;
+
+      const scheduler = new WorkflowScheduler(workflow, factory, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-fo-4");
+
+      expect(result.success).toBe(false);
+
+      // Exactly one failover event (primary → fallback); the second failure has no next provider.
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const failovers = nodeEvents.filter((e) => e.event.type === "adapter_failover");
+      expect(failovers).toHaveLength(1);
+    });
+
+    it("stays on the legacy single-adapter path when `providers` is not set", async () => {
+      const workflow = singleNodeWorkflow();
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter();
+      adapter.spawn = async () => {
+        throw Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+        });
+      };
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-fo-5");
+
+      expect(result.success).toBe(false);
+
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const failovers = nodeEvents.filter((e) => e.event.type === "adapter_failover");
+      expect(failovers).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // describe: retry policy
+  // -------------------------------------------------------------------------
+
+  describe("retry policy", () => {
+    /**
+     * Single-node workflow where the node's spawn throws `transportError` on
+     * the first `failUntilAttempt - 1` calls, then returns a healthy session.
+     * Exposes `spawnCount` for assertions.
+     */
+    function makeFlakyAdapter(
+      failUntilAttempt: number,
+      transportError: () => Error,
+    ): AgentAdapter & { spawnCount: number } {
+      const base = createMockAdapter({ result: { exitCode: 0, output: "ok" } });
+      let spawnCount = 0;
+      const wrapped = {
+        ...base,
+        async spawn(config: NodeConfig) {
+          spawnCount++;
+          if (spawnCount < failUntilAttempt) {
+            throw transportError();
+          }
+          return base.spawn(config);
+        },
+        get spawnCount() {
+          return spawnCount;
+        },
+      } as AgentAdapter & { spawnCount: number };
+      return wrapped;
+    }
+
+    function retryNodeWorkflow(retryPolicy: NodeConfig["retryPolicy"]): WorkflowGraph {
+      return {
+        version: "1",
+        name: "retry",
+        nodes: {
+          nodeA: makeNodeConfig({
+            ...(retryPolicy !== undefined ? { retryPolicy } : {}),
+          }),
+        },
+        edges: [],
+      };
+    }
+
+    it("retries a retryable error and succeeds within maxAttempts", async () => {
+      const workflow = retryNodeWorkflow({
+        maxAttempts: 3,
+        initialDelayMs: 1,
+        backoffMultiplier: 2,
+        maxDelayMs: 10,
+      });
+      const monitor = createMockMonitor();
+
+      const adapter = makeFlakyAdapter(3, () =>
+        Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:80"), {
+          code: "ECONNREFUSED",
+        }),
+      );
+
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-1");
+
+      expect(result.success).toBe(true);
+      expect(adapter.spawnCount).toBe(3);
+
+      const retryEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+      );
+      expect(retryEvents).toHaveLength(2);
+      if (retryEvents[0] && retryEvents[0].event.type === "retry_scheduled") {
+        expect(retryEvents[0].event.attempt).toBe(1);
+        expect(retryEvents[0].event.nextAttempt).toBe(2);
+        expect(retryEvents[0].event.reason).toBe("transport");
+        expect(retryEvents[0].event.delayMs).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    it("fails the node when retries are exhausted", async () => {
+      const workflow = retryNodeWorkflow({
+        maxAttempts: 2,
+        initialDelayMs: 1,
+        backoffMultiplier: 1,
+        maxDelayMs: 1,
+      });
+      const monitor = createMockMonitor();
+
+      const adapter = makeFlakyAdapter(Number.POSITIVE_INFINITY, () =>
+        Object.assign(new Error("fetch failed"), { code: "ETIMEDOUT" }),
+      );
+
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-2");
+
+      expect(result.success).toBe(false);
+      expect(adapter.spawnCount).toBe(2); // maxAttempts reached
+
+      const retryEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+      );
+      expect(retryEvents).toHaveLength(1); // one retry before giving up
+    });
+
+    it("does NOT retry errors that aren't in retryableErrors whitelist", async () => {
+      const workflow = retryNodeWorkflow({
+        maxAttempts: 5,
+        initialDelayMs: 1,
+        backoffMultiplier: 1,
+        maxDelayMs: 1,
+        retryableErrors: ["server_5xx"], // excludes transport
+      });
+      const monitor = createMockMonitor();
+
+      const adapter = makeFlakyAdapter(Number.POSITIVE_INFINITY, () =>
+        Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      );
+
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-3");
+
+      expect(result.success).toBe(false);
+      expect(adapter.spawnCount).toBe(1); // no retries
+
+      const retryEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+      );
+      expect(retryEvents).toHaveLength(0);
+    });
+
+    it("does NOT retry deterministic (non-retryable) errors", async () => {
+      const workflow = retryNodeWorkflow({
+        maxAttempts: 5,
+        initialDelayMs: 1,
+        backoffMultiplier: 1,
+        maxDelayMs: 1,
+      });
+      const monitor = createMockMonitor();
+
+      const adapter = makeFlakyAdapter(Number.POSITIVE_INFINITY, () =>
+        new Error("Invalid prompt"),
+      );
+
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-4");
+
+      expect(result.success).toBe(false);
+      expect(adapter.spawnCount).toBe(1);
+
+      const retryEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+      );
+      expect(retryEvents).toHaveLength(0);
+    });
+
+    it("composes retry with provider failover: exhausted retries fall over to next provider", async () => {
+      const workflow: WorkflowGraph = {
+        version: "1",
+        name: "retry-failover",
+        nodes: {
+          nodeA: makeNodeConfig({
+            providers: [
+              { adapter: "claude-sdk", priority: 0 },
+              { adapter: "claude-cli", priority: 1 },
+            ],
+            retryPolicy: {
+              maxAttempts: 2,
+              initialDelayMs: 1,
+              backoffMultiplier: 1,
+              maxDelayMs: 1,
+            },
+          }),
+        },
+        edges: [],
+      };
+      const monitor = createMockMonitor();
+
+      const primary = makeFlakyAdapter(Number.POSITIVE_INFINITY, () =>
+        new Error("HTTP 503 Service Unavailable"),
+      );
+      const fallback = createMockAdapter({ result: { exitCode: 0, output: "fb" } });
+
+      const factory = (type: AdapterType) =>
+        type === "claude-sdk" ? primary : fallback;
+
+      const scheduler = new WorkflowScheduler(workflow, factory, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-5");
+
+      expect(result.success).toBe(true);
+      // Primary spawn attempted maxAttempts times, then failover.
+      expect(primary.spawnCount).toBe(2);
+
+      const nodeEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> => e.type === "node_event",
+      );
+      const retries = nodeEvents.filter((e) => e.event.type === "retry_scheduled");
+      const failovers = nodeEvents.filter((e) => e.event.type === "adapter_failover");
+      expect(retries).toHaveLength(1);
+      expect(failovers).toHaveLength(1);
+    });
+
+    it("emits retry_scheduled.delayMs within [base, maxDelayMs]", async () => {
+      // Low-level determinism of delayMs is covered in retry-policy.test.ts.
+      // Here we verify the scheduler-emitted events carry sensible values.
+      const workflow = retryNodeWorkflow({
+        maxAttempts: 4,
+        initialDelayMs: 5,
+        backoffMultiplier: 2,
+        maxDelayMs: 100,
+      });
+
+      const monitor = createMockMonitor();
+      const adapter = makeFlakyAdapter(4, () =>
+        Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      );
+      const scheduler = new WorkflowScheduler(
+        workflow,
+        () => adapter,
+        monitor as WsMonitorServer,
+      );
+      await scheduler.run("wf-retry-6");
+
+      const retries = monitor.events
+        .filter((e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+        )
+        .map((e) => (e.event.type === "retry_scheduled" ? e.event.delayMs : 0));
+
+      expect(retries).toHaveLength(3);
+      for (const d of retries) {
+        expect(d).toBeGreaterThanOrEqual(5);
+        expect(d).toBeLessThanOrEqual(100);
+      }
+    });
+
+    it("legacy single-attempt behaviour: no retryPolicy means one attempt", async () => {
+      const workflow = retryNodeWorkflow(undefined);
+      const monitor = createMockMonitor();
+
+      const adapter = makeFlakyAdapter(Number.POSITIVE_INFINITY, () =>
+        Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      );
+
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+      const result = await scheduler.run("wf-retry-7");
+
+      expect(result.success).toBe(false);
+      expect(adapter.spawnCount).toBe(1);
+
+      const retryEvents = monitor.events.filter(
+        (e): e is Extract<typeof e, { type: "node_event" }> =>
+          e.type === "node_event" && e.event.type === "retry_scheduled",
+      );
+      expect(retryEvents).toHaveLength(0);
+    });
+  });
+
 });

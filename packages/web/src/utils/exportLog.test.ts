@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { exportAsJson, exportAsMarkdown } from "./exportLog";
-import type { WsServerEvent, WorkflowRunState } from "@sigil/shared";
+import type { WsServerEvent, WorkflowRunState } from "@sygil/shared";
 
 // ── Test fixtures ─────────────────────────────────────────────────────────────
 
 const MOCK_STATE: WorkflowRunState = {
   id: "r_abc123",
   workflowName: "tdd-feature",
-  workflowPath: "sigil.yaml",
+  workflowPath: "sygil.yaml",
   status: "completed",
   startedAt: "2025-01-15T10:42:00Z",
   completedAt: "2025-01-15T10:42:30Z",
@@ -31,6 +31,7 @@ const MOCK_STATE: WorkflowRunState = {
   },
   totalCostUsd: 0.055,
   retryCounters: {},
+  sharedContext: {},
 };
 
 const MOCK_EVENTS: WsServerEvent[] = [
