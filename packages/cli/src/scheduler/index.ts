@@ -141,6 +141,8 @@ export class WorkflowScheduler extends EventEmitter {
   private completionMutex: Promise<void> = Promise.resolve();
   /** Workflow-scoped sync registry — one instance per executeGraph() call. */
   private syncRegistry: SyncRegistry | null = null;
+  /** Tracks the active workflowId so pause/resume can emit the right WsServerEvent. */
+  private currentWorkflowId: string | null = null;
 
   constructor(
     private readonly workflow: WorkflowGraph,
@@ -187,6 +189,7 @@ export class WorkflowScheduler extends EventEmitter {
     }
 
     this.state = "running";
+    this.currentWorkflowId = workflowId;
     this.retryCounters.clear();
     this.sessionStore.clear();
     this.gateFailureReasons.clear();
@@ -284,6 +287,7 @@ export class WorkflowScheduler extends EventEmitter {
       };
     } finally {
       this.state = "idle";
+      this.currentWorkflowId = null;
       this.checkpointManager.dispose();
       if (this.adapterPool) {
         await this.adapterPool.drain().catch(() => undefined);
@@ -313,6 +317,7 @@ export class WorkflowScheduler extends EventEmitter {
 
     savedState.status = "running";
     this.state = "running";
+    this.currentWorkflowId = workflowId;
     this.retryCounters.clear();
     // Restore retry counters from saved state
     for (const [edgeId, count] of Object.entries(savedState.retryCounters)) {
@@ -378,6 +383,7 @@ export class WorkflowScheduler extends EventEmitter {
       };
     } finally {
       this.state = "idle";
+      this.currentWorkflowId = null;
       this.checkpointManager.dispose();
     }
   }
@@ -389,6 +395,10 @@ export class WorkflowScheduler extends EventEmitter {
     this.pausePromise = new Promise<void>((resolve) => {
       this.pauseResolve = resolve;
     });
+    // Broadcast so monitor clients update their status display immediately.
+    if (this.currentWorkflowId) {
+      this.monitor.emit({ type: "workflow_paused", workflowId: this.currentWorkflowId });
+    }
   }
 
   /** Resume a paused workflow. */
@@ -399,6 +409,10 @@ export class WorkflowScheduler extends EventEmitter {
       this.pauseResolve();
       this.pauseResolve = null;
       this.pausePromise = null;
+    }
+    // Broadcast so monitor clients update their status display immediately.
+    if (this.currentWorkflowId) {
+      this.monitor.emit({ type: "workflow_resumed", workflowId: this.currentWorkflowId });
     }
   }
 

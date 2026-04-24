@@ -7,7 +7,7 @@ import { loadWorkflow, interpolateWorkflow } from "../utils/workflow.js";
 import { pruneWorktrees } from "../worktree/index.js";
 import { readConfig, readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
-import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT } from "@sygil/shared";
+import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT, WorkflowGraphSchema } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
 import { buildSchedulerContext, formatMetricsUrl } from "./_scheduler-bootstrap.js";
 import { WorkflowWatcher } from "../utils/watcher.js";
@@ -34,6 +34,18 @@ interface RunOptions {
   metricsPort?: string;
 }
 
+/**
+ * Read all stdin bytes and return as a UTF-8 string.
+ * Used when workflowPath is "-" (workflow JSON piped via stdin).
+ */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export async function runCommand(
   workflowPath: string,
   task: string | undefined,
@@ -44,17 +56,37 @@ export async function runCommand(
   await pruneWorktrees();
 
   // 1. Load and validate workflow
+  //    If workflowPath is "-", read workflow JSON from stdin instead of a file.
   const spinner = ora("Loading workflow...").start();
 
   let workflow;
   try {
-    workflow = await loadWorkflow(workflowPath);
+    if (workflowPath === "-") {
+      const raw = await readStdin();
+      let json: unknown;
+      try {
+        json = JSON.parse(raw);
+      } catch (err) {
+        throw new Error(`Stdin is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const result = WorkflowGraphSchema.safeParse(json);
+      if (!result.success) {
+        const issues = result.error.issues
+          .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+          .join("\n");
+        throw new Error(`Workflow validation failed:\n${issues}`);
+      }
+      workflow = result.data as import("@sygil/shared").WorkflowGraph;
+    } else {
+      workflow = await loadWorkflow(workflowPath);
+    }
     spinner.succeed(`Loaded workflow: ${chalk.cyan(workflow.name)}`);
   } catch (err) {
     spinner.fail(
       `Failed to load workflow: ${err instanceof Error ? err.message : String(err)}`
     );
     process.exit(1);
+    return;
   }
 
   // 2. Adapter availability pre-flight — runs before parameter interpolation because

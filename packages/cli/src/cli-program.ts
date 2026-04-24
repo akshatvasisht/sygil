@@ -43,8 +43,8 @@ Examples:
 
   program
     .command("run")
-    .description("Run a workflow from a workflow.json file")
-    .argument("<workflow>", "Path to workflow.json file")
+    .description("Run a workflow from a workflow.json file (or - to read from stdin)")
+    .argument("<workflow>", "Path to workflow.json file, or - to read JSON from stdin")
     .argument("[task]", "Optional task description to pass as a parameter")
     .option("-p, --param <pairs...>", "Parameters as key=value pairs")
     .option("--dry-run", "Validate the workflow without executing it")

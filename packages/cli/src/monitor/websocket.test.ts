@@ -492,6 +492,130 @@ describe("WsMonitorServer — edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /run endpoint
+// ---------------------------------------------------------------------------
+
+describe("WsMonitorServer — POST /run", () => {
+  const MINIMAL_WORKFLOW = {
+    version: "1",
+    name: "test-wf",
+    nodes: {
+      agent: {
+        adapter: "echo",
+        model: "echo",
+        role: "Agent",
+        prompt: "Do the thing",
+      },
+    },
+    edges: [],
+  };
+
+  it("returns 401 without a token", async () => {
+    const server = await createServer();
+    const port = server.getPort()!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workflow: MINIMAL_WORKFLOW }),
+    });
+
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(typeof json.error).toBe("string");
+  });
+
+  it("returns 401 with a wrong token", async () => {
+    const server = await createServer();
+    const port = server.getPort()!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer totally-wrong-token",
+      },
+      body: JSON.stringify({ workflow: MINIMAL_WORKFLOW }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 with wrong ?token= query param", async () => {
+    const server = await createServer();
+    const port = server.getPort()!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/run?token=bad-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workflow: MINIMAL_WORKFLOW }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 400 with a malformed body (non-JSON)", async () => {
+    const server = await createServer();
+    const token = server.getAuthToken();
+    const port = server.getPort()!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: "not json {{",
+    });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(typeof json.error).toBe("string");
+  });
+
+  it("returns 400 with a body that fails RunRequestSchema (missing workflow)", async () => {
+    const server = await createServer();
+    const token = server.getAuthToken();
+    const port = server.getPort()!;
+
+    const res = await fetch(`http://127.0.0.1:${port}/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ parameters: { key: "value" } }),
+    });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("Validation failed");
+    expect(Array.isArray(json.issues)).toBe(true);
+  });
+
+  it("accepts auth via ?token= query parameter", async () => {
+    const server = await createServer();
+    const token = server.getAuthToken();
+    const port = server.getPort()!;
+
+    // Note: spawning sygil may fail in test env — we only care about auth
+    const res = await fetch(
+      `http://127.0.0.1:${port}/run?token=${token}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflow: MINIMAL_WORKFLOW }),
+      }
+    );
+
+    // Auth should pass — the response is 200 or 500 depending on whether
+    // sygil is in PATH. Both are acceptable here: 401 is not acceptable.
+    expect(res.status).not.toBe(401);
+    expect(res.status).not.toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Heartbeat + graceful drain
 // ---------------------------------------------------------------------------
 

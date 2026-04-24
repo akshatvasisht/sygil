@@ -11,6 +11,7 @@ import {
   AlertCircle,
   GitBranch,
   Play,
+  Pause,
   CheckCircle2,
   XCircle,
   Eye,
@@ -19,7 +20,7 @@ import {
   Database,
   Webhook,
 } from "lucide-react";
-import type { WsServerEvent } from "@sygil/shared";
+import type { WsServerEvent, WsClientEvent } from "@sygil/shared";
 
 interface EventStreamProps {
   events: WsServerEvent[];
@@ -30,6 +31,13 @@ interface EventStreamProps {
    * list so operators know the view is not complete.
    */
   truncatedCount?: number;
+  /**
+   * When provided, human_review_request events render as interactive
+   * HumanReviewCard components with Approve/Reject buttons.
+   */
+  sendControl?: (event: WsClientEvent) => void;
+  /** workflowId needed for human review control events. */
+  workflowId?: string | null;
 }
 
 function formatTimestamp(iso: string): string {
@@ -46,13 +54,97 @@ function truncate(str: string, n: number): string {
   return str.length > n ? str.slice(0, n) + "…" : str;
 }
 
+// ── HumanReviewCard ───────────────────────────────────────────────────────────
+
+interface HumanReviewCardProps {
+  event: Extract<WsServerEvent, { type: "human_review_request" }>;
+  timestamp: string;
+  allEvents: WsServerEvent[];
+  sendControl?: (event: WsClientEvent) => void;
+  workflowId?: string | null;
+}
+
+function HumanReviewCard({ event, timestamp, allEvents, sendControl, workflowId }: HumanReviewCardProps) {
+  const [localDecision, setLocalDecision] = useState<"approved" | "rejected" | null>(null);
+
+  // Check if a response event already exists in the stream for this edgeId
+  const responseEvent = allEvents.find(
+    (e): e is Extract<WsServerEvent, { type: "human_review_response" }> =>
+      e.type === "human_review_response" && e.edgeId === event.edgeId
+  );
+  const resolved = responseEvent
+    ? (responseEvent.approved ? "approved" : "rejected")
+    : localDecision;
+
+  const baseClass = "flex flex-col gap-2 px-4 py-3 font-mono text-[12px] border-b border-border/40 last:border-b-0";
+
+  if (resolved) {
+    return (
+      <div className={`${baseClass}`}>
+        <div className="flex items-start gap-3">
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <CheckSquare size={12} className={resolved === "approved" ? "text-accent-green shrink-0 mt-0.5" : "text-accent-red shrink-0 mt-0.5"} />
+          <span className="text-dim">Human review {resolved} — {event.edgeId}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`${baseClass} bg-accent-amber/5 border-l-2 border-l-accent-amber`}>
+      <div className="flex items-start gap-3">
+        <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+        <Eye size={12} className="text-accent-amber shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-accent-amber">Human review requested</div>
+          <div className="text-dim mt-1 text-[11px] leading-relaxed">{event.edgeId}</div>
+          {event.prompt && (
+            <div className="text-body mt-1 text-[11px] leading-relaxed whitespace-pre-wrap">{event.prompt}</div>
+          )}
+          {sendControl && workflowId && (
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => {
+                  sendControl({ type: "human_review_approve", workflowId, edgeId: event.edgeId });
+                  setLocalDecision("approved");
+                }}
+                aria-label="Approve human review"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded bg-accent-green/15 hover:bg-accent-green/25 text-accent-green border border-accent-green/30 text-[11px] transition-colors duration-200"
+              >
+                <CheckCircle2 size={11} />
+                Approve
+              </button>
+              <button
+                onClick={() => {
+                  sendControl({ type: "human_review_reject", workflowId, edgeId: event.edgeId });
+                  setLocalDecision("rejected");
+                }}
+                aria-label="Reject human review"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded bg-accent-red/15 hover:bg-accent-red/25 text-accent-red border border-accent-red/30 text-[11px] transition-colors duration-200"
+              >
+                <XCircle size={11} />
+                Reject
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── EventRow ──────────────────────────────────────────────────────────────────
+
 interface EventRowProps {
   event: WsServerEvent;
   timestamp: string;
   isRecent: boolean;
+  allEvents?: WsServerEvent[];
+  sendControl?: (event: WsClientEvent) => void;
+  workflowId?: string | null;
 }
 
-function EventRow({ event, timestamp, isRecent }: EventRowProps) {
+function EventRow({ event, timestamp, isRecent, allEvents = [], sendControl, workflowId }: EventRowProps) {
   const baseClass = `flex items-start gap-3 px-4 py-2 font-mono text-[12px] border-b border-border/40 last:border-b-0${isRecent ? " animate-stream-in" : ""}`;
 
   switch (event.type) {
@@ -365,15 +457,13 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
 
     case "human_review_request":
       return (
-        <div className={`${baseClass} bg-accent-amber/8 border-l-2 border-accent-amber`}>
-          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
-          <Eye size={12} className="text-accent-amber shrink-0 mt-0.5" />
-          <div>
-            <span className="text-accent-amber font-medium">human_review</span>
-            <span className="text-dim ml-2">{event.edgeId}</span>
-            <span className="text-body ml-2">{event.prompt}</span>
-          </div>
-        </div>
+        <HumanReviewCard
+          event={event}
+          timestamp={timestamp}
+          allEvents={allEvents}
+          sendControl={sendControl}
+          workflowId={workflowId}
+        />
       );
 
     case "human_review_response":
@@ -415,6 +505,24 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
       );
     }
 
+    case "workflow_paused":
+      return (
+        <div className={`${baseClass} bg-accent-amber/5`}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Pause size={12} className="text-accent-amber shrink-0 mt-0.5" />
+          <span className="text-accent-amber">workflow paused</span>
+        </div>
+      );
+
+    case "workflow_resumed":
+      return (
+        <div className={`${baseClass} bg-accent-green/3`}>
+          <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+          <Play size={12} className="text-accent-green shrink-0 mt-0.5" />
+          <span className="text-accent-green">workflow resumed</span>
+        </div>
+      );
+
     case "metrics_tick":
       // Metrics ticks arrive ~1Hz and drive MetricsStrip directly; surfacing
       // them inline would drown out node events.
@@ -425,7 +533,7 @@ function EventRow({ event, timestamp, isRecent }: EventRowProps) {
   }
 }
 
-export function EventStream({ events, autoScroll = true, truncatedCount = 0 }: EventStreamProps) {
+export function EventStream({ events, autoScroll = true, truncatedCount = 0, sendControl, workflowId }: EventStreamProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<string>("all");
 
@@ -509,6 +617,9 @@ export function EventStream({ events, autoScroll = true, truncatedCount = 0 }: E
               event={event}
               timestamp={event.timestamp ? formatTimestamp(event.timestamp) : "--:--:--"}
               isRecent={i >= filteredEvents.length - 10}
+              allEvents={events}
+              sendControl={sendControl}
+              workflowId={workflowId}
             />
           ))
         )}

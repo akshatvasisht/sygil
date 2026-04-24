@@ -325,6 +325,14 @@ function applyEvent(
       return prev;
     }
 
+    case "workflow_paused":
+      if (!prev) return prev;
+      return { ...prev, status: "paused" };
+
+    case "workflow_resumed":
+      if (!prev) return prev;
+      return { ...prev, status: "running" };
+
     case "human_review_request":
     case "human_review_response":
     case "gate_eval":

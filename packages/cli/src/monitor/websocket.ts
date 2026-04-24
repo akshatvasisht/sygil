@@ -1,12 +1,15 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 import sirv from "sirv";
 import type { WsServerEvent, WsClientEvent } from "@sygil/shared";
-import { WsClientEventSchema } from "@sygil/shared";
+import { WsClientEventSchema, RunRequestSchema } from "@sygil/shared";
 import { logger } from "../utils/logger.js";
 import { EventFanOut } from "./event-fanout.js";
 import { MetricsAggregator } from "./metrics-aggregator.js";
@@ -96,6 +99,19 @@ export class WsMonitorServer {
       const uiHandler = serveUi ? sirv(distUiPath, { dev: false }) : null;
 
       const httpServer = createServer((req, res) => {
+        // POST /run — spawn a sygil run from the web editor
+        const reqPath = (req.url ?? "/").split("?")[0];
+        if (req.method === "POST" && reqPath === "/run") {
+          this.handlePostRun(req, res).catch((err: unknown) => {
+            logger.error(`[monitor] POST /run unhandled error: ${err}`);
+            if (!res.headersSent) {
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Internal server error" }));
+            }
+          });
+          return;
+        }
+
         if (uiHandler) {
           uiHandler(req, res, () => {
             res.writeHead(404);
@@ -200,6 +216,164 @@ export class WsMonitorServer {
 
       httpServer.on("error", reject);
     });
+  }
+
+  // ── POST /run helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Check if an incoming HTTP request carries a valid auth token.
+   * Accepts either:
+   *   - `Authorization: Bearer <token>` header
+   *   - `?token=<token>` query parameter
+   */
+  private isHttpAuthorized(req: IncomingMessage): boolean {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const queryToken = url.searchParams.get("token");
+    if (queryToken !== null && constantTimeEquals(queryToken, this.authToken)) return true;
+
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      const bearerToken = authHeader.slice(7);
+      if (constantTimeEquals(bearerToken, this.authToken)) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Read the full JSON body from an incoming HTTP request.
+   * Rejects with an error if the body exceeds 4 MB.
+   */
+  private async readJsonBody(req: IncomingMessage): Promise<unknown> {
+    const MAX_BODY_BYTES = 4 * 1024 * 1024;
+    return new Promise<unknown>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      req.on("data", (chunk: Buffer | string) => {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buf.length;
+        if (totalBytes > MAX_BODY_BYTES) {
+          reject(new Error("Request body too large"));
+          return;
+        }
+        chunks.push(buf);
+      });
+      req.on("end", () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        } catch (err) {
+          reject(new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`));
+        }
+      });
+      req.on("error", reject);
+    });
+  }
+
+  /**
+   * Handle POST /run — spawn a new sygil run and return the runId.
+   *
+   * Auth: bearer token OR ?token= matching this server's authToken.
+   * Body: RunRequestSchema (workflow + optional parameters + flags).
+   * Working dir: per-run tmpdir so each run is isolated by default.
+   *
+   * The handler spawns `sygil run -` with the workflow JSON piped to stdin
+   * and extracts the runId from stdout ("Run ID: <id>" line). It returns the
+   * runId and this server's auth token so the caller can open the monitor URL.
+   *
+   * Child process stdio is not awaited — the run executes independently and
+   * streams events back to this server via the existing WebSocket channel.
+   */
+  private async handlePostRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // 1. Auth
+    if (!this.isHttpAuthorized(req)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized — provide a valid ?token= or Authorization: Bearer header" }));
+      return;
+    }
+
+    // 2. Parse + validate body
+    let body: unknown;
+    try {
+      body = await this.readJsonBody(req);
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Invalid request body: ${err instanceof Error ? err.message : String(err)}` }));
+      return;
+    }
+
+    const parsed = RunRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Validation failed", issues: parsed.error.issues }));
+      return;
+    }
+
+    const { workflow, parameters, isolate } = parsed.data;
+
+    // 3. Create a per-run working directory (matches --isolate default)
+    const workDir = await mkdtemp(path.join(tmpdir(), "sygil-run-"));
+
+    // 4. Spawn `sygil run -` with workflow JSON piped to stdin
+    //    Build extra flags from the request body
+    const args: string[] = ["run", "-", "--no-monitor"];
+    if (isolate) args.push("--isolate");
+    if (parameters) {
+      for (const [key, value] of Object.entries(parameters)) {
+        args.push("--param", `${key}=${value}`);
+      }
+    }
+
+    let runId: string | null = null;
+    let childError: string | null = null;
+
+    const child = spawn("sygil", args, {
+      cwd: workDir,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env },
+    });
+
+    // Write workflow JSON to stdin, then close
+    try {
+      child.stdin.write(JSON.stringify(workflow));
+      child.stdin.end();
+    } catch (err) {
+      logger.warn(`[monitor] POST /run — stdin write failed: ${err}`);
+    }
+
+    // 5. Extract runId from child stdout ("Run ID: <id>" line)
+    const RUN_ID_TIMEOUT_MS = 5_000;
+    const runIdPromise = new Promise<string | null>((resolve) => {
+      const timeout = setTimeout(() => resolve(null), RUN_ID_TIMEOUT_MS);
+      const RUN_ID_RE = /Run ID:\s+([^\s]+)/;
+      let buffer = "";
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        buffer += chunk.toString();
+        const match = RUN_ID_RE.exec(buffer);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(match[1] ?? null);
+        }
+      });
+      child.on("error", (err: Error) => {
+        clearTimeout(timeout);
+        childError = err.message;
+        resolve(null);
+      });
+    });
+
+    runId = await runIdPromise;
+
+    if (childError) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Failed to spawn sygil: ${childError}` }));
+      return;
+    }
+
+    // 6. Return runId + monitorUrl + authToken
+    const port = this.port ?? 0;
+    const monitorUrl = `http://localhost:${port}`;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ runId, monitorUrl, authToken: this.authToken }));
   }
 
   /**

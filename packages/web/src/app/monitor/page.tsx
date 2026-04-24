@@ -76,7 +76,7 @@ function MonitorInner() {
       )}
 
       <div className="flex-1 overflow-hidden">
-        <ExecutionMonitor wsUrl={wsUrl} workflowId={workflowId} />
+        <ExecutionMonitor wsUrl={wsUrl} workflowId={workflowId} authToken={token} />
       </div>
     </div>
   );

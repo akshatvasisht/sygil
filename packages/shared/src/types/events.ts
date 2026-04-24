@@ -13,6 +13,21 @@ export type WsServerEvent =
   | { type: "rate_limit"; workflowId: string; timestamp?: string; nodeId: string; retryAfterMs: number }
   | { type: "workflow_end"; workflowId: string; timestamp?: string; success: boolean; durationMs: number; totalCostUsd?: number }
   | { type: "workflow_error"; workflowId: string; timestamp?: string; nodeId?: string; message: string }
+  | {
+      /**
+       * Emitted by the scheduler when execution pauses between nodes (via the
+       * client `pause` control event). Clients observe this to update their
+       * status display without polling the checkpoint file.
+       */
+      type: "workflow_paused"; workflowId: string; timestamp?: string;
+    }
+  | {
+      /**
+       * Emitted by the scheduler when a paused workflow resumes execution.
+       * Mirrors `workflow_paused` — emitted immediately on `resumeExecution()`.
+       */
+      type: "workflow_resumed"; workflowId: string; timestamp?: string;
+    }
   | { type: "human_review_request"; workflowId: string; timestamp?: string; nodeId: string; edgeId: string; prompt: string }
   | { type: "human_review_response"; workflowId: string; timestamp?: string; edgeId: string; approved: boolean }
   | { type: "metrics_tick"; workflowId: string; timestamp?: string; data: MetricsSnapshot }
@@ -243,3 +258,20 @@ export const WorkflowRunStateSchema = z.object({
     .passthrough()
     .optional(),
 }).passthrough();
+
+/**
+ * Body schema for POST /run — used by both the HTTP handler (server-side
+ * validation) and the WorkflowEditor run modal (client-side typing).
+ */
+export const RunRequestSchema = z.object({
+  /** Workflow graph to execute (same shape as workflow.json). */
+  workflow: z.record(z.string(), z.unknown()).describe("WorkflowGraph object — same schema as workflow.json."),
+  /** Named parameter values to interpolate into the workflow. */
+  parameters: z.record(z.string(), z.string()).optional().describe("Named parameter values (key → string)."),
+  /** If true, run each node in an isolated git worktree. */
+  isolate: z.boolean().optional().describe("Isolate each node in its own git worktree."),
+  /** Disable the WebSocket monitor server. */
+  noMonitor: z.boolean().optional().describe("Start the run without a WebSocket monitor server."),
+});
+
+export type RunRequest = z.infer<typeof RunRequestSchema>;

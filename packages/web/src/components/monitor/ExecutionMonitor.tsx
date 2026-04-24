@@ -287,11 +287,13 @@ function ConnectionBanner({ status, workflowId, reconnectAttempt, onReconnect }:
 interface ExecutionMonitorProps {
   wsUrl?: string | null;
   workflowId?: string | null;
+  /** Auth token — when present, control buttons are enabled. When absent, buttons are read-only. */
+  authToken?: string | null;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionMonitorProps) {
+export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = null }: ExecutionMonitorProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [eventLogOpen, setEventLogOpen] = useState(false);
@@ -349,6 +351,9 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
   }, [events]);
 
   const isRunning = workflowState?.status === "running";
+  const isPaused = workflowState?.status === "paused";
+  const isControllable = isRunning || isPaused;
+  const hasAuth = authToken !== null && authToken !== "";
 
   // Collect pending human review requests (not yet responded to)
   const pendingReviewRequests = events.filter((ev): ev is Extract<typeof ev, { type: "human_review_request" }> => {
@@ -460,19 +465,34 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
             </div>
           </div>
 
-          {/* Live controls — only shown when connected and workflow is running */}
-          {status === "connected" && isRunning && workflowId && (
+          {/* Live controls — Pause / Resume / Cancel */}
+          {status === "connected" && workflowId && (
             <>
               <div className="w-px h-3 bg-border" />
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" role="group" aria-label="Workflow controls">
+                {/* Pause */}
                 <button
-                  onClick={() => sendControl({ type: "pause", workflowId })}
-                  aria-label="Pause workflow execution"
-                  className="flex items-center gap-1 font-mono text-[10px] text-dim hover:text-accent-amber px-2 min-h-[44px] rounded hover:bg-accent-amber/10 transition-colors duration-200"
+                  onClick={() => hasAuth ? sendControl({ type: "pause", workflowId }) : undefined}
+                  disabled={!isRunning || !hasAuth}
+                  aria-label={hasAuth ? "Pause workflow execution" : "Read-only — open this monitor with ?token=<uuid> to enable controls"}
+                  title={!hasAuth ? "Read-only — open this monitor with ?token=<uuid> to enable controls" : undefined}
+                  className="flex items-center gap-1 font-mono text-[10px] px-2 min-h-[44px] rounded transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed text-dim hover:text-accent-amber hover:bg-accent-amber/10 disabled:hover:text-dim disabled:hover:bg-transparent"
                 >
                   <Pause size={10} />
                   <span>pause</span>
                 </button>
+                {/* Resume */}
+                <button
+                  onClick={() => hasAuth ? sendControl({ type: "resume_workflow", workflowId }) : undefined}
+                  disabled={!isPaused || !hasAuth}
+                  aria-label={hasAuth ? "Resume paused workflow" : "Read-only — open this monitor with ?token=<uuid> to enable controls"}
+                  title={!hasAuth ? "Read-only — open this monitor with ?token=<uuid> to enable controls" : undefined}
+                  className="flex items-center gap-1 font-mono text-[10px] px-2 min-h-[44px] rounded transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed text-dim hover:text-accent-green hover:bg-accent-green/10 disabled:hover:text-dim disabled:hover:bg-transparent"
+                >
+                  <Play size={10} />
+                  <span>resume</span>
+                </button>
+                {/* Cancel */}
                 {confirmingCancel ? (
                   <div className="flex items-center gap-1">
                     <span className="font-mono text-[10px] text-accent-red">Confirm cancel?</span>
@@ -496,30 +516,17 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
                   </div>
                 ) : (
                   <button
-                    onClick={() => setConfirmingCancel(true)}
-                    aria-label="Cancel workflow execution"
-                    className="flex items-center gap-1 font-mono text-[10px] text-dim hover:text-accent-red px-2 min-h-[44px] rounded hover:bg-accent-red/10 transition-colors duration-200"
+                    onClick={() => hasAuth ? setConfirmingCancel(true) : undefined}
+                    disabled={!isControllable || !hasAuth}
+                    aria-label={hasAuth ? "Cancel workflow execution" : "Read-only — open this monitor with ?token=<uuid> to enable controls"}
+                    title={!hasAuth ? "Read-only — open this monitor with ?token=<uuid> to enable controls" : undefined}
+                    className="flex items-center gap-1 font-mono text-[10px] px-2 min-h-[44px] rounded transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed text-dim hover:text-accent-red hover:bg-accent-red/10 disabled:hover:text-dim disabled:hover:bg-transparent"
                   >
                     <X size={10} />
                     <span>cancel</span>
                   </button>
                 )}
               </div>
-            </>
-          )}
-
-          {/* Resume button when paused */}
-          {status === "connected" && workflowState?.status === "paused" && workflowId && (
-            <>
-              <div className="w-px h-3 bg-border" />
-              <button
-                onClick={() => sendControl({ type: "resume_workflow", workflowId })}
-                aria-label="Resume paused workflow"
-                className="flex items-center gap-1 font-mono text-[10px] text-dim hover:text-accent-green px-2 min-h-[44px] rounded hover:bg-accent-green/10 transition-colors duration-200"
-              >
-                <Play size={10} />
-                <span>resume</span>
-              </button>
             </>
           )}
 
@@ -695,6 +702,8 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null }: ExecutionM
                   events={streamEvents}
                   autoScroll={status === "connected"}
                   truncatedCount={truncatedCount}
+                  sendControl={hasAuth ? sendControl : undefined}
+                  workflowId={workflowId}
                 />
               </div>
             )}
