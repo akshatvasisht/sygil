@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { RetryPolicy, RetryableErrorClass } from "@sygil/shared";
 import type { FailoverReason } from "../adapters/provider-router.js";
 
@@ -76,28 +77,20 @@ export function isRetryableReason(
 /**
  * Sleep for `ms` milliseconds. Resolves early (without throwing) when the
  * provided AbortSignal aborts — caller should re-check cancellation state
- * after await. Uses `unref()` so a leftover timer during cancellation doesn't
- * keep the process alive.
+ * after await. Uses `ref: false` so a leftover timer during cancellation
+ * doesn't keep the process alive.
+ *
+ * Delegates to `node:timers/promises > setTimeout`, which handles the
+ * race window (abort-between-check-and-listener) natively.
  */
-export function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  if (signal?.aborted) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    if (typeof timer.unref === "function") timer.unref();
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    // Catch the race window: signal might have aborted between the initial
-    // `signal.aborted` short-circuit and `addEventListener` above. AbortSignal
-    // does NOT replay the abort event to late listeners, so without this
-    // re-check a long backoff (e.g. 30s) would run to completion despite an
-    // already-fired abort, delaying cancellation by the full sleep duration.
-    if (signal?.aborted) onAbort();
-  });
+export async function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return;
+  try {
+    await sleep(ms, undefined, { signal, ref: false });
+  } catch (err) {
+    // timersPromises.setTimeout rejects with an AbortError on cancel; callers
+    // already re-check signal state, so we swallow the rejection to preserve
+    // the "resolves early on abort" contract.
+    if ((err as NodeJS.ErrnoException).name !== "AbortError") throw err;
+  }
 }

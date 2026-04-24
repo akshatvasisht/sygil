@@ -109,7 +109,7 @@ export interface UseWorkflowEditorReturn {
   canRedo: boolean;
 
   // Validation
-  validationResult: { success: boolean; error?: { issues: { path: (string | number)[]; message: string }[] } };
+  validationResult: { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } };
 
   // Derived
   nodeCount: number;
@@ -630,7 +630,7 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
   const canUndo = historyIndexRef.current > 0;
   const canRedo = historyIndexRef.current < historyRef.current.length - 1;
 
-  const [validationResult, setValidationResult] = useState<{ success: boolean; error?: { issues: { path: (string | number)[]; message: string }[] } }>({ success: true });
+  const [validationResult, setValidationResult] = useState<{ success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }>({ success: true });
 
   useEffect(() => {
     const timer = setTimeout(() => {

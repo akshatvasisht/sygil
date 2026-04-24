@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createParser } from "eventsource-parser";
 import type {
   AgentAdapter,
   AgentSession,
@@ -202,34 +203,28 @@ export class LocalOaiAdapter implements AgentAdapter {
     body: ReadableStream<Uint8Array>,
     internal: LocalOaiInternal
   ): Promise<void> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
     const toolCalls = new Map<number, ToolCallAccumulator>();
-    let buffer = "";
 
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-
-      for (const evt of events) {
-        const dataLine = evt.split("\n").find((l) => l.startsWith("data:"));
-        if (!dataLine) continue;
-        const payload = dataLine.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-
+    const parser = createParser({
+      onEvent: (event) => {
+        const payload = event.data;
+        if (!payload || payload === "[DONE]") return;
         let chunk: OaiChunk;
         try {
           chunk = JSON.parse(payload) as OaiChunk;
         } catch {
-          continue;
+          return;
         }
-
         this._handleChunk(chunk, internal, toolCalls);
-      }
+      },
+    });
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parser.feed(decoder.decode(value, { stream: true }));
     }
 
     // Flush any completed tool-call accumulators that never saw a finish_reason.

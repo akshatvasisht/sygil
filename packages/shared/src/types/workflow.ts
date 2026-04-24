@@ -179,8 +179,8 @@ export const GateConfigSchema = z.object({
 });
 
 export const ContractConfigSchema = z.object({
-  outputSchema: z.record(z.unknown()).optional(),
-  inputMapping: z.record(z.string()).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
+  inputMapping: z.record(z.string(), z.string()).optional(),
 });
 
 export const ProviderConfigSchema = z.object({
@@ -213,7 +213,7 @@ export const NodeConfigSchema = z.object({
   disallowedTools: z.array(z.string()).optional(),
   outputDir: z.string().optional(),
   expectedOutputs: z.array(z.string()).optional(),
-  outputSchema: z.record(z.unknown()).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
   maxTurns: z.number().int().positive().optional(),
   maxBudgetUsd: z.number().positive().optional(),
   timeoutMs: z.number().int().positive().optional(),
@@ -261,9 +261,9 @@ export const WorkflowGraphSchema = z.object({
   version: z.string(),
   name: z.string().min(1),
   description: z.string().optional(),
-  nodes: z.record(NodeConfigSchema).refine(nodes => Object.keys(nodes).length > 0, "Workflow must have at least one node"),
+  nodes: z.record(z.string(), NodeConfigSchema).refine(nodes => Object.keys(nodes).length > 0, "Workflow must have at least one node"),
   edges: z.array(EdgeConfigSchema),
-  parameters: z.record(ParameterConfigSchema).optional(),
+  parameters: z.record(z.string(), ParameterConfigSchema).optional(),
 }).superRefine((graph, ctx) => {
   const nodeIds = new Set(Object.keys(graph.nodes));
   const edgeIds = new Set<string>();

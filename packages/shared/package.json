@@ -2,7 +2,17 @@
   "name": "@sygil/shared",
   "version": "0.1.0",
   "description": "Shared TypeScript types and Zod schemas for the Sygil workflow orchestration system.",
-  "keywords": ["ai", "agents", "orchestration", "llm", "workflow", "dag", "claude", "codex", "automation"],
+  "keywords": [
+    "ai",
+    "agents",
+    "orchestration",
+    "llm",
+    "workflow",
+    "dag",
+    "claude",
+    "codex",
+    "automation"
+  ],
   "author": "Akshat Vasisht",
   "license": "MIT",
   "homepage": "https://github.com/akshatvasisht/sygil#readme",
@@ -22,14 +32,18 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^3.24.1"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

@@ -14,9 +14,12 @@ const mockWriteFile = writeFile as ReturnType<typeof vi.fn>;
 const mockMkdir = mkdir as ReturnType<typeof vi.fn>;
 
 describe("generateWorkflowJsonSchema", () => {
-  it("produces draft-07 schema with $id and title", () => {
+  it("produces a JSON Schema with $id and title", () => {
     const schema = generateWorkflowJsonSchema();
-    expect(schema["$schema"]).toBe("http://json-schema.org/draft-07/schema#");
+    // Zod v4 emits draft-2020-12 by default; pre-v4 we emitted draft-07.
+    // The assertion is "any JSON Schema draft URI" — the generator owns the
+    // choice and the CI drift check keeps docs/workflow.schema.json in sync.
+    expect(String(schema["$schema"])).toMatch(/json-schema\.org/);
     expect(schema["$id"]).toContain("workflow.schema.json");
     expect(schema["title"]).toBe("Sygil Workflow Graph");
     expect(schema["type"]).toBe("object");
