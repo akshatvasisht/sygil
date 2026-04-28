@@ -5,7 +5,7 @@ import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 // Lazy-load the background decoration — purely visual, not needed for LCP or interactivity
-const HeroSigil = lazy(() => import("./HeroSigil").then((m) => ({ default: m.HeroSigil })));
+const HeroSygil = lazy(() => import("./HeroSygil").then((m) => ({ default: m.HeroSygil })));
 
 /* -- Error boundary for hero visuals --------- */
 class HeroErrorBoundary extends React.Component<
@@ -529,7 +529,7 @@ export function Hero() {
         <div className="w-[400px] h-[400px] sm:w-[600px] sm:h-[600px] lg:w-[750px] lg:h-[750px] lg:ml-[2%] -mt-[8%]">
           <HeroErrorBoundary fallback={null}>
             <Suspense fallback={null}>
-              <HeroSigil />
+              <HeroSygil />
             </Suspense>
           </HeroErrorBoundary>
         </div>
@@ -563,7 +563,7 @@ export function Hero() {
               className="text-base sm:text-lg text-body/90 leading-relaxed mb-12 max-w-md animate-slide-up"
               style={{ animationDelay: "0.3s" }}
             >
-              Define workflows as JSON. Sygil executes every node, evaluates gates, retries on failure, and streams results to your terminal.
+              Deterministic NDJSON replay — every scheduler decision is recorded, so any run replays bit-for-bit. Mix Claude, Codex, Cursor, Gemini, and local Ollama models in one graph. No cloud dependency.
             </p>
 
             <div
@@ -585,6 +585,25 @@ export function Hero() {
               >
                 View Source
               </Link>
+            </div>
+
+            <div className="flex items-center gap-3 mt-6 animate-slide-up" style={{ animationDelay: "0.45s" }}>
+              <a href="https://github.com/akshatvasisht/sygil" target="_blank" rel="noopener noreferrer">
+                <img
+                  src="https://img.shields.io/github/stars/akshatvasisht/sygil?style=flat&labelColor=18181b&color=71717a&label=stars"
+                  alt="GitHub stars"
+                  className="h-5"
+                  loading="lazy"
+                />
+              </a>
+              <a href="https://github.com/akshatvasisht/sygil/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+                <img
+                  src="https://img.shields.io/badge/License-MIT-71717a?style=flat&labelColor=18181b"
+                  alt="License MIT"
+                  className="h-5"
+                  loading="lazy"
+                />
+              </a>
             </div>
 
             <div

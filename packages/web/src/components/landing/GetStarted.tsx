@@ -44,24 +44,31 @@ const STEPS = [
   {
     number: "02",
     title: "Initialize",
-    description: "Run sygil init inside your project to scaffold a workflow file and detect installed adapters.",
+    description: "Run sygil init inside your project to detect installed adapters and write a config.",
     code: "cd my-project && sygil init",
-    output: `Detected adapters:
-  ✓ claude-sdk  (ANTHROPIC_API_KEY set)
-  ✓ codex       (codex CLI found at /usr/local/bin/codex)
-  ✗ cursor      (not installed)
+    output: `  ✓ Claude Agent SDK (@anthropic-ai/claude-agent-sdk) — v0.0.56
+  ✓ Codex CLI (codex) — v0.1.2
+  ✗ Claude Code CLI (claude)
+  ✗ Cursor Agent (agent binary)
 
-Created sygil.yaml — edit it to define your workflow.`,
+Default adapter: claude-sdk
+
+Config written to .sygil/config.json
+
+Next steps:
+  sygil export tdd-feature ./workflow.json
+  sygil run ./workflow.json "your task here"`,
   },
   {
     number: "03",
     title: "Run",
     description: "Execute a workflow with a goal. Sygil prints a live monitor URL you can open in the browser.",
-    code: 'sygil run tdd-feature "add OAuth2 login"',
+    code: 'sygil run ./workflow.json "add OAuth2 login"',
     output: `Starting workflow: tdd-feature
 Goal: "add OAuth2 login"
 
-  ➜ Monitor: http://localhost:3001/monitor?workflow=r_8x92kf
+  Web monitor available at:
+  http://localhost:49821/monitor?workflow=tdd-feature&token=a3f1c2d4-...
 
   [planner]     ✓  4.2s   $0.014
   [implementer] ↺  running...`,

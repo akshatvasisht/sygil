@@ -1,5 +1,3 @@
-"use client";
-
 import { Puzzle, Shield, Eye } from "lucide-react";
 
 const FEATURES = [

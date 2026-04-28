@@ -1,5 +1,3 @@
-"use client";
-
 import { Check, Minus, Clock } from "lucide-react";
 
 interface Capability {
