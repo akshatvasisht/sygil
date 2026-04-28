@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadWorkflow } from "../src/utils/workflow.js";
+import { loadWorkflow } from "../../src/utils/workflow.js";
 import { WorkflowGraphSchema } from "@sygil/shared";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

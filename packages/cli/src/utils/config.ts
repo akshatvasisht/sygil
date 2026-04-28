@@ -37,6 +37,20 @@ export interface SygilConfig {
    * are no-ops. See `HooksConfig` for the 4 supported hook points.
    */
   hooks?: HooksConfig;
+  /**
+   * Opt-in performance flags. Off by default — set explicitly in
+   * `.sygil/config.json` to activate.
+   */
+  performance?: {
+    /**
+     * Content-addressable node memoization. Skips re-spawning a node when
+     * its inputs (prompt, model, tools, sharedContext deps) hash to a
+     * previously cached result. Hit rate on probabilistic workflows is
+     * typically low; defaults to off so users don't pay the hashing + I/O
+     * overhead unless they've measured a benefit.
+     */
+    nodeCache?: boolean;
+  };
 }
 
 function resolveConfigDir(configDir?: string): string {

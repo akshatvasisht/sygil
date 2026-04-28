@@ -19,7 +19,7 @@ const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
 export interface ForkOptions {
   at?: string;
   param?: string[];
-  ignoreDrift?: boolean;
+  checkDrift?: boolean;
 }
 
 /**
@@ -186,8 +186,10 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
 
-  // Drift detection: compare stored environment snapshot against current environment.
-  if (parent.environment) {
+  // Drift detection (opt-in via --check-drift). See resume.ts for the
+  // rationale: most forks don't need to be blocked on a version bump, so
+  // the check fires only when the operator explicitly asks for it.
+  if (options.checkDrift && parent.environment) {
     let drift: string[] = [];
     try {
       const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
@@ -195,14 +197,11 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
     } catch {
       // Drift check failure must not block fork
     }
-    if (drift.length > 0 && !options.ignoreDrift) {
+    if (drift.length > 0) {
       console.warn(chalk.yellow("Environment drift detected:"));
       for (const d of drift) console.warn(`  • ${d}`);
-      console.warn(chalk.dim("Pass --ignore-drift to proceed."));
+      console.warn(chalk.dim("Drop --check-drift to proceed without the check."));
       process.exit(1);
-    } else if (drift.length > 0) {
-      console.warn(chalk.yellow("Environment drift detected (proceeding with --ignore-drift):"));
-      for (const d of drift) console.warn(`  • ${d}`);
     }
   }
 

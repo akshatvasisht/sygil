@@ -15,7 +15,7 @@ import { WorkflowRunStateSchema } from "@sygil/shared";
 
 const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
-export async function resumeCommand(runId: string, options: { ignoreDrift?: boolean } = {}): Promise<void> {
+export async function resumeCommand(runId: string, options: { checkDrift?: boolean } = {}): Promise<void> {
   // Reject runIds with path-traversal characters before constructing any path.
   // Mirror of `replay.ts`'s guard — without this, `sygil resume "../../etc/passwd"`
   // probes for `<configDir>/runs/../../etc/passwd.json` and the differential error
@@ -136,8 +136,12 @@ export async function resumeCommand(runId: string, options: { ignoreDrift?: bool
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
 
-  // Drift detection: compare stored environment snapshot against current environment.
-  if (state.environment) {
+  // Drift detection (opt-in via --check-drift). When the flag is set and the
+  // checkpoint stored an environment snapshot, refuse to resume on any
+  // version/key/platform delta. Default behavior is to proceed silently —
+  // most resumes are routine ("agent crashed, run again") and treating any
+  // version bump as a hard block was too noisy in practice.
+  if (options.checkDrift && state.environment) {
     let drift: string[] = [];
     try {
       const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
@@ -145,14 +149,11 @@ export async function resumeCommand(runId: string, options: { ignoreDrift?: bool
     } catch {
       // Drift check failure must not block resume
     }
-    if (drift.length > 0 && !options.ignoreDrift) {
+    if (drift.length > 0) {
       console.warn(chalk.yellow("Environment drift detected:"));
       for (const d of drift) console.warn(`  • ${d}`);
-      console.warn(chalk.dim("Pass --ignore-drift to proceed."));
+      console.warn(chalk.dim("Drop --check-drift to proceed without the check."));
       process.exit(1);
-    } else if (drift.length > 0) {
-      console.warn(chalk.yellow("Environment drift detected (proceeding with --ignore-drift):"));
-      for (const d of drift) console.warn(`  • ${d}`);
     }
   }
 

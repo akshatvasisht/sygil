@@ -40,32 +40,42 @@ export async function exportCommand(
   options: ExportOptions = {},
 ): Promise<void> {
   const templatesDir = getTemplatesDir();
+  const experimentalDir = join(templatesDir, "experimental");
 
-  // Find the template file
-  const templateFile = join(templatesDir, `${templateName}.json`);
-
+  // Find the template file. Check the canonical templates dir first, then
+  // fall through to templates/experimental/. Export still works for any
+  // bundled template — only `sygil list` hides experimental ones by default.
+  let templateFile = join(templatesDir, `${templateName}.json`);
   let content: string;
   try {
     content = await readFile(templateFile, "utf8");
   } catch {
-    // Template not found — list available templates
-    let available: string[] = [];
+    templateFile = join(experimentalDir, `${templateName}.json`);
     try {
-      const files = await readdir(templatesDir);
-      available = files
-        .filter((f) => f.endsWith(".json"))
-        .map((f) => f.replace(/\.json$/, ""));
+      content = await readFile(templateFile, "utf8");
     } catch {
-      // ignore
-    }
+      // Template not found in either dir — list available templates from both
+      let available: string[] = [];
+      try {
+        const [main, experimental] = await Promise.all([
+          readdir(templatesDir).catch(() => [] as string[]),
+          readdir(experimentalDir).catch(() => [] as string[]),
+        ]);
+        available = [...main, ...experimental]
+          .filter((f) => f.endsWith(".json"))
+          .map((f) => f.replace(/\.json$/, ""));
+      } catch {
+        // ignore
+      }
 
-    console.error(chalk.red(`Template "${templateName}" not found.`));
-    if (available.length > 0) {
-      console.error(chalk.dim(`Available templates: ${available.join(", ")}`));
-    } else {
-      console.error(chalk.dim("No templates found."));
+      console.error(chalk.red(`Template "${templateName}" not found.`));
+      if (available.length > 0) {
+        console.error(chalk.dim(`Available templates: ${available.join(", ")}`));
+      } else {
+        console.error(chalk.dim("No templates found."));
+      }
+      process.exit(1);
     }
-    process.exit(1);
   }
 
   // Validate the bundled template before writing to the user's disk.

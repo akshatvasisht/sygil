@@ -83,6 +83,13 @@ export interface RunOptions {
    * `WsMonitorServer.setPrometheusMetrics` from the command layer.
    */
   metricsObserver?: MetricsObserver;
+  /**
+   * Opt-in: construct the content-addressable NodeCache on `run()`.
+   * Default false. Wire from `.sygil/config.json > performance.nodeCache`.
+   * `resume()` always runs without cache regardless — re-streaming a
+   * partially-completed run shouldn't short-circuit through stored output.
+   */
+  nodeCacheEnabled?: boolean;
 }
 
 /** Minimal interface so the scheduler doesn't depend on the full PrometheusMetrics class. */
@@ -203,8 +210,12 @@ export class WorkflowScheduler extends EventEmitter {
     }
     const runDir = join(process.cwd(), ".sygil", "runs", runId);
     this.eventRecorder = new EventRecorder(runDir);
-    const cacheDir = join(process.cwd(), ".sygil", "cache");
-    this.nodeCache = new NodeCache(cacheDir);
+    if (options.nodeCacheEnabled === true) {
+      const cacheDir = join(process.cwd(), ".sygil", "cache");
+      this.nodeCache = new NodeCache(cacheDir);
+    } else {
+      this.nodeCache = null;
+    }
     this.contentHashes.clear();
     this.monitor.emit({ type: "workflow_start", workflowId, graph: this.workflow });
 

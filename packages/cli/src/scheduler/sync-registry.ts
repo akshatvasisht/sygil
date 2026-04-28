@@ -38,6 +38,12 @@ export interface Release {
   release(): void;
 }
 
+/**
+ * @experimental Workflow-level mutex/semaphore sync keys are an experimental
+ * surface in v0.x. First-acquire-wins semantics on `limit` and the precise
+ * acquire-before-pool-slot ordering may change without a deprecation window
+ * once real-user use cases land. See `agentcontext/positioning.md`.
+ */
 export class SyncRegistry {
   private slots = new Map<string, SyncSlot>();
   private weights: Map<string, number>;
