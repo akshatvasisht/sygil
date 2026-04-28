@@ -67,15 +67,32 @@ describe("CodexCLIAdapter", () => {
 
   // -------------------------------------------------------------------------
   describe("isAvailable()", () => {
+    const originalKey = process.env["OPENAI_API_KEY"];
+
+    afterEach(() => {
+      if (originalKey === undefined) delete process.env["OPENAI_API_KEY"];
+      else process.env["OPENAI_API_KEY"] = originalKey;
+    });
+
     it("returns false when 'codex' binary is not in PATH", async () => {
       mockExecSync.mockImplementation(() => { throw new Error("not found"); });
+      process.env["OPENAI_API_KEY"] = "sk-test";
 
       const result = await adapter.isAvailable();
       expect(result).toBe(false);
     });
 
-    it("returns true when 'codex' binary is available", async () => {
+    it("returns false when binary is present but OPENAI_API_KEY is unset", async () => {
       mockExecSync.mockReturnValue("");
+      delete process.env["OPENAI_API_KEY"];
+
+      const result = await adapter.isAvailable();
+      expect(result).toBe(false);
+    });
+
+    it("returns true when binary is present and OPENAI_API_KEY is set", async () => {
+      mockExecSync.mockReturnValue("");
+      process.env["OPENAI_API_KEY"] = "sk-test";
 
       const result = await adapter.isAvailable();
       expect(result).toBe(true);

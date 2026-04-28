@@ -13,6 +13,7 @@ import { waitForDoneOrTimeout } from "./await-done.js";
 import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS } from "./constants.js";
 import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
+import { extractJsonFromOutput } from "./extract-json.js";
 import { logger } from "../utils/logger.js";
 
 /** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
@@ -41,10 +42,14 @@ export class ClaudeCLIAdapter implements AgentAdapter {
   async isAvailable(): Promise<boolean> {
     try {
       execSync("which claude", { stdio: "ignore" });
-      return true;
     } catch {
       return false;
     }
+    // Require an API key — spawning the CLI without one surfaces an auth
+    // failure only after the process starts, which the scheduler treats as
+    // a crashed node. Better to report unavailable up front.
+    if (!process.env["ANTHROPIC_API_KEY"]) return false;
+    return true;
   }
 
   async getVersion(): Promise<string | null> {
@@ -365,19 +370,4 @@ export class ClaudeCLIAdapter implements AgentAdapter {
   }
 }
 
-/**
- * Best-effort: try to extract the last JSON object from a text string.
- * Iterates candidate matches from last to first, returning the first that parses.
- */
-function extractJsonFromOutput(text: string): unknown | undefined {
-  const matches = text.match(/\{[\s\S]*\}/g);
-  if (!matches) return undefined;
-  for (let i = matches.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(matches[i]!);
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
+// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

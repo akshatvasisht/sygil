@@ -15,6 +15,7 @@ import { sanitizeEndpointForDisplay } from "../monitor/otlp-push.js";
 import { WorkflowWatcher } from "../utils/watcher.js";
 import { logger } from "../utils/logger.js";
 import { trackEvent } from "../utils/telemetry.js";
+import { topoSort } from "../utils/topo-sort.js";
 import {
   createTerminalMonitor,
   formatEventSummary,
@@ -331,7 +332,7 @@ export async function runCommand(
   }
 
   // 6. Compute topological node order for display
-  const nodeOrder = topoSort(workflow);
+  const nodeOrder = topoSort(Object.keys(workflow.nodes), workflow.edges);
 
   // 7. Set up monitoring display
   const isTTY = Boolean(process.stdout.isTTY);
@@ -589,34 +590,3 @@ export async function runCommand(
   }
 }
 
-/** Kahn's algorithm topological sort for display ordering. Falls back to Object.keys order. */
-function topoSort(workflow: { nodes: Record<string, unknown>; edges: Array<{ from: string; to: string; isLoopBack?: boolean }> }): string[] {
-  const nodeIds = Object.keys(workflow.nodes);
-  const inDegree = new Map<string, number>();
-  for (const id of nodeIds) inDegree.set(id, 0);
-
-  const forwardEdges = workflow.edges.filter(e => !e.isLoopBack);
-  for (const e of forwardEdges) {
-    inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1);
-  }
-
-  const queue: string[] = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) queue.push(id);
-  }
-
-  const sorted: string[] = [];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    sorted.push(current);
-    for (const e of forwardEdges) {
-      if (e.from === current) {
-        const newDeg = (inDegree.get(e.to) ?? 1) - 1;
-        inDegree.set(e.to, newDeg);
-        if (newDeg === 0) queue.push(e.to);
-      }
-    }
-  }
-
-  return sorted.length === nodeIds.length ? sorted : nodeIds;
-}
