@@ -13,7 +13,6 @@
 import { readFile, writeFile, mkdir, copyFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve as pathResolve, basename, dirname } from "node:path";
-import { createHash } from "node:crypto";
 import type { WorkflowGraph } from "@sygil/shared";
 import { SygilManifestSchema } from "@sygil/shared";
 import type { SygilManifest } from "@sygil/shared";
@@ -311,11 +310,4 @@ export async function isBundleDir(p: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Derive a deterministic short hash for environment snapshot use
-// ---------------------------------------------------------------------------
-export function sha256Hex(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
 }

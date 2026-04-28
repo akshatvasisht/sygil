@@ -35,11 +35,16 @@ import { HookRunner, hookResultToEvent } from "../hooks/hook-runner.js";
 import type { HookContext, HookType, RunReason } from "../hooks/hook-runner.js";
 import type { HooksConfig } from "../utils/config.js";
 import { buildEnvironmentSnapshot } from "./environment.js";
+import type { AdapterFactory } from "./environment.js";
 import { SyncRegistry } from "./sync-registry.js";
 import type { Release } from "./sync-registry.js";
 
 const execFileAsync = promisify(execFile);
 
+// Minimal sleep used for rate-limit pauses. Does NOT use node:timers/promises —
+// the tests use vi.useFakeTimers() which does not fake the promises variant by
+// default, so replacing this wrapper breaks the fake-timer advance in
+// index.rate-limit.test.ts. The 3 LOC saved isn't worth the test regression.
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -54,8 +59,6 @@ function summarizeGateType(gate: { conditions: Array<{ type: string }> }): strin
   if (gate.conditions.length === 1) return gate.conditions[0]!.type;
   return "mixed";
 }
-
-type AdapterFactory = (type: AdapterType) => AgentAdapter;
 
 interface RunResult {
   runId: string;
@@ -267,6 +270,11 @@ export class WorkflowScheduler extends EventEmitter {
         workflowId,
         message,
       };
+      // `currentNodeId` may not point at the actual failing node when parallel
+      // execution is in flight (see launch-loop comment above). The aggregate
+      // `message` field already enumerates every failed node — consumers should
+      // prefer that. `nodeId` is preserved for back-compat with the optional
+      // single-node-attribution use case (rate-limit retry loops, etc.).
       if (runState.currentNodeId !== undefined) {
         errorEvent.nodeId = runState.currentNodeId;
       }
@@ -511,7 +519,12 @@ export class WorkflowScheduler extends EventEmitter {
       // Sort ready nodes by descending critical-path weight for priority scheduling
       ready.sort((a, b) => (criticalPathWeights.get(b) ?? 0) - (criticalPathWeights.get(a) ?? 0));
 
-      // Launch all ready nodes concurrently (fire-and-forget; each calls wake() on finish)
+      // Launch all ready nodes concurrently (fire-and-forget; each calls wake() on finish).
+      // NB: `runState.currentNodeId` is overwritten by every iteration here; with parallel
+      // dispatch it ends up as the last-launched node, not "the active node" (there are
+      // multiple). The field is best-effort informational only — see the catch-block use
+      // at run() for the read site, and the workflow_error event consumer in
+      // packages/web/src/hooks/useWorkflowMonitor.ts which intentionally ignores `nodeId`.
       for (const nodeId of ready) {
         running.add(nodeId);
         runState.currentNodeId = nodeId;

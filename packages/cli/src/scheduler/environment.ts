@@ -78,7 +78,7 @@ async function probeAdapterVersion(adapter: AgentAdapter): Promise<string | null
 // Snapshot builder
 // ---------------------------------------------------------------------------
 
-type AdapterFactory = (type: AdapterType) => AgentAdapter;
+export type AdapterFactory = (type: AdapterType) => AgentAdapter;
 
 /**
  * Build an environment snapshot for the given workflow.

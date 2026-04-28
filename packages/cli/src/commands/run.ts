@@ -388,6 +388,10 @@ export async function runCommand(
     if (activeWatcher) {
       activeWatcher.stop();
       await monitor.stop();
+      // Watch-mode bypasses the non-watch finally block at line ~542 that
+      // calls ctx.teardown() — without this call, --watch + --metrics-port
+      // leaks the metrics server and skips the final OTLP flush on Ctrl+C.
+      try { await ctx.teardown(); } catch { /* best-effort */ }
       process.exit(0);
     }
   };
