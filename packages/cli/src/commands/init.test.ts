@@ -194,6 +194,14 @@ describe("initCommand", () => {
     expect(output).toContain("Config written to");
   });
 
+  it("prints a next-step hint pointing at sygil export and sygil run", async () => {
+    await initCommand();
+
+    const output = consoleLogSpy.mock.calls.flat().join("\n");
+    expect(output).toContain("sygil export tdd-feature ./my-workflow.json");
+    expect(output).toContain("sygil run ./my-workflow.json");
+  });
+
   it("includes version and detectedAt in written config", async () => {
     await initCommand();
 

@@ -18,10 +18,16 @@ export interface RegistryIndex {
   templates: RegistryEntry[];
 }
 
-export const REGISTRY_INDEX_URL = "https://raw.githubusercontent.com/sigil-dev/registry/main/index.json";
+export const REGISTRY_INDEX_URL = "https://raw.githubusercontent.com/sygil-dev/registry/main/index.json";
 export const USER_TEMPLATES_DIR = () => join(homedir(), ".sygil", "templates");
 
-function validateTemplateUrl(url: string): void {
+/**
+ * Whitelist URL schemes for any remote template source. Rejects `file://`,
+ * `ftp://`, `gopher://`, `data:`, and other Node-fetch-unsupported schemes
+ * with a clear error rather than letting fetch throw a generic one. Also
+ * surfaced to `import-template`'s URL fetch path for parity.
+ */
+export function validateTemplateUrl(url: string): void {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("Template URL must use http or https protocol");

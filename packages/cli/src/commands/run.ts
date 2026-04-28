@@ -11,6 +11,7 @@ import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT, WorkflowGraphSchema } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
 import { buildSchedulerContext, formatMetricsUrl } from "./_scheduler-bootstrap.js";
+import { sanitizeEndpointForDisplay } from "../monitor/otlp-push.js";
 import { WorkflowWatcher } from "../utils/watcher.js";
 import { logger } from "../utils/logger.js";
 import { trackEvent } from "../utils/telemetry.js";
@@ -291,7 +292,7 @@ export async function runCommand(
   if (ctx.metricsPort !== null && ctx.metricsAuthToken !== null) {
     console.log(formatMetricsUrl(ctx.metricsPort, ctx.metricsAuthToken) + "\n");
     if (ctx.otlpEndpoint) {
-      console.log(chalk.dim(`  OTLP export: ${ctx.otlpEndpoint}\n`));
+      console.log(chalk.dim(`  OTLP export: ${sanitizeEndpointForDisplay(ctx.otlpEndpoint)}\n`));
     }
   }
 

@@ -1,11 +1,11 @@
 import chalk from "chalk";
 import { readFile, writeFile, mkdir, access, unlink, rm, copyFile, readdir } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join, basename, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { loadWorkflow } from "../utils/workflow.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
-import { listUserTemplates, USER_TEMPLATES_DIR } from "../utils/registry.js";
+import { listUserTemplates, USER_TEMPLATES_DIR, validateTemplateUrl } from "../utils/registry.js";
 import {
   readBundleManifest,
   extractBundle,
@@ -29,6 +29,12 @@ function classifyArg(arg: string): "url" | "file" | "name" {
 async function fetchOrRead(urlOrPath: string): Promise<string> {
   // Check if it's a URL
   if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
+    // Scheme allowlist parity with utils/registry.ts. Without this, exotic
+    // schemes (file://, gopher://, ftp://) embedded after a startsWith match
+    // would surface as opaque fetch errors. The startsWith check above already
+    // gates the obvious cases; this defends against URLs whose tail re-parses
+    // to a different scheme via `new URL()`.
+    validateTemplateUrl(urlOrPath);
     // 10s timeout — without an AbortSignal, a hung remote would block the
     // import-template command indefinitely with no user feedback. Matches the
     // `installTemplate` helper in utils/registry.ts.
@@ -173,6 +179,19 @@ async function importBundle(sourcePath: string): Promise<void> {
   }
 
   const destDir = join(userTemplatesDir, templateName);
+  // Defense-in-depth containment check, mirroring `installTemplate` in
+  // utils/registry.ts. The denylist sanitization above strips `/`, `\`, and
+  // `..` so escape vectors aren't reachable on POSIX, but post-join verify
+  // keeps parity with the registry path and guards against future regex
+  // weakening.
+  const resolvedDest = resolve(destDir);
+  const resolvedBase = resolve(userTemplatesDir) + sep;
+  if (!resolvedDest.startsWith(resolvedBase)) {
+    if (tempExtractDir) await rm(tempExtractDir, { recursive: true, force: true });
+    console.error(chalk.red(`Bundle name "${templateName}" resolves outside the templates directory`));
+    process.exit(1);
+    return;
+  }
   await mkdir(destDir, { recursive: true });
 
   // Copy all files from bundleDir into destDir (preserving structure)
@@ -305,6 +324,14 @@ export async function importTemplateCommand(urlOrPath: string): Promise<void> {
   await mkdir(userTemplatesDir, { recursive: true });
 
   const destPath = join(userTemplatesDir, `${templateName}.json`);
+  // Defense-in-depth: same parity check as the bundle path above.
+  const resolvedDest = resolve(destPath);
+  const resolvedBase = resolve(userTemplatesDir) + sep;
+  if (!resolvedDest.startsWith(resolvedBase)) {
+    console.error(chalk.red(`Template name "${templateName}" resolves outside the templates directory`));
+    process.exit(1);
+    return;
+  }
   await writeFileAtomic(destPath, content);
 
   console.log(chalk.green(`✓ Imported template "${templateName}" → ${destPath}`));

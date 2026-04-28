@@ -32,6 +32,7 @@ vi.mock("../utils/workflow.js", () => ({
 vi.mock("../utils/registry.js", () => ({
   listUserTemplates: vi.fn().mockResolvedValue([]),
   USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sygil/templates"),
+  validateTemplateUrl: vi.fn(), // no-op pass-through; real function is exercised by registry.test.ts
 }));
 
 import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
@@ -175,4 +176,5 @@ describe("importTemplateCommand", () => {
     // Should derive name from the file basename
     expect(output).toContain("my-cool-template");
   });
+
 });

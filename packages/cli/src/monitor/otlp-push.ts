@@ -109,3 +109,23 @@ function normalizeEndpoint(raw: string): string {
   if (trimmed.endsWith("/v1/metrics")) return trimmed;
   return `${trimmed}/v1/metrics`;
 }
+
+/**
+ * Strip embedded `user:password@` userinfo before printing the endpoint to
+ * stdout / logs. Without this, an operator who sets
+ * `OTEL_EXPORTER_OTLP_ENDPOINT=https://user:pass@collector.example/v1/metrics`
+ * sees the credential in their terminal scrollback, shell history, CI logs,
+ * and any captured stdout artifacts. Returns the original string unmodified
+ * if it doesn't parse as a URL — caller already accepted it.
+ */
+export function sanitizeEndpointForDisplay(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (url.username === "" && url.password === "") return endpoint;
+    url.username = "";
+    url.password = "";
+    return `${url.toString()} (credentials redacted)`;
+  } catch {
+    return endpoint;
+  }
+}

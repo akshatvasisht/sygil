@@ -184,3 +184,41 @@ describe("OtlpPusher", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });
+
+describe("sanitizeEndpointForDisplay — credential redaction", () => {
+  it("redacts user:password embedded in https URL", async () => {
+    const { sanitizeEndpointForDisplay } = await import("./otlp-push.js");
+    const out = sanitizeEndpointForDisplay("https://alice:hunter2@collector.example/v1/metrics");
+    expect(out).not.toContain("hunter2");
+    expect(out).not.toContain("alice");
+    expect(out).toContain("collector.example");
+    expect(out).toContain("(credentials redacted)");
+  });
+
+  it("redacts password-only userinfo", async () => {
+    const { sanitizeEndpointForDisplay } = await import("./otlp-push.js");
+    const out = sanitizeEndpointForDisplay("https://:hunter2@collector.example/v1/metrics");
+    expect(out).not.toContain("hunter2");
+    expect(out).toContain("collector.example");
+  });
+
+  it("returns endpoint unchanged when no userinfo present", async () => {
+    const { sanitizeEndpointForDisplay } = await import("./otlp-push.js");
+    const url = "https://collector.example/v1/metrics";
+    expect(sanitizeEndpointForDisplay(url)).toBe(url);
+  });
+
+  it("returns input unchanged when not a parseable URL", async () => {
+    const { sanitizeEndpointForDisplay } = await import("./otlp-push.js");
+    const garbage = "not a url at all";
+    expect(sanitizeEndpointForDisplay(garbage)).toBe(garbage);
+  });
+
+  it("redacts credentials in http (non-TLS) URLs too", async () => {
+    const { sanitizeEndpointForDisplay } = await import("./otlp-push.js");
+    const out = sanitizeEndpointForDisplay("http://bob:secret@collector.local:4318/v1/metrics");
+    expect(out).not.toContain("secret");
+    expect(out).not.toContain("bob");
+    expect(out).toContain("collector.local");
+  });
+});

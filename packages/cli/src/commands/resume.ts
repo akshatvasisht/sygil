@@ -9,10 +9,22 @@ import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
 import { getAdapter } from "../adapters/index.js";
 import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
+import { isContainedIn } from "../gates/index.js";
 import type { WorkflowRunState, AgentEvent } from "@sygil/shared";
 import { WorkflowRunStateSchema } from "@sygil/shared";
 
+const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
 export async function resumeCommand(runId: string, options: { ignoreDrift?: boolean } = {}): Promise<void> {
+  // Reject runIds with path-traversal characters before constructing any path.
+  // Mirror of `replay.ts`'s guard — without this, `sygil resume "../../etc/passwd"`
+  // probes for `<configDir>/runs/../../etc/passwd.json` and the differential error
+  // ("file not found" vs "JSON parse failure") leaks file existence.
+  if (!RUN_ID_RE.test(runId)) {
+    console.error(chalk.red(`Invalid runId "${runId}": must be alphanumeric/_/-`));
+    process.exit(1);
+  }
+
   // Reap orphan `.git/worktrees/` entries from prior SIGINT'd runs.
   // Cheap, idempotent, and silent on non-git directories.
   await pruneWorktrees();
@@ -21,7 +33,12 @@ export async function resumeCommand(runId: string, options: { ignoreDrift?: bool
 
   // Load the persisted run state
   const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
-  const stateFile = join(configDir, "runs", `${runId}.json`);
+  const runsRoot = join(configDir, "runs");
+  const stateFile = join(runsRoot, `${runId}.json`);
+  if (!isContainedIn(stateFile, runsRoot)) {
+    spinner.fail(`Invalid runId "${runId}": resolved path escapes the runs directory`);
+    process.exit(1);
+  }
   let state: WorkflowRunState;
 
   let raw: string;
