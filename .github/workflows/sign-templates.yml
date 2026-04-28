@@ -10,52 +10,52 @@ name: Sign Templates
 # pinned in template-signature.ts's EXPECTED_IDENTITY_REGEXP.
 #
 # Scope:
-# - release.yml signs inline on push-to-main so sidecars ride inside the
-# tarball that `npm publish` uploads. That is the source of every signed
-# template users actually install.
-# - This workflow is a standalone entry point for operational re-signing
-# via workflow_dispatch. Sidecars produced this way are uploaded as a
-# build artifact (90-day retention) and are not automatically committed
-# or published; the operator is responsible for distribution.
+#   - release.yml signs inline on push-to-main so sidecars ride inside the
+#     tarball that `npm publish` uploads. That is the source of every signed
+#     template users actually install.
+#   - This workflow is a standalone entry point for operational re-signing
+#     via workflow_dispatch. Sidecars produced this way are uploaded as a
+#     build artifact (90-day retention) and are not automatically committed
+#     or published; the operator is responsible for distribution.
 
 on:
- workflow_call:
- workflow_dispatch:
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
- sign:
- runs-on: ubuntu-latest
- permissions:
- # Required for keyless Sigstore OIDC signing via GitHub Actions.
- id-token: write
- contents: read
- steps:
- - uses: actions/checkout@v4
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for keyless Sigstore OIDC signing via GitHub Actions.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
 
- - name: Install cosign
- uses: sigstore/cosign-installer@v3
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
 
- - name: Sign bundled templates
- run: |
- set -euo pipefail
- shopt -s nullglob
- templates=(packages/cli/templates/*.json)
- if ((${#templates[@]} == 0)); then
- echo "No templates to sign." >&2
- exit 1
- fi
- for tpl in "${templates[@]}"; do
- echo "Signing $tpl..."
- cosign sign-blob \
- --yes \
- --bundle "${tpl}.sigstore.json" \
- "$tpl"
- done
+      - name: Sign bundled templates
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          templates=(packages/cli/templates/*.json)
+          if ((${#templates[@]} == 0)); then
+            echo "No templates to sign." >&2
+            exit 1
+          fi
+          for tpl in "${templates[@]}"; do
+            echo "Signing $tpl..."
+            cosign sign-blob \
+              --yes \
+              --bundle "${tpl}.sigstore.json" \
+              "$tpl"
+          done
 
- - name: Upload signatures as artifact
- uses: actions/upload-artifact@v4
- with:
- name: template-signatures
- path: packages/cli/templates/*.sigstore.json
- if-no-files-found: error
- retention-days: 90
+      - name: Upload signatures as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-signatures
+          path: packages/cli/templates/*.sigstore.json
+          if-no-files-found: error
+          retention-days: 90
