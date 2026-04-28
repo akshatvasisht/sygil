@@ -98,11 +98,15 @@ describe("WorkflowScheduler", () => {
     });
 
     it("fails a subsequent node fast via CircuitOpenError and fails over to the next provider", async () => {
-      // Two nodes fanning out, same providers list, so the 2nd node acquires
-      // after the 1st has already tripped the breaker.
+      // Chain nodeA → nodeB so dispatch is forced sequential — the assertion
+      // below ("subsequent acquire fails fast") only makes sense when nodeB
+      // actually starts after the breaker has observed nodeA's failure.
+      // The earlier fanout shape (no edges, parallel-dispatch) raced because
+      // both nodes could call adapter.spawn() on the primary before the
+      // breaker registered the first failure.
       const workflow: WorkflowGraph = {
         version: "1",
-        name: "cb-fanout",
+        name: "cb-chain",
         nodes: {
           nodeA: makeNodeConfig({
             adapter: "claude-sdk",
@@ -119,7 +123,7 @@ describe("WorkflowScheduler", () => {
             ],
           }),
         },
-        edges: [],
+        edges: [{ id: "a_to_b", from: "nodeA", to: "nodeB" }],
       };
       const monitor = createMockMonitor();
 

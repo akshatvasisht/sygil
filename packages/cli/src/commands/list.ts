@@ -8,7 +8,11 @@ import type { AdapterType, WorkflowRunState } from "@sygil/shared";
 
 const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor"];
 
-export async function listCommand(): Promise<void> {
+export interface ListOptions {
+  experimental?: boolean;
+}
+
+export async function listCommand(options: ListOptions = {}): Promise<void> {
   console.log(chalk.bold("\nSygil — adapters & recent runs\n"));
 
   // --- Adapters ---
@@ -28,10 +32,10 @@ export async function listCommand(): Promise<void> {
     name: string;
     description?: string;
     parameters?: Record<string, { type: string; description?: string; required?: boolean }>;
-    source: "bundled" | "user";
+    source: "bundled" | "user" | "experimental";
   }
 
-  async function scanTemplatesDir(dir: string, source: "bundled" | "user"): Promise<TemplateInfo[]> {
+  async function scanTemplatesDir(dir: string, source: TemplateInfo["source"]): Promise<TemplateInfo[]> {
     let files: string[];
     try {
       files = await readdir(dir);
@@ -61,20 +65,28 @@ export async function listCommand(): Promise<void> {
   }
 
   const bundledTemplatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
+  const experimentalTemplatesDir = fileURLToPath(new URL("../../templates/experimental", import.meta.url));
   const userTemplatesDir = join(homedir(), ".sygil", "templates");
 
-  const [bundledTemplates, userTemplates] = await Promise.all([
+  // Experimental templates are only listed when explicitly requested via
+  // --experimental. Their code stays in the tarball; just keep them out of
+  // the default discovery path so newcomers don't pick `optimize` on day 1.
+  const [bundledTemplates, experimentalTemplates, userTemplates] = await Promise.all([
     scanTemplatesDir(bundledTemplatesDir, "bundled"),
+    options.experimental ? scanTemplatesDir(experimentalTemplatesDir, "experimental") : Promise.resolve([]),
     scanTemplatesDir(userTemplatesDir, "user"),
   ]);
 
-  const allTemplates = [...bundledTemplates, ...userTemplates];
+  const allTemplates = [...bundledTemplates, ...experimentalTemplates, ...userTemplates];
 
   if (allTemplates.length === 0) {
     console.log(chalk.dim("  No templates found."));
   } else {
     for (const tpl of allTemplates) {
-      const sourceTag = tpl.source === "user" ? chalk.dim(" [user]") : "";
+      const sourceTag =
+        tpl.source === "user" ? chalk.dim(" [user]")
+        : tpl.source === "experimental" ? chalk.yellow(" [experimental]")
+        : "";
       console.log(`  ${chalk.bold(tpl.name)}${sourceTag}`);
       if (tpl.description) {
         console.log(`    ${chalk.dim(tpl.description)}`);
@@ -88,6 +100,9 @@ export async function listCommand(): Promise<void> {
           .join(", ");
         console.log(`    ${chalk.dim("params:")} ${paramList}`);
       }
+    }
+    if (!options.experimental) {
+      console.log(chalk.dim("\n  (use `sygil list --experimental` to see experimental templates)"));
     }
   }
 

@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * @experimental Visual workflow editor. The supported authoring surface is
+ * direct edits to `workflow.json`; this component is a demo-grade visualizer
+ * with several advanced NodeConfig fields not yet round-trippable. May change
+ * shape, move to a side branch, or be removed in v0.x. See
+ * `agentcontext/positioning.md`.
+ */
+
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   ReactFlow,

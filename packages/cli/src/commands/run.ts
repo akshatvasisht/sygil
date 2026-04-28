@@ -43,14 +43,22 @@ async function resolveWorkflowPath(workflowPath: string): Promise<string> {
   }
   // Bare template-name shape: lowercase, digits, hyphens, starts with a letter
   if (/^[a-z][a-z0-9-]*$/.test(workflowPath)) {
-    // Mirror the pattern from export.ts: URL("../../templates", import.meta.url)
+    // Mirror the pattern from export.ts: URL("../../templates", import.meta.url).
+    // Probe the canonical templates dir first, then templates/experimental/ so
+    // bare names still resolve for experimental templates (e.g. `sygil run
+    // optimize`) even though `sygil list` hides them from default output.
     const templatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
-    const candidate = path.join(templatesDir, `${workflowPath}.json`);
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // Not found in bundled templates — fall through and let loadWorkflow report the error
+    const candidates = [
+      path.join(templatesDir, `${workflowPath}.json`),
+      path.join(templatesDir, "experimental", `${workflowPath}.json`),
+    ];
+    for (const candidate of candidates) {
+      try {
+        await access(candidate);
+        return candidate;
+      } catch {
+        // try next candidate
+      }
     }
   }
   return workflowPath;
@@ -470,6 +478,7 @@ export async function runCommand(
       ...(options.isolate !== undefined ? { isolate: options.isolate } : {}),
       ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
       ...(ctx.prometheusMetrics !== null ? { metricsObserver: ctx.prometheusMetrics } : {}),
+      ...(tierConfig?.performance?.nodeCache === true ? { nodeCacheEnabled: true } : {}),
     };
     // Pass workflow.name (not workflowPath) as the canonical workflowId so it
     // matches the `workflow=` URL slug the web monitor forwards in `subscribe`.

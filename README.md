@@ -133,6 +133,15 @@ State (checkpoints, NDJSON logs) persists to whatever you mount at
 The adapter is set per node in `workflow.json`. `sygil init` checks which
 adapters are available in the current environment.
 
+### Maturity
+
+`claude-sdk` and `claude-cli` are the primary tested paths and what we run
+internally on every release. `codex`, `cursor`, `gemini-cli`, and `local-oai`
+pass their unit + integration tests on each commit but haven't been
+battle-hardened in long-running production use yet — adapter-specific edge
+cases (rate-limit shapes, resume semantics, tool-allowlist quirks) will
+likely surface as users exercise them. File issues if you hit one.
+
 ### Local models
 
 The `local-oai` adapter defaults to Ollama at `http://localhost:11434/v1` and
