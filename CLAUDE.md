@@ -11,8 +11,6 @@ This file captures **load-bearing invariants and gotchas** — the non-obvious c
 - Testing strategy → `docs/TESTING.md`
 - Rationale and rejected alternatives → `agentcontext/decisions.md`
 
----
-
 ## Repository layout
 
 Turborepo monorepo, npm workspaces (`packages/*`):
@@ -25,8 +23,6 @@ packages/web/      Next.js 14 web UI            (@sygil/web)
 
 Dependency graph: `cli → @sygil/shared`, `web → @sygil/shared`, `shared → nothing`.
 
----
-
 ## Working in the codebase
 
 1. **Reproduce first.** Read the source and the failing test, then run it and observe the actual error before proposing a fix.
@@ -34,8 +30,6 @@ Dependency graph: `cli → @sygil/shared`, `web → @sygil/shared`, `shared → 
 3. **Parallelize research.** For tasks spanning CLI + web + shared, research each area independently before changing code.
 4. **Fix root causes, not symptoms.** No `// @ts-ignore` unless the error is a missing optional peer dep (e.g. `@anthropic-ai/claude-agent-sdk`).
 5. **Verify TS after edits** — `npx tsc --noEmit` in the affected package.
-
----
 
 ## Non-obvious conventions
 
@@ -61,8 +55,6 @@ Web tsconfig disables both (Next.js incompatibility). Don't carry those assumpti
 ### Platform
 
 Node.js ≥20.11.0, POSIX only. `packages/cli/package.json` declares `"os": ["!win32"]`. Windows users must use WSL2.
-
----
 
 ## Architecture invariants
 
@@ -136,8 +128,6 @@ Project scripts in `.sygil/config.json > hooks: { preNode?, postNode?, preGate?,
 - Hook env includes `SYGIL_RUN_REASON` — `"new"` for `sygil run`, `"resume"` for `sygil resume`, `"fork"` for `sygil fork`. External tooling (cache-warmers, log truncators) keys off this to fire side-effects only on fresh starts. The same value lands on every emitted `hook_result` AgentEvent as `runReason` (optional for replay back-compat).
 - Every hook emits a `hook_result` AgentEvent → replay sees the same hook sequence.
 
----
-
 ## Security invariants
 
 ### Parameter interpolation
@@ -158,8 +148,6 @@ All path-based gate conditions (`file_exists`, `regex`, `script`, `spec_complian
 
 `AbortTree` creates a root `AbortController` per workflow; each node gets a child signal via `AbortSignal.any([root, child])`. `cancel()` propagates to gate `execFileAsync`, worktree git ops, adapter streaming loops, and human-review wait promises.
 
----
-
 ## Web package invariants
 
 - **React Flow edge type:** `"sygil"` (not `"default"`). Drag MIME: `"application/sygil-node-type"`.
@@ -170,8 +158,6 @@ All path-based gate conditions (`file_exists`, `regex`, `script`, `spec_complian
 - **Contrast floor** — `text-dim` (#71717a, ~4.5:1) is the minimum for informational text. No `text-subtle` / `text-muted`.
 - **Touch targets** — interactive elements use `min-h-[44px]`.
 - After any `@sygil/shared` type change or package rename: `rm -rf packages/web/.next`.
-
----
 
 ## Bundle format (sygil export --bundle)
 
@@ -194,8 +180,6 @@ With `--format=tarball` the directory is packed into `<output>.tar.gz` (requires
 
 After import, files land at `~/.sygil/templates/<name>/`. Manifest validation uses `SygilManifestSchema.safeParse`; malformed manifests are rejected. Missing adapters produce a warning (not a hard error).
 
----
-
 ## Environment snapshot in WorkflowRunState
 
 `WorkflowRunState.environment` (optional, backward-compat) captures:
@@ -207,8 +191,6 @@ After import, files land at `~/.sygil/templates/<name>/`. Manifest validation us
 On `sygil resume` and `sygil fork`, the stored snapshot is compared to a fresh one via `diffEnvironment`. Any difference (version bumps, key rotations, platform changes) is printed as a yellow warning and the command exits 1. Pass `--ignore-drift` to proceed anyway.
 
 Old checkpoints without the `environment` field still parse and resume/fork without drift warnings.
-
----
 
 ## Common pitfalls
 

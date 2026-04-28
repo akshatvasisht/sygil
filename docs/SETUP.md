@@ -22,17 +22,40 @@ This installs dependencies across all packages (`cli`, `web`, `shared`) via npm 
 
 ## Environment variables
 
+**Adapter credentials** (supply the ones whose adapters you use):
+
 | Variable | Required by | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `claude-sdk`, `claude-cli` adapters | API key for Claude SDK / CLI sessions |
-| `SYGIL_TELEMETRY` | CLI | Set to `0` to disable telemetry (opt-in is default-off) |
-| `SYGIL_UI_DEV` | CLI (dev) | Set to `1` to use the Next.js dev server for the monitor UI |
+| `ANTHROPIC_API_KEY` | `claude-sdk`, `claude-cli` | Claude SDK / CLI sessions |
+| `GEMINI_API_KEY` | `gemini-cli` | Google Gemini CLI adapter |
+| `CURSOR_API_KEY` | `cursor-cli` | Cursor CLI adapter |
+| `OPENAI_API_KEY` | `codex-cli` | OpenAI (used by Codex CLI) |
+| `SYGIL_LOCAL_OAI_URL` | `local-oai` | OpenAI-compatible endpoint for local models (Ollama, vLLM, LM Studio, …). Default: `http://localhost:11434/v1` |
+| `SYGIL_LOCAL_OAI_KEY` | `local-oai` | Auth key for the local endpoint (often a placeholder like `ollama`) |
 
-Create a `.env` file in the project root if needed:
+**Observability** (optional):
+
+| Variable | Description |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint for OpenTelemetry export. See `docs/OBSERVABILITY.md`. |
+
+**Runtime toggles**:
+
+| Variable | Description |
+|---|---|
+| `SYGIL_TELEMETRY` | Set to `0` to disable telemetry (opt-in; default off) |
+| `SYGIL_UI_DEV` | Set to `1` to use the Next.js dev server for the monitor UI (development only) |
+
+Create a `.env` file in your project's working directory:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_API_KEY=...
 ```
+
+Sygil auto-loads `.env` from the current working directory at startup
+via Node's native `process.loadEnvFile()` (Node 20.12+). See
+`.env.example` at the repo root for all supported variables.
 
 ## Building
 
@@ -52,7 +75,7 @@ cd packages/cli
 npm run dev
 
 # After build — run the compiled binary
-node dist/index.js run examples/tdd-feature.json
+node packages/cli/dist/index.js run tdd-feature "your task"
 ```
 
 ## Running the web UI
