@@ -5,20 +5,25 @@ import { validateCommand } from "./validate.js";
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock("../utils/workflow.js", () => ({
-  loadWorkflow: vi.fn(),
+vi.mock("node:fs/promises", () => ({
+  readFile: vi.fn(),
 }));
 
-// Mock WorkflowGraphSchema so we can test the safeParse path directly.
-vi.mock("@sygil/shared", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@sygil/shared")>();
-  return { ...actual };
-});
+import { readFile } from "node:fs/promises";
 
-import { loadWorkflow } from "../utils/workflow.js";
-import { WorkflowGraphSchema } from "@sygil/shared";
+const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 
-const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
+function validWorkflow(): object {
+  return {
+    version: "1",
+    name: "test-workflow",
+    nodes: {
+      nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hello" },
+      nodeB: { adapter: "echo", model: "test", role: "assistant", prompt: "world" },
+    },
+    edges: [{ id: "a-to-b", from: "nodeA", to: "nodeB" }],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -31,19 +36,15 @@ describe("validateCommand", () => {
   let consoleErrorSpy: MockInstance<any[], any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy return types vary per target
   let processExitSpy: MockInstance<any[], never>;
-  let safeParseOriginal: typeof WorkflowGraphSchema.safeParse;
 
   beforeEach(() => {
     vi.clearAllMocks();
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    // Use a no-op mock so process.exit() does NOT throw — validate.ts calls
-    // process.exit(0) inside a try block, so any thrown error would be caught
-    // and treated as a failure. We just record the call instead.
+    // Use a no-op mock so process.exit() does NOT throw.
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(
-      (_code?: string | number | null | undefined) => undefined as never
+      (_code?: string | number | null | undefined) => undefined as never,
     );
-    safeParseOriginal = WorkflowGraphSchema.safeParse.bind(WorkflowGraphSchema);
   });
 
   afterEach(() => {
@@ -51,126 +52,112 @@ describe("validateCommand", () => {
   });
 
   it("logs success and exits 0 for a valid workflow", async () => {
-    mockLoadWorkflow.mockResolvedValue({
-      version: "1",
-      name: "test-workflow",
-      nodes: {
-        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hello" },
-        nodeB: { adapter: "echo", model: "test", role: "assistant", prompt: "world" },
-      },
-      edges: [{ id: "a-to-b", from: "nodeA", to: "nodeB" }],
-    });
+    mockReadFile.mockResolvedValue(JSON.stringify(validWorkflow()));
 
     await validateCommand("workflow.json");
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Valid")
-    );
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining("2 nodes")
-    );
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining("1 edges")
-    );
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining("Valid"));
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining("2 nodes"));
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining("1 edges"));
     expect(processExitSpy).toHaveBeenCalledWith(0);
     expect(processExitSpy).not.toHaveBeenCalledWith(1);
   });
 
-  it("logs error and exits 1 when loadWorkflow throws (file not found)", async () => {
-    mockLoadWorkflow.mockRejectedValue(
-      new Error('Cannot read workflow file "missing.json": ENOENT: no such file or directory')
+  it("logs error and exits 1 when file is not found", async () => {
+    mockReadFile.mockRejectedValue(
+      Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
     );
 
     await validateCommand("missing.json");
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Cannot read workflow file")
+      expect.stringContaining("Cannot read workflow file"),
     );
     expect(processExitSpy).toHaveBeenCalledWith(1);
     expect(processExitSpy).not.toHaveBeenCalledWith(0);
   });
 
   it("logs error and exits 1 when JSON is invalid", async () => {
-    mockLoadWorkflow.mockRejectedValue(
-      new Error('Workflow file "bad.json" is not valid JSON: Unexpected token }')
-    );
+    mockReadFile.mockResolvedValue("not { valid json");
 
     await validateCommand("bad.json");
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("not valid JSON")
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("not valid JSON"));
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
   it("logs error and exits 1 when schema validation fails (missing required field)", async () => {
-    // loadWorkflow itself throws when schema validation fails
-    mockLoadWorkflow.mockRejectedValue(
-      new Error("Workflow validation failed:\n  - nodes: At least one node is required")
-    );
+    // Missing "nodes" and "edges" fields — schema rejects it.
+    mockReadFile.mockResolvedValue(JSON.stringify({ version: "1", name: "bare" }));
 
     await validateCommand("invalid.json");
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Workflow validation failed")
-    );
+    const allErrors = consoleErrorSpy.mock.calls.flat().join("\n");
+    expect(allErrors).toContain("Workflow validation failed");
+    // Path-prefixed bullet format: "• <path>: <message>"
+    expect(allErrors).toMatch(/• (nodes|edges): /);
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
-  it("prints issues as '• path: message' format when safeParse fails on loaded data", async () => {
-    // Return data that passes loadWorkflow but fails safeParse (we spy on safeParse)
-    const validLooking = {
+  it("prints bad node config issues in '• path: message' format", async () => {
+    const bad = {
       version: "1",
-      name: "test-workflow",
+      name: "bad-node",
       nodes: {
-        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hi" },
+        nodeA: {
+          adapter: "echo",
+          model: "", // fails min(1)
+          role: "assistant",
+          prompt: "hi",
+        },
       },
       edges: [],
     };
-    mockLoadWorkflow.mockResolvedValue(validLooking);
-
-    // Override safeParse to simulate a schema failure on re-validation
-    vi.spyOn(WorkflowGraphSchema, "safeParse").mockReturnValueOnce({
-      success: false,
-      error: {
-        issues: [
-          { path: ["nodes", "nodeA", "timeoutMs"], message: "Expected positive number" },
-        ],
-      },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    mockReadFile.mockResolvedValue(JSON.stringify(bad));
 
     await validateCommand("workflow.json");
 
     const allErrors = consoleErrorSpy.mock.calls.flat().join("\n");
-    expect(allErrors).toContain("• nodes.nodeA.timeoutMs: Expected positive number");
+    expect(allErrors).toContain("• nodes.nodeA.model:");
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 
-  it("handles non-Error thrown values gracefully", async () => {
-    mockLoadWorkflow.mockRejectedValue("some string error");
-
-    await validateCommand("workflow.json");
-
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("some string error")
-    );
-    expect(processExitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it("passes the correct file path to loadWorkflow", async () => {
-    mockLoadWorkflow.mockResolvedValue({
-      version: "1",
-      name: "test",
-      nodes: {
-        nodeA: { adapter: "echo", model: "test", role: "assistant", prompt: "hi" },
-      },
-      edges: [],
-    });
+  it("passes the correct file path to readFile", async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify(validWorkflow()));
 
     await validateCommand("/absolute/path/workflow.json");
 
-    expect(mockLoadWorkflow).toHaveBeenCalledWith("/absolute/path/workflow.json");
+    expect(mockReadFile).toHaveBeenCalledWith("/absolute/path/workflow.json", "utf8");
     expect(processExitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects a workflow whose regex gate has a ReDoS pattern (post-schema invariant)", async () => {
+    // Cycle 14: validate now runs the same post-schema invariants as
+    // loadWorkflow / `sygil run -` stdin. Without this, validate would
+    // pass and `sygil run` would later reject with the load-time guard,
+    // giving false confidence to users who pre-validated.
+    const reDoSWorkflow = {
+      version: "1",
+      name: "redos",
+      nodes: {
+        a: { adapter: "echo", model: "echo", role: "r", prompt: "p" },
+        b: { adapter: "echo", model: "echo", role: "r", prompt: "p" },
+      },
+      edges: [
+        {
+          id: "e",
+          from: "a",
+          to: "b",
+          gate: { conditions: [{ type: "regex", filePath: "out.txt", pattern: "(a+)+" }] },
+        },
+      ],
+    };
+    mockReadFile.mockResolvedValue(JSON.stringify(reDoSWorkflow));
+
+    await validateCommand("workflow.json");
+
+    const allErrors = consoleErrorSpy.mock.calls.flat().join("\n");
+    expect(allErrors).toMatch(/nested unbounded quantifiers/);
+    expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 });

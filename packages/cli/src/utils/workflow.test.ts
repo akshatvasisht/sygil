@@ -499,3 +499,181 @@ describe("loadWorkflow — Sigstore verification opt-in", () => {
     await expect(loadWorkflow(path)).rejects.toThrow(/Template signature verification failed/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadWorkflow — tools-allowlist load-time validation (issue #75)
+// ---------------------------------------------------------------------------
+
+describe("loadWorkflow — tools-allowlist load-time validation", () => {
+  function workflowWithTools(adapter: string, tools: string[], extra: Record<string, unknown> = {}): object {
+    return {
+      version: "1",
+      name: "tools-test",
+      nodes: {
+        only: {
+          adapter,
+          model: "some-model",
+          role: "agent",
+          prompt: "do work",
+          tools,
+          ...extra,
+        },
+      },
+      edges: [],
+    };
+  }
+
+  it.each([
+    ["codex", "o4-mini"],
+    ["cursor", "gpt-4o"],
+    ["gemini-cli", "gemini-2.5-pro"],
+  ])("rejects non-empty tools on %s without allowUnsafeToolsBypass", async (adapter) => {
+    const filePath = await writeTempWorkflow(workflowWithTools(adapter, ["Read", "Write"]));
+    await expect(loadWorkflow(filePath)).rejects.toThrow(
+      new RegExp(`node "only" uses adapter "${adapter}".*tools.*allowlist`),
+    );
+  });
+
+  it("allows non-empty tools on warn-ignore adapters when allowUnsafeToolsBypass is true", async () => {
+    const filePath = await writeTempWorkflow(
+      workflowWithTools("gemini-cli", ["Read"], { allowUnsafeToolsBypass: true }),
+    );
+    const graph = await loadWorkflow(filePath);
+    expect(graph.nodes["only"]?.allowUnsafeToolsBypass).toBe(true);
+    expect(graph.nodes["only"]?.tools).toEqual(["Read"]);
+  });
+
+  it("accepts empty tools array on warn-ignore adapters without the bypass flag", async () => {
+    const filePath = await writeTempWorkflow(workflowWithTools("codex", []));
+    const graph = await loadWorkflow(filePath);
+    expect(graph.nodes["only"]?.adapter).toBe("codex");
+  });
+
+  it("does not refuse tools on adapters that honor them (claude-cli)", async () => {
+    const filePath = await writeTempWorkflow({
+      version: "1",
+      name: "ok",
+      nodes: {
+        only: {
+          adapter: "claude-cli",
+          model: "claude-sonnet-4-5",
+          role: "agent",
+          prompt: "do work",
+          tools: ["Read", "Write"],
+        },
+      },
+      edges: [],
+    });
+    const graph = await loadWorkflow(filePath);
+    expect(graph.nodes["only"]?.tools).toEqual(["Read", "Write"]);
+  });
+
+  it("does not refuse tools on adapters that honor them (claude-sdk, local-oai)", async () => {
+    for (const adapter of ["claude-sdk", "local-oai"]) {
+      const filePath = await writeTempWorkflow({
+        version: "1",
+        name: "ok",
+        nodes: {
+          only: {
+            adapter,
+            model: "m",
+            role: "agent",
+            prompt: "do work",
+            tools: ["Read"],
+          },
+        },
+        edges: [],
+      });
+      const graph = await loadWorkflow(filePath);
+      expect(graph.nodes["only"]?.tools).toEqual(["Read"]);
+    }
+  });
+});
+
+describe("loadWorkflow — ReDoS pattern rejection", () => {
+  function workflowWithRegexPattern(pattern: string): object {
+    return {
+      version: "1",
+      name: "redos-test",
+      nodes: {
+        a: { adapter: "echo", model: "echo-m", role: "r", prompt: "p" },
+        b: { adapter: "echo", model: "echo-m", role: "r", prompt: "p" },
+      },
+      edges: [
+        {
+          id: "a-to-b",
+          from: "a",
+          to: "b",
+          gate: {
+            conditions: [{ type: "regex", filePath: "out.txt", pattern }],
+          },
+        },
+      ],
+    };
+  }
+
+  it.each([
+    "(a+)+",
+    "(a*)*",
+    "(a+)*",
+    "(a*)+",
+    "(.*)+",
+    "(?:a+)+",
+    "^(a+)+$",
+  ])("rejects nested unbounded quantifier pattern %s", async (pattern) => {
+    const filePath = await writeTempWorkflow(workflowWithRegexPattern(pattern));
+    await expect(loadWorkflow(filePath)).rejects.toThrow(/nested unbounded quantifiers/);
+  });
+
+  it.each([
+    "LGTM",
+    "exit_code: 0",
+    "(a)+",
+    "a+b+",
+    "[a-z]+",
+    "^TODO$",
+    "(foo|bar)",
+  ])("accepts safe pattern %s", async (pattern) => {
+    const filePath = await writeTempWorkflow(workflowWithRegexPattern(pattern));
+    const graph = await loadWorkflow(filePath);
+    expect(graph.edges[0]?.gate?.conditions[0]).toMatchObject({
+      type: "regex",
+      pattern,
+    });
+  });
+});
+
+describe("validateWorkflowInvariants — shared post-schema checks", () => {
+  it("rejects ReDoS pattern when called directly (stdin path safety)", async () => {
+    const { validateWorkflowInvariants } = await import("./workflow.js");
+    expect(() =>
+      validateWorkflowInvariants({
+        version: "1",
+        name: "x",
+        nodes: { a: { adapter: "echo", model: "m", role: "r", prompt: "p" }, b: { adapter: "echo", model: "m", role: "r", prompt: "p" } },
+        edges: [
+          {
+            id: "e",
+            from: "a",
+            to: "b",
+            gate: { conditions: [{ type: "regex", filePath: "out.txt", pattern: "(a+)+" }] },
+          },
+        ],
+      })
+    ).toThrow(/nested unbounded quantifiers/);
+  });
+
+  it("rejects tools-allowlist violation when called directly (stdin path safety)", async () => {
+    const { validateWorkflowInvariants } = await import("./workflow.js");
+    expect(() =>
+      validateWorkflowInvariants({
+        version: "1",
+        name: "x",
+        nodes: {
+          a: { adapter: "cursor", model: "m", role: "r", prompt: "p", tools: ["Read"] },
+        },
+        edges: [],
+      })
+    ).toThrow(/tools allowlist/);
+  });
+});

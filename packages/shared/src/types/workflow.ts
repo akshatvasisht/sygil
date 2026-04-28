@@ -123,6 +123,13 @@ export interface NodeConfig {
   synchronization?:
     | { mutex: string }
     | { semaphore: { key: string; limit: number } };
+  /**
+   * Opt-in bypass for the load-time tools-allowlist check. `codex`, `cursor`,
+   * and `gemini-cli` have no upstream allowlist flag and silently ignore
+   * `tools:`. Workflow load refuses those combinations unless this flag is
+   * explicitly set to `true` on the node, acknowledging the unsandboxed run.
+   */
+  allowUnsafeToolsBypass?: boolean;
 }
 
 export interface EdgeConfig {
@@ -302,6 +309,9 @@ export const NodeConfigSchema = z.object({
   ]).optional()
     .describe("Workflow-scoped sync primitive: mutex (1 concurrent) or semaphore (N concurrent) keyed by arbitrary string. Acquired before the adapter pool slot.")
     .meta({ category: "resilience" }),
+  allowUnsafeToolsBypass: z.boolean().optional()
+    .describe("Opt-in override acknowledging that tools: will be ignored by this adapter (codex, cursor, gemini-cli have no upstream allowlist flag). Without this flag, such combinations fail workflow load.")
+    .meta({ category: "contract" }),
 });
 
 export const EdgeConfigSchema = z.object({
