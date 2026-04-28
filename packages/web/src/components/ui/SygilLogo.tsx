@@ -1,10 +1,10 @@
-interface SigilLogoProps {
+interface SygilLogoProps {
   size?: number;
   color?: string;
   className?: string;
 }
 
-export function SigilLogo({ size = 24, color = "#e0e0e0", className }: SigilLogoProps) {
+export function SygilLogo({ size = 24, color = "#e0e0e0", className }: SygilLogoProps) {
   return (
     <svg
       width={size}

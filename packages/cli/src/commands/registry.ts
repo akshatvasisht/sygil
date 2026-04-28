@@ -44,7 +44,7 @@ const listSubCommand = new Command("list")
   .action(() =>
     handleNetworkError(async () => {
       const index = await fetchRegistryIndex();
-      console.log(chalk.bold("\nAvailable templates (registry.sigil.dev)\n"));
+      console.log(chalk.bold("\nAvailable templates (registry.sygil.dev)\n"));
       if (index.templates.length === 0) {
         console.log(chalk.dim("  No templates found in registry."));
         return;

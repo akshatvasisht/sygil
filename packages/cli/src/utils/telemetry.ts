@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SygilConfig } from "./config.js";
 
-const TELEMETRY_ENDPOINT = "https://telemetry.sigil.dev/v1/event";
+const TELEMETRY_ENDPOINT = "https://telemetry.sygil.dev/v1/event";
 const TELEMETRY_TIMEOUT_MS = 3000;
 
 export interface TelemetryEvent {

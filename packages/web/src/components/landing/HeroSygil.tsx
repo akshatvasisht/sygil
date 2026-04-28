@@ -105,7 +105,7 @@ const gridSquares = (() => {
 /**
  * Renders the deterministic DAG logo as a static SVG, animated with a traveling wave of light.
  */
-export function HeroSigil() {
+export function HeroSygil() {
   return (
     <svg
       viewBox="0 0 512 512"
@@ -114,7 +114,7 @@ export function HeroSigil() {
       aria-hidden="true"
       style={{ display: "block" }}
     >
-      {/* Base geometry styling — .sigil-travel and @keyframes sigilWave are in globals.css */}
+      {/* Base geometry styling — .sygil-travel and @keyframes sygilWave are in globals.css */}
       <g fill="#FF5C00">
         {gridSquares.map((sq, i) => (
           <rect
@@ -123,7 +123,7 @@ export function HeroSigil() {
             y={sq.y}
             width="5.4"
             height="5.4"
-            className="sigil-travel"
+            className="sygil-travel"
             style={{ animationDelay: `${sq.delay}s` }}
           />
         ))}

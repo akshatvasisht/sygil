@@ -4,7 +4,7 @@ import type { SygilErrorCode } from "./errors.js";
 /**
  * Deterministic per-node tracing envelope derived from `runId` + `nodeId`.
  * Adapters propagate this as a W3C `traceparent` so downstream API spans link
- * back to the driving Sigil node. Optional on every surface — adapters that
+ * back to the driving Sygil node. Optional on every surface — adapters that
  * don't spawn subprocesses or HTTP requests may ignore it.
  */
 export interface SpawnContext {

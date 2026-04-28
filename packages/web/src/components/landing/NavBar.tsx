@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Github, BookOpen } from "lucide-react";
 import Link from "next/link";
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 
 /**
  * Fixed navigation bar that solidifies its backdrop on scroll.
@@ -32,7 +32,7 @@ export function NavBar() {
       <div className="max-w-6xl mx-auto px-6 h-12 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="logo-mark inline-flex">
-            <SigilLogo size={18} color="#71717a" />
+            <SygilLogo size={18} color="#71717a" />
           </span>
           <span className="font-mono font-semibold text-bright text-sm tracking-tight">
             sygil

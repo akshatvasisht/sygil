@@ -1,4 +1,4 @@
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 
 export default function RootLoading() {
   return (
@@ -8,7 +8,7 @@ export default function RootLoading() {
       aria-live="polite"
     >
       <div className="flex items-center gap-3 text-dim">
-        <SigilLogo size={32} color="#71717a" />
+        <SygilLogo size={32} color="#71717a" />
         <span className="font-mono text-sm uppercase tracking-wider">Loading…</span>
       </div>
     </main>

@@ -49,18 +49,18 @@ describe("pinned identity constants", () => {
   it("pins the identity to the two trusted Sygil signing workflows", () => {
     // sign-templates.yml — manual operational signing path.
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/sign-templates.yml@refs/tags/v0.2.0",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/sign-templates.yml@refs/tags/v0.2.0",
     )).toBe(true);
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/sign-templates.yml@refs/heads/main",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/sign-templates.yml@refs/heads/main",
     )).toBe(true);
     // release.yml — the inline signing path that actually produces the
     // signatures shipped on npm.
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/release.yml@refs/heads/main",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/release.yml@refs/heads/main",
     )).toBe(true);
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/release.yml@refs/tags/v0.2.0",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/release.yml@refs/tags/v0.2.0",
     )).toBe(true);
   });
 
@@ -73,10 +73,10 @@ describe("pinned identity constants", () => {
     )).toBe(false);
     // Any other workflow file in the Sygil repo is still rejected.
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/ci.yml@refs/heads/main",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/ci.yml@refs/heads/main",
     )).toBe(false);
     expect(EXPECTED_IDENTITY_REGEXP.test(
-      "https://github.com/akshatvasisht/sigil/.github/workflows/e2e.yml@refs/heads/main",
+      "https://github.com/akshatvasisht/sygil/.github/workflows/e2e.yml@refs/heads/main",
     )).toBe(false);
   });
 
@@ -138,7 +138,7 @@ describe("verifyTemplateSignature", () => {
     const verify = vi.fn().mockResolvedValue({
       identity: {
         subjectAlternativeName:
-          "https://github.com/akshatvasisht/sigil/.github/workflows/sign-templates.yml@refs/tags/v0.3.0",
+          "https://github.com/akshatvasisht/sygil/.github/workflows/sign-templates.yml@refs/tags/v0.3.0",
         extensions: { issuer: EXPECTED_OIDC_ISSUER },
       },
     });

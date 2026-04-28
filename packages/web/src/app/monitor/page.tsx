@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ExecutionMonitor } from "@/components/monitor/ExecutionMonitor";
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 import { resolveMonitorWsUrl, classifyMonitorWsParam } from "@/lib/monitor-url";
 import Link from "next/link";
 import { LayoutTemplate, Copy, Check } from "lucide-react";
@@ -37,7 +37,7 @@ function MonitorInner() {
       <div className="flex items-center justify-between px-4 h-11 border-b border-border bg-canvas shrink-0">
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2 group">
-            <SigilLogo size={16} color="#71717a" className="group-hover:[&]:opacity-100 transition-opacity duration-200" />
+            <SygilLogo size={16} color="#71717a" className="group-hover:[&]:opacity-100 transition-opacity duration-200" />
             <span className="font-display font-semibold text-sm text-dim group-hover:text-body transition-colors duration-200">
               sygil
             </span>
