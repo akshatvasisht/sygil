@@ -257,7 +257,7 @@ describe("forkCommand", () => {
   });
 
   describe("drift detection", () => {
-    it("exits 1 when environment drift is detected and --ignore-drift is not set", async () => {
+    it("exits 1 when --check-drift is set and environment drift is detected", async () => {
       const parentId = await seedParent({
         environment: {
           sygilVersion: "0.1.0",
@@ -268,11 +268,11 @@ describe("forkCommand", () => {
       });
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      await expect(forkCommand(parentId, {})).rejects.toThrow("process.exit(1)");
+      await expect(forkCommand(parentId, { checkDrift: true })).rejects.toThrow("process.exit(1)");
       expect(processExitSpy).toHaveBeenCalledWith(1);
     });
 
-    it("proceeds when --ignore-drift is set even with drift", async () => {
+    it("proceeds silently by default even with drift (drift check is opt-in)", async () => {
       const parentId = await seedParent({
         environment: {
           sygilVersion: "0.1.0",
@@ -283,7 +283,8 @@ describe("forkCommand", () => {
       });
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      await forkCommand(parentId, { ignoreDrift: true });
+      // No --check-drift flag → drift detection skipped, no exit
+      await forkCommand(parentId, {});
       expect(processExitSpy).not.toHaveBeenCalledWith(1);
       expect(schedulerResume).toHaveBeenCalledOnce();
     });

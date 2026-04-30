@@ -188,9 +188,18 @@ After import, files land at `~/.sygil/templates/<name>/`. Manifest validation us
 - `envVarHashes` — `sha256(name + ":" + first10chars(value))` truncated to 16 hex chars for `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CURSOR_API_KEY`, `SYGIL_LOCAL_OAI_URL`, `SYGIL_LOCAL_OAI_KEY`
 - `nodeVersion`, `platform`
 
-On `sygil resume` and `sygil fork`, the stored snapshot is compared to a fresh one via `diffEnvironment`. Any difference (version bumps, key rotations, platform changes) is printed as a yellow warning and the command exits 1. Pass `--ignore-drift` to proceed anyway.
+On `sygil resume` and `sygil fork`, the stored snapshot is compared to a fresh one via `diffEnvironment` **only when the operator passes `--check-drift`**. Without the flag, both commands proceed silently regardless of drift. The opt-in shape is intentional — most resumes are routine ("agent crashed, run again"); blocking on every version bump was too noisy in practice. Pass `--check-drift` for compliance / repro / regulated workflows where the safety net matters.
 
 Old checkpoints without the `environment` field still parse and resume/fork without drift warnings.
+
+## Experimental features
+
+These have working implementations and tests, but their design hasn't been validated against real users yet. Behavior may change without notice in v0.x — do not rely on the surface staying stable across patch releases. Mentioned here so contributors don't tighten them up assuming they're load-bearing.
+
+- **Workflow-level mutex / semaphore sync keys** (`packages/cli/src/scheduler/sync-registry.ts`) — `NodeConfig.synchronization: { mutex: "<key>" } | { semaphore: { key, limit } }`. First-acquire-wins semantics on `limit` are subtle; real users will likely want different behavior.
+- **Template signature verification** (`packages/cli/src/utils/template-signature.ts`) — Sigstore cosign verification opt-in via `SYGIL_VERIFY_TEMPLATES=1`. Protects a registry that barely exists yet (4 bundled templates, no live remote registry).
+- **`optimize` template** (`packages/cli/templates/experimental/optimize.json`) — DSPy-style outer-loop prompt optimizer. Lives in `templates/experimental/`, hidden from `sygil list` unless `--experimental` is passed; bare-name resolution (`sygil run optimize`) still works.
+- **Web `/editor` route** (`packages/web/src/components/editor/`) — visual workflow authoring. The supported authoring surface is direct edits to `workflow.json`; the editor is a demo-grade visualizer with ~7 advanced fields not yet round-trippable.
 
 ## Common pitfalls
 
@@ -206,5 +215,5 @@ Old checkpoints without the `environment` field still parse and resume/fork with
 | WebSocket control events silently ignored | Client not authenticated | Connect with `?token=<authToken>` |
 | `interpolateWorkflow` throws after valid params | Injected JSON structure fails re-validation | Working as intended |
 | `Module '"@sygil/shared"' has no exported member` | Shared not rebuilt after type change | `cd packages/shared && npx tsc` |
-| `sygil resume` exits 1 with "drift detected" | Adapter version or env var changed since checkpoint | Pass `--ignore-drift` or investigate the change |
+| `sygil resume --check-drift` exits 1 with "drift detected" | Adapter version or env var changed since checkpoint | Drop `--check-drift` or investigate the change |
 | Bundle import fails with "not a Sygil bundle" | Input is a plain directory without `sygil-manifest.json` | Use `sygil export --bundle` to create a proper bundle |

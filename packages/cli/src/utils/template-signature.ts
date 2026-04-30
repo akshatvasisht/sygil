@@ -119,6 +119,11 @@ async function defaultLoadSigstore(): Promise<SigstoreModule | null> {
  * Caller is responsible for acting on the outcome (typically: print a warning
  * and continue for `no-signature`, exit the process for `failed` and
  * `verifier-unavailable`).
+ *
+ * @experimental Template signature verification is opt-in via
+ * `SYGIL_VERIFY_TEMPLATES=1` and protects a registry that barely exists yet.
+ * The expected-identity regex, error surface, and outcome shape may change
+ * without a deprecation window in v0.x. See `agentcontext/positioning.md`.
  */
 export async function verifyTemplateSignature(
   templatePath: string,

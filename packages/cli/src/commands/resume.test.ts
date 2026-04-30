@@ -332,7 +332,7 @@ describe("resumeCommand", () => {
   });
 
   describe("drift detection", () => {
-    it("exits 1 when environment drift is detected and --ignore-drift is not set", async () => {
+    it("exits 1 when --check-drift is set and environment drift is detected", async () => {
       const state = makeRunState({
         status: "paused",
         workflowPath: "/fake/workflow.json",
@@ -353,11 +353,11 @@ describe("resumeCommand", () => {
       // Simulate drift: adapter version changed
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      await expect(resumeCommand("run-abc12345", {})).rejects.toThrow("process.exit(1)");
+      await expect(resumeCommand("run-abc12345", { checkDrift: true })).rejects.toThrow("process.exit(1)");
       expect(processExitSpy).toHaveBeenCalledWith(1);
     });
 
-    it("proceeds when --ignore-drift is set even with drift", async () => {
+    it("proceeds silently by default even with drift (drift check is opt-in)", async () => {
       const state = makeRunState({
         status: "paused",
         workflowPath: "/fake/workflow.json",
@@ -377,8 +377,8 @@ describe("resumeCommand", () => {
       });
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      // Should not exit 1
-      await resumeCommand("run-abc12345", { ignoreDrift: true });
+      // No --check-drift flag → drift detection skipped, no exit
+      await resumeCommand("run-abc12345", {});
       expect(processExitSpy).not.toHaveBeenCalledWith(1);
     });
 

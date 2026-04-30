@@ -73,7 +73,7 @@ Control-channel clients (pause/cancel/human-review) must include ?token=<uuid>.
     .command("resume")
     .description("Resume a paused or failed workflow run")
     .argument("<run-id>", "The run ID to resume (from .sygil/runs/<id>.json)")
-    .option("--ignore-drift", "Proceed even if environment has drifted since the checkpoint was created")
+    .option("--check-drift", "Refuse to resume if the environment has drifted since the checkpoint was created (off by default)")
     .addHelpText("after", `
 Examples:
   $ sygil resume run-1712345678901-abc123   # full run ID (see \`sygil list\`)
@@ -81,7 +81,7 @@ Examples:
 The <run-id> must match a checkpoint at .sygil/runs/<id>.json exactly.
 Partial or prefix matching is NOT supported — use \`sygil list\` to copy the full ID.
 `)
-    .action((runId: string, options: { ignoreDrift?: boolean }) => resumeCommand(runId, options));
+    .action((runId: string, options: { checkDrift?: boolean }) => resumeCommand(runId, options));
 
   program
     .command("fork")
@@ -110,15 +110,16 @@ Semantics:
   - Fork v1 does not inherit resolved parameters from the parent checkpoint
     (they aren't persisted). Supply every required parameter via --param.
 `)
-    .option("--ignore-drift", "Proceed even if environment has drifted since the checkpoint was created")
-    .action((parentRunId: string, options: { at?: string; param?: string[]; ignoreDrift?: boolean }) =>
+    .option("--check-drift", "Refuse to fork if the environment has drifted since the checkpoint was created (off by default)")
+    .action((parentRunId: string, options: { at?: string; param?: string[]; checkDrift?: boolean }) =>
       forkCommand(parentRunId, options),
     );
 
   program
     .command("list")
     .description("List available adapters and recent workflow runs")
-    .action(listCommand);
+    .option("--experimental", "Include experimental templates (templates/experimental/) in the listing")
+    .action((options: { experimental?: boolean }) => listCommand(options));
 
   program
     .command("validate")

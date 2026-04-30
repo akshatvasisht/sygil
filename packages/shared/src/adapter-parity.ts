@@ -7,7 +7,7 @@ export type FieldSupport = "enforced" | "partial" | "ignored" | "na";
  *  - sygil run pre-flight: warn when a node uses a field its adapter ignores.
  *  - web editor NodePropertyPanel: grey out / annotate fields not applicable
  *    to the selected adapter.
- *  - docs/ADAPTER_MATRIX.md: hand-authored mirror of this table.
+ *  - docs/API.md > Adapter field support: hand-authored mirror of this table.
  *
  * Missing keys default to "enforced" for fields every adapter handles uniformly
  * (adapter, model, role, prompt, maxTurns, timeoutMs, idleTimeoutMs).
