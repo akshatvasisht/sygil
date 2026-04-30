@@ -126,7 +126,14 @@ export function interpolateWorkflow(
       .join("\n");
     throw new Error(`Workflow validation failed after parameter interpolation:\n${issues}`);
   }
-  return result.data as WorkflowGraph;
+  // Re-run the post-schema invariants too. `loadWorkflow` already ran them
+  // pre-interpolation, but a parameter value can introduce a string the
+  // checks care about (e.g. a regex pattern with nested unbounded quantifiers
+  // injected into `{ regex: { pattern: "{{redos}}" } }` slipping past the
+  // load-time scan).
+  const interpolatedGraph = result.data as WorkflowGraph;
+  validateWorkflowInvariants(interpolatedGraph);
+  return interpolatedGraph;
 }
 
 // ---------------------------------------------------------------------------

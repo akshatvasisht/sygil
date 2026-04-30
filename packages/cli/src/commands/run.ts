@@ -583,6 +583,7 @@ export async function runCommand(
         logger.warn(`Maximum reruns (${MAX_RERUNS}) exceeded. Stopping watcher to prevent infinite loop.`);
         watcher.stop();
         await monitor.stop();
+        try { await ctx.teardown(); } catch { /* best-effort */ }
         process.exit(0);
         return;
       }
@@ -590,6 +591,10 @@ export async function runCommand(
       logger.info(`Change detected: ${changedPath}. Re-running workflow... (${rerunCount}/${MAX_RERUNS})`);
       watcher.stop();
       await monitor.stop();
+      // Tear down this run's metrics/OTLP server before recursing — the new
+      // runCommand call builds a fresh ctx, and without teardown the old one
+      // leaks its listening port and skips its final OTLP flush.
+      try { await ctx.teardown(); } catch { /* best-effort */ }
       // Re-run by recursively invoking the run command
       await runCommand(workflowPath, task, options);
     });

@@ -56,7 +56,7 @@
             "x-category": "core"
           },
           "tools": {
-            "description": "Allowlist of tool names the agent may call; adapter support varies — see ADAPTER_MATRIX.",
+            "description": "Allowlist of tool names the agent may call; adapter support varies — see docs/API.md > Adapter field support.",
             "type": "array",
             "items": {
               "type": "string"
