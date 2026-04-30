@@ -27,6 +27,7 @@ export function extractJsonFromOutput(text: string): unknown | undefined {
     let inString = false;
     let escape = false;
     let endIdx = -1;
+    let parsed = false;
     for (let j = i; j < text.length; j++) {
       const ch = text[j]!;
       if (escape) {
@@ -46,17 +47,22 @@ export function extractJsonFromOutput(text: string): unknown | undefined {
           endIdx = j;
           try {
             lastValid = JSON.parse(text.slice(i, j + 1));
+            parsed = true;
           } catch {
-            // Not a valid JSON span starting at i; continue outer scan.
+            // Balanced span but not valid JSON — fall through and let the
+            // outer scan retry from i+1 so nested valid JSON inside a
+            // garbage outer brace pair (e.g. JS code emitting `{ foo: {"a":1} }`)
+            // can still be discovered.
           }
           break;
         }
       }
     }
-    // Skip past the matched closing brace so nested `{` inside an already-
-    // parsed object aren't re-scanned and overwrite the outer match. If the
-    // brace never balanced, advance one char and try again.
-    i = endIdx >= 0 ? endIdx + 1 : i + 1;
+    // Skip past the matched closing brace ONLY when the span parsed cleanly,
+    // so nested `{` inside an already-parsed object aren't re-scanned and
+    // overwrite the outer match. Balanced-but-invalid and never-balanced
+    // spans both advance one char so inner candidates remain reachable.
+    i = parsed ? endIdx + 1 : i + 1;
   }
   return lastValid;
 }

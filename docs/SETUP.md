@@ -48,7 +48,7 @@ This installs dependencies across all packages (`cli`, `web`, `shared`) via npm 
 
 Create a `.env` file in your project's working directory:
 
-```
+```env
 ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=...
 ```

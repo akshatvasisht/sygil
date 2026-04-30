@@ -259,7 +259,7 @@ export const NodeConfigSchema = z.object({
     .describe("Prompt text; supports {{parameters.X}}, {{nodes.X.output}}, and {{ctx.X}} interpolation.")
     .meta({ category: "core" }),
   tools: z.array(z.string()).optional()
-    .describe("Allowlist of tool names the agent may call; adapter support varies — see ADAPTER_MATRIX.")
+    .describe("Allowlist of tool names the agent may call; adapter support varies — see docs/API.md > Adapter field support.")
     .meta({ category: "contract" }),
   disallowedTools: z.array(z.string()).optional()
     .describe("Blocklist of tool names the agent must not call; adapter support mirrors tools.")

@@ -69,9 +69,9 @@ Fix requires bumping `next` v14 → v16 (major). Planned upgrade; blocked on `pa
 
 ## Auditing policy
 
-- **Monthly:** `npm audit --omit=dev --audit-level=high` is run in CI on every
-  pull request (non-blocking, `continue-on-error: true`). Results are visible
-  in the workflow run summary.
+- **On every pull request:** `npm audit --omit=dev --audit-level=high` runs
+  in CI (non-blocking, `continue-on-error: true`). Results are visible in the
+  workflow run summary.
 - **On dep bumps:** Any PR touching `package.json` or `package-lock.json`
   should check audit output before merging.
 - **No `--force`:** We never use `npm audit fix --force` in the release flow.

@@ -588,7 +588,12 @@ export function Hero() {
             </div>
 
             <div className="flex items-center gap-3 mt-6 animate-slide-up" style={{ animationDelay: "0.45s" }}>
-              <a href="https://github.com/akshatvasisht/sygil" target="_blank" rel="noopener noreferrer">
+              <a
+                href="https://github.com/akshatvasisht/sygil"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center min-h-[44px]"
+              >
                 <img
                   src="https://img.shields.io/github/stars/akshatvasisht/sygil?style=flat&labelColor=18181b&color=71717a&label=stars"
                   alt="GitHub stars"
@@ -596,7 +601,12 @@ export function Hero() {
                   loading="lazy"
                 />
               </a>
-              <a href="https://github.com/akshatvasisht/sygil/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+              <a
+                href="https://github.com/akshatvasisht/sygil/blob/main/LICENSE"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center min-h-[44px]"
+              >
                 <img
                   src="https://img.shields.io/badge/License-MIT-71717a?style=flat&labelColor=18181b"
                   alt="License MIT"

@@ -117,7 +117,7 @@ export function RunModal({ workflow, onClose }: RunModalProps) {
                     value={params[key] ?? ""}
                     onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
                     placeholder={def.default != null ? String(def.default) : `Enter ${key}…`}
-                    className="w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright placeholder:text-muted focus:outline-none focus:border-accent transition-colors duration-200"
+                    className="w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright placeholder:text-dim focus:outline-none focus:border-accent transition-colors duration-200"
                   />
                 </div>
               ))}

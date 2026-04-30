@@ -36,7 +36,7 @@ function MonitorInner() {
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 h-11 border-b border-border bg-canvas shrink-0">
         <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2 group">
+          <Link href="/" className="flex items-center gap-2 group min-h-[44px]">
             <SygilLogo size={16} color="#71717a" className="group-hover:[&]:opacity-100 transition-opacity duration-200" />
             <span className="font-display font-semibold text-sm text-dim group-hover:text-body transition-colors duration-200">
               sygil

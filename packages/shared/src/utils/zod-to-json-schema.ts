@@ -10,7 +10,7 @@ import { z, type ZodType } from "zod";
  *
  * Field categories authored via `.meta({ category: "..." })` on Zod schemas
  * are rewritten to the JSON-Schema-conventional `x-category` key during the
- * walk below so downstream consumers (editor grouping, ADAPTER_MATRIX docs)
+ * walk below so downstream consumers (editor grouping, adapter-support docs)
  * can rely on a stable extension prefix.
  */
 
