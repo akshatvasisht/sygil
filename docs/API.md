@@ -10,8 +10,6 @@ sygil init --telemetry       # Enable anonymous usage telemetry
 sygil init --no-telemetry    # Disable anonymous usage telemetry
 ```
 
----
-
 ## `sygil run <workflow>`
 
 Runs a workflow. `<workflow>` is a path to a `workflow.json` file or the name of a built-in template.
@@ -44,8 +42,6 @@ The browser is auto-opened to this URL unless `--no-open` is passed or the
 process is running in a non-TTY environment. The monitor UI is served from the
 same port as the WebSocket endpoint — there is no separate WS port.
 
----
-
 ## `sygil validate <workflow>`
 
 Validates a `workflow.json` against the Zod schema and checks that all referenced adapter types are known. Also validates `timeoutMs > 0`, `idleTimeoutMs > 0`, and `maxRetries >= 0`.
@@ -56,8 +52,6 @@ sygil validate tdd-feature.json
 
 Exits `0` on success, `1` on validation error.
 
----
-
 ## `sygil resume <run-id>`
 
 Resumes a checkpointed run. The run state is read from `.sygil/runs/<run-id>.json`.
@@ -67,8 +61,6 @@ sygil resume 3f8a2c1d-...
 ```
 
 Already-completed nodes are skipped. The run continues from the first incomplete node. Session history is preserved for adapters that support `resume()` (e.g. `claude-sdk`).
-
----
 
 ## `sygil fork <run-id>`
 
@@ -94,8 +86,6 @@ sygil fork <parent-run-id> --param task=altA     # diverge with different params
 - Hooks see `SYGIL_RUN_REASON=fork`.
 - Worktree isolation is automatic — the child gets a fresh worktree keyed on its own run-id.
 
----
-
 ## `sygil replay <run-id>`
 
 Replays recorded NDJSON events from a previous workflow run for debugging and review.
@@ -114,8 +104,6 @@ sygil replay r_8x92kf --speed 2             # 2x speed
 | `-n, --node <nodeId>` | Only replay events from this node. |
 | `-s, --speed <multiplier>` | Playback speed. `0` = instant, `1` = real-time (default), `2` = double speed. |
 
----
-
 ## `sygil list`
 
 Lists available adapters and recent workflow runs.
@@ -124,8 +112,6 @@ Lists available adapters and recent workflow runs.
 sygil list
 ```
 
----
-
 ## `sygil export <template> <output>`
 
 Copies a built-in template to a local file for editing.
@@ -133,8 +119,6 @@ Copies a built-in template to a local file for editing.
 ```bash
 sygil export tdd-feature my-workflow.json
 ```
-
----
 
 ## `sygil import-template <file>`
 
@@ -145,8 +129,6 @@ sygil import-template my-workflow.json
 sygil import-template https://example.com/workflow.json
 ```
 
----
-
 ## `sygil registry list`
 
 Lists all templates available in the remote registry.
@@ -154,8 +136,6 @@ Lists all templates available in the remote registry.
 ```bash
 sygil registry list
 ```
-
----
 
 ## `sygil registry search <query>`
 
@@ -165,8 +145,6 @@ Searches the remote registry by name, description, or tag.
 sygil registry search "tdd typescript"
 ```
 
----
-
 ## `sygil registry install <name>`
 
 Downloads a template from the remote registry to `~/.sygil/templates/<name>.json`.
@@ -174,8 +152,6 @@ Downloads a template from the remote registry to `~/.sygil/templates/<name>.json
 ```bash
 sygil registry install tdd-feature
 ```
-
----
 
 ## Global options
 
@@ -187,8 +163,6 @@ These options apply to all commands:
 | `-v, --verbose` | Verbose output. |
 | `--version` | Print version and exit. |
 | `-h, --help` | Print help and exit. |
-
----
 
 ## `workflow.json` schema
 

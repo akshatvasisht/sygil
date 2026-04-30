@@ -42,14 +42,14 @@ import { readFile } from "node:fs/promises";
  * Both workflows live in the Sygil repo, both require `id-token: write`, and
  * neither is reachable from a fork-PR context. Signatures produced by any
  * other workflow (including a forked `release.yml`) will mismatch on either
- * the repo path or the workflow-name segment.
+ * the repo path (akshatvasisht/sygil) or the workflow-name segment.
  *
  * The `refs/` anchor accepts any ref (tag or branch) — release.yml runs on
  * `refs/heads/main`; sign-templates.yml on dispatch reports the dispatched
  * ref; version-tag signing would produce `refs/tags/…`.
  */
 export const EXPECTED_IDENTITY_REGEXP: RegExp = new RegExp(
-  "^https://github\\.com/akshatvasisht/sigil/\\.github/workflows/(release|sign-templates)\\.yml@refs/",
+  "^https://github\\.com/akshatvasisht/sygil/\\.github/workflows/(release|sign-templates)\\.yml@refs/",
 );
 
 /** OIDC issuer for GitHub Actions keyless signing. */

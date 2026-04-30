@@ -1,8 +1,11 @@
 import { Hero } from "@/components/landing/Hero";
 import { HowItWorks } from "@/components/landing/HowItWorks";
+import { Features } from "@/components/landing/Features";
+import { AdapterMatrix } from "@/components/landing/AdapterMatrix";
+import { GetStarted } from "@/components/landing/GetStarted";
 import { NavBar } from "@/components/landing/NavBar";
 import { ScrollReveal } from "@/components/landing/ScrollReveal";
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 import Link from "next/link";
 import { ArrowRight, Github } from "lucide-react";
 
@@ -23,6 +26,12 @@ export default function HomePage() {
       </div>
 
       <HowItWorks />
+
+      <Features />
+
+      <AdapterMatrix />
+
+      <GetStarted />
 
       {/* Closing CTA */}
       <section className="below-fold relative py-24 sm:py-32 lg:py-44 cta-section-glow section-divider-bold">
@@ -60,7 +69,7 @@ export default function HomePage() {
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-accent/15 to-transparent" />
         <ScrollReveal className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3 footer-logo">
-            <SigilLogo size={14} color="#3f3f46" />
+            <SygilLogo size={14} color="#3f3f46" />
             <span className="font-mono font-semibold text-dim text-sm tracking-tight">sygil</span>
             <span className="hidden sm:inline font-mono text-[10px] text-dim">
               deterministic orchestration for probabilistic agents

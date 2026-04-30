@@ -34,7 +34,7 @@ interface RunResult {
   exitCode: number;
 }
 
-function runSigil(
+function runSygil(
   workflowPath: string,
   args: string[] = [],
   options: {
@@ -126,7 +126,7 @@ afterEach(async () => {
 
 describe("CLI E2E: sygil run", () => {
   it("single-node workflow completes with exit 0", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "single-node.json"),
       [],
       { cwd: testDir }
@@ -138,7 +138,7 @@ describe("CLI E2E: sygil run", () => {
 
   it("linear workflow with exit_code gate passes", async () => {
     // writer exits 0 → gate (exit_code: 0) passes → checker runs
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "linear-gate.json"),
       [],
       { cwd: testDir }
@@ -154,7 +154,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("diamond DAG runs all 4 nodes", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "parallel-diamond.json"),
       [],
       { cwd: testDir }
@@ -173,7 +173,7 @@ describe("CLI E2E: sygil run", () => {
   it("forward gate failure exits with code 1", async () => {
     // gate-fail.json: writer→checker with gate exit_code: 0
     // ECHO_EXIT_CODE=1 makes writer exit 1 → gate expects 0 → gate FAILS
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "gate-fail.json"),
       [],
       { cwd: testDir, env: { ECHO_EXIT_CODE: "1" } }
@@ -210,7 +210,7 @@ describe("CLI E2E: sygil run", () => {
     // Because env vars apply to ALL echo-adapter invocations, we set the seq
     // on all nodes — writer will see invocation 0 of the seq (exits 0) which
     // is fine since the writer→reviewer edge has no gate.
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "loop-back.json"),
       [],
       {
@@ -231,7 +231,7 @@ describe("CLI E2E: sygil run", () => {
   it("parameter interpolation substitutes values into prompt", async () => {
     // parameterized.json: prompt = "Do {{task}} in {{mode}} mode"
     // Pass task param; mode defaults to "fast"
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "parameterized.json"),
       ["--param", "task=build auth"],
       { cwd: testDir }
@@ -242,7 +242,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("dry-run validates workflow without executing nodes", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "single-node.json"),
       ["--dry-run"],
       { cwd: testDir }
@@ -262,7 +262,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("invalid workflow path exits with error", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(testDir, "does-not-exist.json"),
       [],
       { cwd: testDir }
@@ -275,7 +275,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("monitor WebSocket URL is printed to stdout", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "single-node.json"),
       [],
       { cwd: testDir }
@@ -287,7 +287,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("checkpoint file is written after completion", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "single-node.json"),
       [],
       { cwd: testDir }
@@ -305,7 +305,7 @@ describe("CLI E2E: sygil run", () => {
   });
 
   it("NDJSON event log is written for each node", async () => {
-    const result = await runSigil(
+    const result = await runSygil(
       join(FIXTURES_DIR, "linear-gate.json"),
       [],
       { cwd: testDir }

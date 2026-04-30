@@ -19,6 +19,7 @@ import {
 } from "./constants.js";
 import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
+import { extractJsonFromOutput } from "./extract-json.js";
 
 /** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
  * never legitimately exceed this; if it does, we assume a hung socket or a misbehaving
@@ -53,10 +54,14 @@ export class CodexCLIAdapter implements AgentAdapter {
   async isAvailable(): Promise<boolean> {
     try {
       execSync("which codex", { stdio: "ignore" });
-      return true;
     } catch {
       return false;
     }
+    // Codex CLI authenticates via OPENAI_API_KEY (see docs/SETUP.md). Without
+    // it, `codex exec` fails immediately at spawn time — report unavailable
+    // up front rather than surfacing a crashed-node after a failed spawn.
+    if (!process.env["OPENAI_API_KEY"]) return false;
+    return true;
   }
 
   async getVersion(): Promise<string | null> {
@@ -412,19 +417,4 @@ const CODEX_EVENT_MAPPING: EventMapping<Record<string, unknown>, CodexInternal> 
   },
 };
 
-/**
- * Best-effort: try to extract the last JSON object from a text string.
- * Iterates candidate matches from last to first, returning the first that parses.
- */
-function extractJsonFromOutput(text: string): unknown | undefined {
-  const matches = text.match(/\{[\s\S]*\}/g);
-  if (!matches) return undefined;
-  for (let i = matches.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(matches[i]!);
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
+// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

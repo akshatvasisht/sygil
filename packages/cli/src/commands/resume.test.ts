@@ -401,4 +401,29 @@ describe("resumeCommand", () => {
       expect(processExitSpy).not.toHaveBeenCalledWith(1);
     });
   });
+
+  describe("runId validation (path traversal guard)", () => {
+    it.each([
+      "../../etc/passwd",
+      "..\\..\\windows\\system32",
+      "run/with/slash",
+      "run with space",
+      "run;rm -rf /",
+      "run null",
+    ])("exits 1 with invalid runId %s", async (badId) => {
+      await expect(resumeCommand(badId)).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+      // Critical: the path-traversal runId should be rejected BEFORE any readFile attempt
+      expect(mockReadFile).not.toHaveBeenCalled();
+    });
+
+    it.each(["run-abc12345", "RUN_ABC", "abc-DEF_123"])(
+      "accepts safe runId %s and proceeds to readFile",
+      async (goodId) => {
+        mockReadFile.mockRejectedValue(new Error("ENOENT")); // proceed past guard, fail later
+        await expect(resumeCommand(goodId)).rejects.toThrow("process.exit(1)");
+        expect(mockReadFile).toHaveBeenCalled();
+      }
+    );
+  });
 });

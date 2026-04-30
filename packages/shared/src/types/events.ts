@@ -209,6 +209,11 @@ const NodeResultSchema = z.object({
   exitCode: z.number(),
   durationMs: z.number(),
   costUsd: z.number().optional(),
+  // Intentionally `z.string()` rather than `z.enum(SygilErrorCode)`. Values
+  // SHOULD be drawn from `SygilErrorCode` (see types/errors.ts), but the
+  // runtime schema stays permissive so a newer adapter emitting a new code
+  // can be loaded by an older scheduler without refusing the checkpoint.
+  // Mirrors the `.passthrough()` posture of the surrounding schema.
   errorCode: z.string().optional(),
   tokenUsage: z
     .object({

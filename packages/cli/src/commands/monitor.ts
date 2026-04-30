@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import WebSocket from "ws";
 import chalk from "chalk";
-import type { WsServerEvent, EdgeConfig } from "@sygil/shared";
+import type { WsServerEvent } from "@sygil/shared";
 import type {
   TerminalMonitorState,
   NodeMonitorState,
@@ -12,6 +12,7 @@ import {
   formatEventSummary,
   logEvent,
 } from "../monitor/terminal-renderer.js";
+import { topoSort } from "../utils/topo-sort.js";
 
 interface ActiveMonitorInfo {
   port: number;
@@ -54,55 +55,6 @@ async function readActiveMonitor(): Promise<ActiveMonitorInfo | null> {
   }
 }
 
-function topologicalSort(
-  nodeIds: string[],
-  edges: EdgeConfig[]
-): string[] {
-  const forwardEdges = edges.filter((e) => !e.isLoopBack);
-  const inDegree = new Map<string, number>();
-  const adjacency = new Map<string, string[]>();
-
-  for (const id of nodeIds) {
-    inDegree.set(id, 0);
-    adjacency.set(id, []);
-  }
-
-  for (const edge of forwardEdges) {
-    const current = inDegree.get(edge.to);
-    if (current !== undefined) {
-      inDegree.set(edge.to, current + 1);
-    }
-    adjacency.get(edge.from)?.push(edge.to);
-  }
-
-  const queue: string[] = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) queue.push(id);
-  }
-
-  const sorted: string[] = [];
-  while (queue.length > 0) {
-    const node = queue.shift()!;
-    sorted.push(node);
-    for (const neighbor of adjacency.get(node) ?? []) {
-      const deg = inDegree.get(neighbor);
-      if (deg !== undefined) {
-        const next = deg - 1;
-        inDegree.set(neighbor, next);
-        if (next === 0) queue.push(neighbor);
-      }
-    }
-  }
-
-  // Fallback if graph has cycles or disconnected nodes
-  if (sorted.length < nodeIds.length) {
-    for (const id of nodeIds) {
-      if (!sorted.includes(id)) sorted.push(id);
-    }
-  }
-
-  return sorted;
-}
 
 export async function monitorCommand(
   runId: string | undefined,
@@ -197,7 +149,7 @@ export async function monitorCommand(
         state.workflowName = event.graph.name;
         state.startedAt = Date.now();
         const nodeIds = Object.keys(event.graph.nodes);
-        state.nodeOrder = topologicalSort(nodeIds, event.graph.edges);
+        state.nodeOrder = topoSort(nodeIds, event.graph.edges);
         for (const nodeId of nodeIds) {
           const config = event.graph.nodes[nodeId]!;
           state.nodes.set(nodeId, {

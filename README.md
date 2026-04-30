@@ -1,9 +1,12 @@
 # Sygil
 
-
 [![npm version](https://img.shields.io/npm/v/sygil.svg)](https://www.npmjs.com/package/sygil)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js ≥20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
+[![GitHub stars](https://img.shields.io/github/stars/akshatvasisht/sygil?style=flat&labelColor=18181b&color=71717a)](https://github.com/akshatvasisht/sygil/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/akshatvasisht/sygil/ci.yml?style=flat&labelColor=18181b&color=71717a)](https://github.com/akshatvasisht/sygil/actions/workflows/ci.yml)
+
+> **Try the editor in your browser:** https://sygil-editor.vercel.app — no install required. Read-only demo; clone the repo to execute workflows.
 
 Deterministic orchestration for probabilistic coding agents.
 
@@ -35,11 +38,49 @@ state so runs are resumable.
 ## Quick start
 
 ```bash
-npm install -g sygil
+git clone https://github.com/akshatvasisht/sygil.git
+cd sygil
+npm install
+npm run build
+export ANTHROPIC_API_KEY=sk-ant-...
 cd my-project
-sygil init
-sygil run tdd-feature "add OAuth2 login"
+node /path/to/sygil/packages/cli/dist/index.js init
+node /path/to/sygil/packages/cli/dist/index.js run tdd-feature "add OAuth2 login"
 ```
+
+> Note: an npm-published release is on the way — the `git clone` flow is the current path.
+
+## Install via Docker (Windows, Linux, macOS)
+
+No Node.js required. Works on Windows without WSL.
+
+    docker run --rm -v "$PWD:/workspace" \
+      -e ANTHROPIC_API_KEY \
+      ghcr.io/akshatvasisht/sygil:latest \
+      run tdd-feature "add OAuth2 login"
+
+Mount your project as `/workspace`, pass whatever adapter credentials you
+need via `-e VAR` (or `--env-file .env`), and use `--rm` for one-shot runs.
+
+The image ships all adapters that don't need platform-specific binaries:
+`claude-sdk`, `codex` (SDK mode), `local-oai`, `echo`. Users of CLI-based
+adapters (`claude-cli`, `cursor`, `gemini-cli`) should install those CLIs
+on the host and mount them: `-v /usr/local/bin/claude:/usr/local/bin/claude`.
+
+## Running in the cloud
+
+Sygil is local-first — there's no hosted Sygil service. To run on cloud
+infrastructure, mount the Docker image on any container platform:
+
+| Provider | Quick path |
+|---|---|
+| Fly.io | `fly launch --image ghcr.io/akshatvasisht/sygil:latest` |
+| Render | Create a Web Service, select "Existing image", use `ghcr.io/akshatvasisht/sygil:latest` |
+| Railway | Create a new service → "Deploy a Docker image" → paste the image URL |
+| Kubernetes | Standard Deployment + PVC for state — see `docs/DEPLOYMENT.md` (TODO) |
+
+State (checkpoints, NDJSON logs) persists to whatever you mount at
+`/workspace` — use a volume/bind-mount your platform provides.
 
 ## CLI commands
 
@@ -84,11 +125,20 @@ sygil run tdd-feature "add OAuth2 login"
 | `claude-sdk` | Claude Agent SDK (primary) | Yes | Application-level (outputDir restriction) |
 | `codex` | Codex CLI subprocess | Yes | OS-level (Seatbelt on macOS, Landlock on Linux) |
 | `claude-cli` | Claude CLI subprocess (fallback) | Partial | Application-level |
-| `cursor` | Cursor CLI | No | None |
+| `cursor` | Cursor CLI | Partial | None |
+| `gemini-cli` | Gemini CLI subprocess | Partial | None |
+| `local-oai` | Local OpenAI-compatible endpoint (Ollama, LM Studio, etc.) | Yes | None |
 | `echo` | Deterministic stub (testing only) | Yes | None |
 
 The adapter is set per node in `workflow.json`. `sygil init` checks which
 adapters are available in the current environment.
+
+### Local models
+
+The `local-oai` adapter defaults to Ollama at `http://localhost:11434/v1` and
+works with any OpenAI-compatible server. Known-good: **Qwen 2.5 7B+**, Llama
+3.2 8B+, Mistral Nemo. No API key required for local runs. Override the
+endpoint via `SYGIL_LOCAL_OAI_URL`.
 
 ## Web UI
 
@@ -131,6 +181,7 @@ packages/
 
 - [docs/API.md](docs/API.md) — CLI reference and `workflow.json` schema
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, component overview, gate types, WebSocket protocol
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — Prometheus scrape + OTLP push
 - [docs/SETUP.md](docs/SETUP.md) — installation, environment setup, adapter configuration
 - [docs/STYLE.md](docs/STYLE.md) — coding standards and repository conventions
 - [docs/TESTING.md](docs/TESTING.md) — testing guidelines, mocking conventions, coverage

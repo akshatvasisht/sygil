@@ -293,6 +293,11 @@
               }
             ],
             "x-category": "resilience"
+          },
+          "allowUnsafeToolsBypass": {
+            "description": "Opt-in override acknowledging that tools: will be ignored by this adapter (codex, cursor, gemini-cli have no upstream allowlist flag). Without this flag, such combinations fail workflow load.",
+            "type": "boolean",
+            "x-category": "contract"
           }
         },
         "required": [

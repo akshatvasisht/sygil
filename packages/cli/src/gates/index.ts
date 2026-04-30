@@ -165,7 +165,7 @@ export class GateEvaluator {
         return this.evaluateFileExists(condition.path, outputDir);
 
       case "regex":
-        return this.evaluateRegex(condition.filePath, condition.pattern, outputDir);
+        return this.evaluateRegex(condition.filePath, condition.pattern, outputDir, signal);
 
       case "script":
         return this.evaluateScript(condition.path, nodeResult, outputDir, signal);
@@ -224,7 +224,8 @@ export class GateEvaluator {
   private async evaluateRegex(
     filePath: string,
     pattern: string,
-    outputDir: string
+    outputDir: string,
+    signal?: AbortSignal
   ): Promise<GateResult> {
     const resolved = isAbsolute(filePath) ? filePath : join(outputDir, filePath);
     // Path containment guard — prevent reading arbitrary files outside outputDir
@@ -244,6 +245,7 @@ export class GateEvaluator {
     } catch {
       return { passed: false, reason: `regex gate: cannot stat file ${resolved}` };
     }
+    if (signal?.aborted) return { passed: false, reason: "Gate evaluation aborted" };
 
     let content: string;
     try {
@@ -251,6 +253,7 @@ export class GateEvaluator {
     } catch {
       return { passed: false, reason: `regex gate: cannot read file ${resolved}` };
     }
+    if (signal?.aborted) return { passed: false, reason: "Gate evaluation aborted" };
 
     let regex = this.regexCache.get(pattern);
     if (!regex) {
@@ -265,6 +268,10 @@ export class GateEvaluator {
       }
     }
 
+    // NB: regex.test() is synchronous; the abort signal cannot interrupt
+    // catastrophic backtracking once started. ReDoS-prone patterns are
+    // rejected at workflow load time by `assertRegexPatternsSafe` in
+    // utils/workflow.ts; the signal checks above are defensive only.
     const passed = regex.test(content);
     return {
       passed,

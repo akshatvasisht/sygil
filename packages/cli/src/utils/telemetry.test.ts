@@ -93,7 +93,7 @@ describe("trackEvent", () => {
 
     expect(mockRequest).toHaveBeenCalledTimes(1);
     const [url, options] = mockRequest.mock.calls[0]!;
-    expect(url).toContain("telemetry.sigil.dev");
+    expect(url).toContain("telemetry.sygil.dev");
     expect(options.method).toBe("POST");
     expect(options.headers["Content-Type"]).toBe("application/json");
   });

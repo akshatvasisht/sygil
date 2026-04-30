@@ -268,49 +268,6 @@ pre,
   rx: 2;
 }
 
-/* ── Context menu ────────────────────────── */
-.context-menu {
-  animation: context-menu-in 0.15s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes context-menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* ── Sidebar collapse toggle ─────────────── */
-.sidebar-toggle {
-  transition: background-color 0.15s ease,
-              color 0.15s ease;
-}
-
-.sidebar-toggle:hover {
-  background-color: var(--surface);
-  color: var(--dim);
-}
-
-/* ── Shortcuts popover ───────────────────── */
-.shortcuts-popover {
-  animation: shortcuts-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes shortcuts-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* ── Node state animations (GPU-composited) ── */
 @keyframes node-running-pulse {
   0%,
@@ -753,8 +710,8 @@ pre,
   opacity: 0.7;
 }
 
-/* ── HeroSigil traveling wave ─────────────── */
-@keyframes sigilWave {
+/* ── HeroSygil traveling wave ─────────────── */
+@keyframes sygilWave {
   0%   { fill-opacity: 0.18; fill: #FF5C00; }
   5%   { fill-opacity: 0.8;  fill: #FF8A22; }
   15%  { fill-opacity: 0.18; fill: #FF5C00; }
@@ -762,8 +719,8 @@ pre,
 }
 
 /* No will-change here — fill/fill-opacity don't benefit from compositor layers */
-.sigil-travel {
-  animation: sigilWave 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+.sygil-travel {
+  animation: sygilWave 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 /* ── Below-fold content visibility ────────── */

@@ -1,10 +1,74 @@
 import { readFile } from "node:fs/promises";
-import type { WorkflowGraph } from "@sygil/shared";
+import type { AdapterType, WorkflowGraph } from "@sygil/shared";
 import { WorkflowGraphSchema } from "@sygil/shared";
 import {
   isVerificationEnabled,
   verifyTemplateSignature,
 } from "./template-signature.js";
+
+/**
+ * Adapters that accept `NodeConfig.tools` for cross-adapter shape parity but
+ * have no upstream allowlist flag. They warn-ignore at runtime; we refuse at
+ * load time unless the node opts in via `allowUnsafeToolsBypass: true`.
+ * See `agentcontext/build-log.md` 2026-04-24 entry for context.
+ */
+const TOOLS_BYPASS_ADAPTERS: ReadonlySet<AdapterType> = new Set<AdapterType>([
+  "codex",
+  "cursor",
+  "gemini-cli",
+]);
+
+function assertToolsAllowlistSupported(graph: WorkflowGraph): void {
+  for (const [nodeId, node] of Object.entries(graph.nodes)) {
+    if (!TOOLS_BYPASS_ADAPTERS.has(node.adapter)) continue;
+    if (!node.tools || node.tools.length === 0) continue;
+    if (node.allowUnsafeToolsBypass === true) continue;
+    throw new Error(
+      `Workflow validation failed: node "${nodeId}" uses adapter "${node.adapter}" with a non-empty tools allowlist, ` +
+        `but "${node.adapter}" has no upstream tool-allowlist flag and would silently ignore it. ` +
+        `Set "allowUnsafeToolsBypass: true" on the node to acknowledge the unsandboxed run, ` +
+        `or switch to an adapter that honors tools (claude-cli, claude-sdk, local-oai).`,
+    );
+  }
+}
+
+/**
+ * Reject regex gate patterns with obvious catastrophic-backtracking shapes.
+ *
+ * `regex.test()` is synchronous and cannot be interrupted by an abort signal
+ * once started. A pattern with nested unbounded quantifiers — e.g. `(a+)+`,
+ * `(a*)*`, `(.*)+`, `(?:a+)+` — matched against modestly-sized adversarial
+ * input causes exponential backtracking and hangs the scheduler indefinitely.
+ *
+ * This heuristic catches the textbook star-height-2 form: a group whose body
+ * contains an unbounded quantifier (`+` or `*`), itself followed by an
+ * unbounded quantifier. It does NOT catch every ReDoS pattern (e.g.
+ * overlapping alternation `(a|a)*` is missed), but rejects the cases an
+ * attacker most commonly reaches for in a crafted workflow.json.
+ *
+ * Trigger that motivated this: a workflow imported via `sygil import-template`
+ * (signature verification is opt-in via SYGIL_VERIFY_TEMPLATES=1, so unsigned
+ * workflows pass straight to gate evaluation).
+ */
+const REDOS_HEURISTIC = /\([^)]*[+*][^)]*\)[+*]/;
+
+function assertRegexPatternsSafe(graph: WorkflowGraph): void {
+  for (const edge of graph.edges) {
+    if (!edge.gate) continue;
+    for (const condition of edge.gate.conditions) {
+      if (condition.type !== "regex") continue;
+      if (REDOS_HEURISTIC.test(condition.pattern)) {
+        throw new Error(
+          `Workflow validation failed: edge "${edge.id}" has a regex gate with pattern "${condition.pattern}" ` +
+            `that contains nested unbounded quantifiers (e.g. \`(a+)+\`). This shape causes catastrophic ` +
+            `backtracking in JavaScript's regex engine and would hang the scheduler indefinitely on ` +
+            `adversarial input. Rewrite the pattern without nested \`+\`/\`*\` on a group, or split into ` +
+            `multiple simpler gates.`,
+        );
+      }
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Parameter interpolation
@@ -114,5 +178,18 @@ export async function loadWorkflow(filePath: string): Promise<WorkflowGraph> {
     throw new Error(`Workflow validation failed:\n${issues}`);
   }
 
-  return result.data as WorkflowGraph;
+  const graph = result.data as WorkflowGraph;
+  validateWorkflowInvariants(graph);
+  return graph;
+}
+
+/**
+ * Post-schema invariant checks (tools allowlist + ReDoS heuristic). Called by
+ * `loadWorkflow` for the file path and by `sygil run -` (stdin) so both
+ * code paths share the same security surface. Every new entry point that
+ * constructs a `WorkflowGraph` from raw input must call this.
+ */
+export function validateWorkflowInvariants(graph: WorkflowGraph): void {
+  assertToolsAllowlistSupported(graph);
+  assertRegexPatternsSafe(graph);
 }

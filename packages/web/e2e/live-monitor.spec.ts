@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { resolve } from "node:path";
-import { startSygilRun } from "./helpers/sigil-runner";
+import { startSygilRun } from "./helpers/sygil-runner";
 
 // Fixture paths — relative to this spec file
 const FIXTURES = resolve(__dirname, "../../cli/test-fixtures/workflows");

@@ -40,12 +40,21 @@ afterEach(async () => {
 
 describe("WorkflowScheduler", () => {
   describe("rate limit handling", () => {
-    // Helper to robustly advance time, interleaving macro/microtasks with fake timer advancement
+    /**
+     * Drain every fake timer the scheduler registers — including timers that
+     * register more timers (e.g. the `sleep(retryAfterMs)` whose continuation
+     * spawns the resume + re-stream chain).
+     *
+     * Earlier this was a 60-iteration `advanceTimersByTimeAsync(100)` loop.
+     * That worked locally but flaked on CI (`scheduler/index.rate-limit.test.ts
+     * > "emits rate_limit monitor event"` and siblings) when the resume +
+     * stream microtask chain extended past the manual budget. `runAllTimersAsync`
+     * loops internally until the timer queue is empty, then awaits microtasks,
+     * so the scheduler's full rate-limit-recovery cascade resolves before the
+     * outer `await runPromise`.
+     */
     const advanceThroughRateLimit = async () => {
-      // Advance in 100ms increments for a total of 6 seconds (to cover 5000ms delay)
-      for (let i = 0; i < 60; i++) {
-        await vi.advanceTimersByTimeAsync(100);
-      }
+      await vi.runAllTimersAsync();
     };
 
     it("pauses execution when rate_limit error event is received and resumes after delay", async () => {

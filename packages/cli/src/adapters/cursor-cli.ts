@@ -22,6 +22,7 @@ import {
 } from "./constants.js";
 import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
+import { extractJsonFromOutput } from "./extract-json.js";
 
 /** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
@@ -409,19 +410,4 @@ const CURSOR_EVENT_MAPPING: EventMapping<Record<string, unknown>, CursorInternal
   },
 };
 
-/**
- * Best-effort: try to extract the last JSON object from a text string.
- * Iterates candidate matches from last to first, returning the first that parses.
- */
-function extractJsonFromOutput(text: string): unknown | undefined {
-  const matches = text.match(/\{[\s\S]*\}/g);
-  if (!matches) return undefined;
-  for (let i = matches.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(matches[i]!);
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
+// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

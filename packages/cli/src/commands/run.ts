@@ -1,18 +1,21 @@
 import path from "node:path";
-import { writeFile, unlink, mkdir } from "node:fs/promises";
+import { writeFile, unlink, mkdir, access } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import ora from "ora";
 import open from "open";
-import { loadWorkflow, interpolateWorkflow } from "../utils/workflow.js";
+import { loadWorkflow, interpolateWorkflow, validateWorkflowInvariants } from "../utils/workflow.js";
 import { pruneWorktrees } from "../worktree/index.js";
 import { readConfig, readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT, WorkflowGraphSchema } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
 import { buildSchedulerContext, formatMetricsUrl } from "./_scheduler-bootstrap.js";
+import { sanitizeEndpointForDisplay } from "../monitor/otlp-push.js";
 import { WorkflowWatcher } from "../utils/watcher.js";
 import { logger } from "../utils/logger.js";
 import { trackEvent } from "../utils/telemetry.js";
+import { topoSort } from "../utils/topo-sort.js";
 import {
   createTerminalMonitor,
   formatEventSummary,
@@ -22,6 +25,36 @@ import type { TerminalMonitorState, NodeMonitorState } from "../monitor/terminal
 import type { AgentEvent } from "@sygil/shared";
 
 // readConfig import is used for side-effect (warm path detection)
+
+/** Resolve bare template names (e.g. "tdd-feature") to their bundled .json path.
+ *
+ * Priority:
+ *  1. "-"            — stdin; return unchanged.
+ *  2. path with "/" or ".json" extension — file path; return unchanged.
+ *  3. bare name `/^[a-z][a-z0-9-]*$/` — look up in `<cli-install-dir>/templates/<name>.json`.
+ *                                         If not found there, return unchanged so loadWorkflow
+ *                                         can produce a clear ENOENT.
+ */
+async function resolveWorkflowPath(workflowPath: string): Promise<string> {
+  if (workflowPath === "-") return workflowPath;
+  // If it contains a path separator or .json extension, treat as a file path
+  if (workflowPath.includes("/") || workflowPath.includes("\\") || workflowPath.endsWith(".json")) {
+    return workflowPath;
+  }
+  // Bare template-name shape: lowercase, digits, hyphens, starts with a letter
+  if (/^[a-z][a-z0-9-]*$/.test(workflowPath)) {
+    // Mirror the pattern from export.ts: URL("../../templates", import.meta.url)
+    const templatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
+    const candidate = path.join(templatesDir, `${workflowPath}.json`);
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Not found in bundled templates — fall through and let loadWorkflow report the error
+    }
+  }
+  return workflowPath;
+}
 
 interface RunOptions {
   param?: string[];
@@ -57,6 +90,9 @@ export async function runCommand(
 
   // 1. Load and validate workflow
   //    If workflowPath is "-", read workflow JSON from stdin instead of a file.
+  //    If workflowPath is a bare template name, resolve it to the bundled file.
+  workflowPath = await resolveWorkflowPath(workflowPath);
+
   const spinner = ora("Loading workflow...").start();
 
   let workflow;
@@ -77,6 +113,10 @@ export async function runCommand(
         throw new Error(`Workflow validation failed:\n${issues}`);
       }
       workflow = result.data as import("@sygil/shared").WorkflowGraph;
+      // Stdin path must run the same post-schema invariants as `loadWorkflow`
+      // (tools allowlist + ReDoS heuristic). Without this, `echo '...' | sygil run -`
+      // bypasses both protections.
+      validateWorkflowInvariants(workflow);
     } else {
       workflow = await loadWorkflow(workflowPath);
     }
@@ -253,7 +293,7 @@ export async function runCommand(
   if (ctx.metricsPort !== null && ctx.metricsAuthToken !== null) {
     console.log(formatMetricsUrl(ctx.metricsPort, ctx.metricsAuthToken) + "\n");
     if (ctx.otlpEndpoint) {
-      console.log(chalk.dim(`  OTLP export: ${ctx.otlpEndpoint}\n`));
+      console.log(chalk.dim(`  OTLP export: ${sanitizeEndpointForDisplay(ctx.otlpEndpoint)}\n`));
     }
   }
 
@@ -292,7 +332,7 @@ export async function runCommand(
   }
 
   // 6. Compute topological node order for display
-  const nodeOrder = topoSort(workflow);
+  const nodeOrder = topoSort(Object.keys(workflow.nodes), workflow.edges);
 
   // 7. Set up monitoring display
   const isTTY = Boolean(process.stdout.isTTY);
@@ -348,6 +388,10 @@ export async function runCommand(
     if (activeWatcher) {
       activeWatcher.stop();
       await monitor.stop();
+      // Watch-mode bypasses the non-watch finally block at line ~542 that
+      // calls ctx.teardown() — without this call, --watch + --metrics-port
+      // leaks the metrics server and skips the final OTLP flush on Ctrl+C.
+      try { await ctx.teardown(); } catch { /* best-effort */ }
       process.exit(0);
     }
   };
@@ -550,34 +594,3 @@ export async function runCommand(
   }
 }
 
-/** Kahn's algorithm topological sort for display ordering. Falls back to Object.keys order. */
-function topoSort(workflow: { nodes: Record<string, unknown>; edges: Array<{ from: string; to: string; isLoopBack?: boolean }> }): string[] {
-  const nodeIds = Object.keys(workflow.nodes);
-  const inDegree = new Map<string, number>();
-  for (const id of nodeIds) inDegree.set(id, 0);
-
-  const forwardEdges = workflow.edges.filter(e => !e.isLoopBack);
-  for (const e of forwardEdges) {
-    inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1);
-  }
-
-  const queue: string[] = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) queue.push(id);
-  }
-
-  const sorted: string[] = [];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    sorted.push(current);
-    for (const e of forwardEdges) {
-      if (e.from === current) {
-        const newDeg = (inDegree.get(e.to) ?? 1) - 1;
-        inDegree.set(e.to, newDeg);
-        if (newDeg === 0) queue.push(e.to);
-      }
-    }
-  }
-
-  return sorted.length === nodeIds.length ? sorted : nodeIds;
-}

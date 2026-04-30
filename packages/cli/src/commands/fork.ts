@@ -10,8 +10,11 @@ import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
 import { getAdapter } from "../adapters/index.js";
 import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
+import { isContainedIn } from "../gates/index.js";
 import type { WorkflowRunState, AgentEvent, NodeResult } from "@sygil/shared";
 import { WorkflowRunStateSchema } from "@sygil/shared";
+
+const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
 export interface ForkOptions {
   at?: string;
@@ -30,12 +33,24 @@ export interface ForkOptions {
  * requires via `--param key=value`.
  */
 export async function forkCommand(parentRunId: string, options: ForkOptions): Promise<void> {
+  // Reject runIds with path-traversal characters before constructing any path.
+  // Mirror of `replay.ts`'s guard — see resume.ts for the full reasoning.
+  if (!RUN_ID_RE.test(parentRunId)) {
+    console.error(chalk.red(`Invalid parent runId "${parentRunId}": must be alphanumeric/_/-`));
+    process.exit(1);
+  }
+
   await pruneWorktrees();
 
   const spinner = ora(`Loading parent run ${chalk.cyan(parentRunId)}...`).start();
 
   const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
-  const parentStateFile = join(configDir, "runs", `${parentRunId}.json`);
+  const runsRoot = join(configDir, "runs");
+  const parentStateFile = join(runsRoot, `${parentRunId}.json`);
+  if (!isContainedIn(parentStateFile, runsRoot)) {
+    spinner.fail(`Invalid parent runId "${parentRunId}": resolved path escapes the runs directory`);
+    process.exit(1);
+  }
   let raw: string;
   try {
     raw = await readFile(parentStateFile, "utf8");

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd ../.. && npm install && npm run build --workspace=@sygil/web",
+  "outputDirectory": "out",
+  "framework": null,
+  "cleanUrls": true,
+  "installCommand": "echo 'install happens inside buildCommand for workspace resolution'"
+}

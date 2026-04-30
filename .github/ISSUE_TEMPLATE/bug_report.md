@@ -10,14 +10,14 @@ A clear and concise description of what the bug is.
 
 **To reproduce**
 1. Workflow JSON (or relevant snippet)
-2. Command run: `sigil run ...`
+2. Command run: `sygil run ...`
 3. Full error output / stack trace
 
 **Expected behavior**
 What you expected to happen.
 
 **Environment**
-- Sigil version: (run `sigil --version`)
+- Sygil version: (run `sygil --version`)
 - Node.js version: (run `node --version`)
 - OS and version:
 - Adapter(s) in use:

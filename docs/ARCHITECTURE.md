@@ -15,8 +15,6 @@
 | **WorkflowRunState** | The persisted checkpoint written to `.sygil/runs/<id>.json` after every node. Tracks completed nodes, per-node results, retry counters, and run status. |
 | **RecordedEvent** | A timestamped `AgentEvent` with node context, written to NDJSON event logs for replay and debugging. |
 
----
-
 ## System overview
 
 Sygil is a Turborepo monorepo with three packages.
@@ -52,8 +50,6 @@ TypeScript types, Zod schemas, error codes, and contract validation shared betwe
 - `src/types/errors.ts` — `SygilErrorCode` enum and `SygilError` interface.
 - `src/utils/contract-validator.ts` — `validateStructuredOutput()` for JSON schema-like structural validation.
 - `src/utils/event-render-data.ts` — `eventRenderData(event)` pure-data projection of every `AgentEvent` variant into `{ title, subtitle?, iconKey, severity }` for downstream terminal and web renderers.
-
----
 
 ## Adapter interface
 
@@ -91,9 +87,11 @@ duration, and re-spawns — without counting the pause against `maxRetries`.
 | Adapter | Module | Integration method |
 |---|---|---|
 | `claude-sdk` | `claude-sdk.ts` | Claude Agent SDK (dynamic import, optional peer dep) |
-| `codex` | `codex-cli.ts` | Codex CLI subprocess, NDJSON stdout |
 | `claude-cli` | `claude-cli.ts` | Claude CLI subprocess, NDJSON stdout |
-| `cursor` | `cursor-cli.ts` | Cursor `agent` binary subprocess |
+| `codex` | `codex-cli.ts` | Codex CLI subprocess, NDJSON stdout |
+| `cursor` | `cursor-cli.ts` | Cursor `agent` binary subprocess, NDJSON stdout |
+| `gemini-cli` | `gemini-cli.ts` | Gemini CLI subprocess, NDJSON stdout |
+| `local-oai` | `local-oai.ts` | OpenAI-compatible HTTP endpoint (Ollama / llama.cpp / vLLM / LM Studio / etc.), SSE streaming |
 | `echo` | `echo.ts` | Deterministic stub for E2E testing |
 
 All adapters populate `errorCode` in `getResult()` by mapping exit codes:
@@ -105,8 +103,6 @@ All adapters populate `errorCode` in `getResult()` by mapping exit codes:
 ### AdapterPool
 
 `AdapterPool` (`adapters/adapter-pool.ts`) provides bounded concurrency for adapter processes. `acquire(adapterType)` blocks when the pool is full (FIFO queue with timeout). `release(slot)` frees a slot. Supports per-adapter-type limits and graceful `drain()`.
-
----
 
 ## Scheduler
 
@@ -152,8 +148,6 @@ already-completed nodes.
 replay and debugging. `sygil replay <run-id>` uses `replayEvents()` to stream
 these back with original timing.
 
----
-
 ## Scheduler internal modules
 
 | Module | Purpose |
@@ -165,8 +159,6 @@ these back with original timing.
 | `node-cache.ts` | `NodeCache` — content-addressable memoization (SHA-256 of node inputs) |
 | `event-recorder.ts` | `EventRecorder` — buffers and flushes NDJSON event logs per node |
 | `event-replay.ts` | `replayEvents()` async generator for deterministic replay |
-
----
 
 ## Gate evaluation
 
@@ -198,8 +190,6 @@ variable whitelist: `PATH`, `HOME`, `SHELL`, `TERM`, `USER`, `LOGNAME`,
 **Regex cache:** `GateEvaluator` caches compiled `RegExp` instances across
 evaluations. Instantiate one `GateEvaluator` per `executeGraph()` call for cache
 reuse.
-
----
 
 ## WebSocket protocol
 
@@ -266,8 +256,6 @@ client gets its own `RingBuffer` (default 1024 events). Consecutive `text_delta`
 events are coalesced. Flush interval defaults to 16ms (~60fps). Slow clients
 exceeding `maxBufferedAmount` (if configured) are disconnected.
 
----
-
 ## Monitor modules
 
 | Module | Purpose |
@@ -276,8 +264,6 @@ exceeding `maxBufferedAmount` (if configured) are disconnected.
 | `event-fanout.ts` | `EventFanOut` — non-blocking ring-buffer fan-out with text_delta coalescing |
 | `ring-buffer.ts` | `RingBuffer<T>` — bounded circular buffer (drop-oldest on overflow) |
 
----
-
 ## Worktree modules
 
 | Module | Purpose |
@@ -285,8 +271,6 @@ exceeding `maxBufferedAmount` (if configured) are disconnected.
 | `worktree/index.ts` | `WorktreeManager` — per-node git worktree create/merge/remove (accepts `AbortSignal`) |
 | `worktree/lazy-worktree-manager.ts` | `LazyWorktreeManager` — lazy creation + sparse checkout + mutex-protected ops; serializes `git worktree add`/`remove` via an `async-mutex` `Mutex` to avoid `.git/index.lock` contention |
 | `worktree/isolation-check.ts` | `needsIsolation(nodeConfig)` — returns true only for nodes with write-capable tools |
-
----
 
 ## Structured cancellation
 
@@ -298,15 +282,13 @@ the root aborts, propagating to:
 - Adapter streaming loops
 - Human review wait promises
 
----
-
 ## Directory structure
 
 ```
 packages/
   cli/
     src/
-      adapters/     AgentAdapter implementations (claude-sdk, codex, claude-cli, cursor, echo)
+      adapters/     AgentAdapter implementations (claude-sdk, claude-cli, codex, cursor, gemini-cli, local-oai, echo)
                     adapter-pool.ts — AdapterPool, bounded concurrency for adapter processes
                     ndjson-stream.ts — NDJSON line parser for CLI adapter stdout
       commands/     CLI command handlers (init, run, validate, export, list, resume, replay, import-template, registry)
@@ -340,8 +322,6 @@ packages/
     e2e/            Playwright end-to-end tests
 ```
 
----
-
 ## Shared types
 
 Key types exported from `@sygil/shared`:
@@ -354,7 +334,7 @@ Key types exported from `@sygil/shared`:
 | `GateCondition` | `workflow.ts` | Discriminated union of 5 condition types |
 | `ContractConfig` | `workflow.ts` | Output schema + input mapping on edges |
 | `ParameterConfig` | `workflow.ts` | Workflow parameter definition (type, description, required, default) |
-| `AdapterType` | `workflow.ts` | `"claude-sdk" \| "claude-cli" \| "codex" \| "cursor" \| "echo"` |
+| `AdapterType` | `workflow.ts` | `"claude-sdk" \| "claude-cli" \| "codex" \| "cursor" \| "gemini-cli" \| "local-oai" \| "echo"` |
 | `AgentAdapter` | `adapter.ts` | Interface all adapters implement |
 | `AgentEvent` | `adapter.ts` | Discriminated union: tool_call, tool_result, file_write, shell_exec, text_delta, cost_update, stall, error |
 | `NodeResult` | `adapter.ts` | Execution result (output, exitCode, durationMs, costUsd?, errorCode?, tokenUsage?) |
@@ -364,8 +344,6 @@ Key types exported from `@sygil/shared`:
 | `RecordedEvent` | `events.ts` | Timestamped AgentEvent with node context for replay |
 | `SygilErrorCode` | `errors.ts` | Structured error code enum (gate, node, adapter, workflow, checkpoint categories) |
 | `SygilError` | `errors.ts` | Error interface with code, message, optional nodeId/edgeId/details |
-
----
 
 ## Tech stack
 
@@ -382,8 +360,6 @@ Key types exported from `@sygil/shared`:
 | Styling | Tailwind CSS | Utility-first; no separate stylesheet maintenance |
 | Test runner | Vitest | Native ESM support; compatible with the `"type": "module"` CLI package |
 | E2E testing | Playwright | Browser-based end-to-end tests for the web UI |
-
----
 
 ## Environment variables
 

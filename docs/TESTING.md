@@ -11,9 +11,9 @@ All unit and integration tests use [Vitest](https://vitest.dev). End-to-end brow
 npm test
 
 # Individual packages
-cd packages/cli && npx vitest run       # CLI: 68 test files (~895 tests)
-cd packages/shared && npx vitest run    # Shared: 6 test files (~195 tests)
-cd packages/web && npx vitest run       # Web: 14 test files (~188 tests)
+cd packages/cli && npx vitest run       # CLI: 78 test files
+cd packages/shared && npx vitest run    # Shared: 8 test files
+cd packages/web && npx vitest run       # Web: 16 test files (.test.ts and .test.tsx)
 
 # Watch mode (re-runs on file save)
 npx vitest
@@ -41,7 +41,7 @@ npm run replay:ci                       # Repo root; reads the frozen NDJSON fix
 
 ## Package test map
 
-### `packages/cli` — 49 test files
+### `packages/cli` — 78 test files
 
 | Directory | Files | What they test |
 |---|---|---|
@@ -57,7 +57,7 @@ npm run replay:ci                       # Repo root; reads the frozen NDJSON fix
 | `src/e2e/` | `cli-run.e2e.test.ts` | Full CLI invocation end-to-end |
 | `templates/` | `tdd-feature.test.ts` | Bundled template schema validation |
 
-### `packages/shared` — 4 test files
+### `packages/shared` — 8 test files
 
 | File | What it tests |
 |---|---|
@@ -66,7 +66,7 @@ npm run replay:ci                       # Repo root; reads the frozen NDJSON fix
 | `src/types/errors.test.ts` | `SygilErrorCode` enum coverage and `SygilError` interface |
 | `src/utils/contract-validator.test.ts` | `validateStructuredOutput()` — schema validation, required fields, type checking |
 
-### `packages/web` — 10 test files
+### `packages/web` — 16 test files
 
 | File | What it tests |
 |---|---|
@@ -77,16 +77,15 @@ npm run replay:ci                       # Repo root; reads the frozen NDJSON fix
 | `src/components/monitor/NodeTimeline.test.tsx` | Timeline entry rendering, expand/collapse, status display |
 | `src/components/editor/NodeCard.test.tsx` | Node card rendering, adapter icons, status display |
 | `src/components/editor/NodePalette.test.tsx` | Palette rendering, drag-and-drop, keyboard interaction |
-| `src/components/ui/SigilLogo.test.tsx` | SVG logo rendering with size and color props |
+| `src/components/ui/SygilLogo.test.tsx` | SVG logo rendering with size and color props |
 | `src/utils/exportLog.test.ts` | JSON and Markdown export formatting |
 | `src/lib/monitor-url.test.ts` | `resolveMonitorWsUrl()` URL resolution across embedded/dev/direct modes |
 
-### `packages/web/e2e` — 4 Playwright specs
+### `packages/web/e2e` — 3 Playwright specs
 
 | File | What it tests |
 |---|---|
 | `e2e/editor.spec.ts` | Editor canvas interactions, node palette, property panel |
-| `e2e/monitor.spec.ts` | Monitor page rendering and event display |
 | `e2e/landing.spec.ts` | Landing page rendering, navigation, accessibility |
 | `e2e/live-monitor.spec.ts` | Live WebSocket connection and event streaming |
 

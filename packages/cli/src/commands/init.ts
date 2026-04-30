@@ -71,6 +71,16 @@ async function probeLocalOai(): Promise<boolean> {
   const baseUrl =
     process.env["SYGIL_LOCAL_OAI_URL"]?.replace(/\/+$/, "") ?? "http://localhost:11434/v1";
   const apiKey = process.env["SYGIL_LOCAL_OAI_KEY"] ?? "ollama";
+  // Scheme allowlist on the env-controlled URL. Node fetch rejects non-http(s)
+  // schemes natively, but a clear early-return here both speeds up startup and
+  // narrows the SSRF surface (the env var is the only attacker-influenced
+  // input on this code path).
+  try {
+    const parsed = new URL(`${baseUrl}/models`);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  } catch {
+    return false;
+  }
   try {
     const res = await fetch(`${baseUrl}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
@@ -87,7 +97,7 @@ export interface InitOptions {
 }
 
 export async function initCommand(options: InitOptions = {}): Promise<void> {
-  console.log(chalk.bold("\nSigil — adapter detection\n"));
+  console.log(chalk.bold("\nSygil — adapter detection\n"));
 
   const claudeCliAvailable = checkBinaryInPath("claude");
   const codexAvailable = checkBinaryInPath("codex");
@@ -257,8 +267,8 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
   }
 
   console.log(chalk.dim("Next steps:"));
-  console.log(`  ${chalk.cyan("sygil export tdd-feature ./workflow.json")}  ${chalk.dim("# export a bundled template")}`);
-  console.log(`  ${chalk.cyan('sygil run ./workflow.json "your task here"')}  ${chalk.dim("# run it")}`);
+  console.log(`  ${chalk.dim("Try:")}  ${chalk.cyan("sygil export tdd-feature ./my-workflow.json")}`);
+  console.log(`  ${chalk.dim("Then:")} ${chalk.cyan("sygil run ./my-workflow.json")}`);
   console.log("");
 
   // Print telemetry status message

@@ -8,6 +8,7 @@ import { runCommand } from "./run.js";
 vi.mock("../utils/workflow.js", () => ({
   loadWorkflow: vi.fn(),
   interpolateWorkflow: vi.fn((wf: unknown) => wf),
+  validateWorkflowInvariants: vi.fn(),
 }));
 
 vi.mock("../adapters/index.js", () => ({
@@ -64,6 +65,7 @@ vi.mock("node:fs/promises", () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   unlink: vi.fn().mockResolvedValue(undefined),
   mkdir: vi.fn().mockResolvedValue(undefined),
+  access: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("open", () => ({ default: vi.fn() }));
@@ -74,6 +76,7 @@ import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { readConfig, readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { pruneWorktrees } from "../worktree/index.js";
+import { access } from "node:fs/promises";
 
 const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
 const mockInterpolateWorkflow = interpolateWorkflow as ReturnType<typeof vi.fn>;
@@ -83,6 +86,7 @@ const mockReadConfig = readConfig as ReturnType<typeof vi.fn>;
 const mockReadConfigSafe = readConfigSafe as ReturnType<typeof vi.fn>;
 const mockResolveModelTiersAndLog = resolveModelTiersAndLog as ReturnType<typeof vi.fn>;
 const mockPruneWorktrees = pruneWorktrees as ReturnType<typeof vi.fn>;
+const mockAccess = access as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helper: minimal valid workflow
@@ -278,5 +282,75 @@ describe("runCommand — A.9 availability pre-flight before interpolation", () =
 
     // interpolateWorkflow was called because adapter was available
     expect(interpolateCalled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template-name resolution
+// ---------------------------------------------------------------------------
+
+describe("runCommand — template-name resolution", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy types
+  let processExitSpy: MockInstance<any[], never>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spy types
+  let consoleErrorSpy: MockInstance<any[], any>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    processExitSpy = vi.spyOn(process, "exit").mockImplementation((_: unknown) => undefined as never);
+    mockGetAdapter.mockReturnValue({ isAvailable: vi.fn().mockResolvedValue(true) });
+    mockInterpolateWorkflow.mockImplementation((wf: unknown) => wf);
+    mockReadConfig.mockResolvedValue(null);
+    mockReadConfigSafe.mockResolvedValue(null);
+    mockResolveModelTiersAndLog.mockImplementation((wf: unknown) => wf);
+    mockPruneWorktrees.mockResolvedValue(undefined);
+    mockBuildSchedulerContext.mockRejectedValue(new Error("no scheduler in test"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("bare template name resolves to bundled file when access succeeds", async () => {
+    // access() succeeds → template exists in the bundled templates dir
+    mockAccess.mockResolvedValue(undefined);
+    mockLoadWorkflow.mockResolvedValue(makeWorkflow());
+
+    await runCommand("tdd-feature", undefined, {});
+
+    // loadWorkflow should have been called with a path that ends in tdd-feature.json
+    expect(mockLoadWorkflow).toHaveBeenCalledWith(
+      expect.stringMatching(/tdd-feature\.json$/)
+    );
+    // The path should contain 'templates' (bundled dir, not a bare name)
+    const calledPath = mockLoadWorkflow.mock.calls[0]?.[0] as string;
+    expect(calledPath).toMatch(/templates/);
+  });
+
+  it("explicit file path still passes through to loadWorkflow unchanged", async () => {
+    mockLoadWorkflow.mockResolvedValue(makeWorkflow());
+
+    await runCommand("my-workflow.json", undefined, {});
+
+    expect(mockLoadWorkflow).toHaveBeenCalledWith("my-workflow.json");
+  });
+
+  it("unknown bare name falls back to loadWorkflow and exits with error code 1", async () => {
+    // access() throws → template not found in bundled dir
+    mockAccess.mockRejectedValue(new Error("ENOENT"));
+    // loadWorkflow also throws → not found as a file path either (neither template search
+    // path nor explicit file path match, so the user gets a clear ENOENT from loadWorkflow)
+    mockLoadWorkflow.mockRejectedValue(
+      new Error("ENOENT: no such file or directory, open 'nonexistent'")
+    );
+
+    await runCommand("nonexistent", undefined, {});
+
+    // process.exit(1) should be called — the spinner.fail message contains
+    // "Failed to load workflow: ENOENT: no such file or directory, open 'nonexistent'"
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    // loadWorkflow must have been invoked (bare name fell through after access() miss)
+    expect(mockLoadWorkflow).toHaveBeenCalledWith("nonexistent");
   });
 });

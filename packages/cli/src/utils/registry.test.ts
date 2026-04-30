@@ -151,3 +151,25 @@ describe("listUserTemplates", () => {
     }
   });
 });
+
+describe("validateTemplateUrl — scheme allowlist", () => {
+  it("accepts https://", async () => {
+    const { validateTemplateUrl } = await import("./registry.js");
+    expect(() => validateTemplateUrl("https://example.com/template.json")).not.toThrow();
+  });
+
+  it("accepts http://", async () => {
+    const { validateTemplateUrl } = await import("./registry.js");
+    expect(() => validateTemplateUrl("http://example.com/template.json")).not.toThrow();
+  });
+
+  it.each([
+    "file:///etc/passwd",
+    "ftp://example.com/template.json",
+    "data:text/plain,hello",
+    "javascript:alert(1)",
+  ])("rejects non-http(s) scheme: %s", async (url) => {
+    const { validateTemplateUrl } = await import("./registry.js");
+    expect(() => validateTemplateUrl(url)).toThrow(/http or https/);
+  });
+});

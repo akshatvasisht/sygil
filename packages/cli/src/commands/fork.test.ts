@@ -300,4 +300,21 @@ describe("forkCommand", () => {
     });
   });
 
+  describe("parentRunId validation (path traversal guard)", () => {
+    it.each([
+      "../../etc/passwd",
+      "..\\..\\windows\\system32",
+      "run/with/slash",
+      "run with space",
+      "run;rm -rf /",
+    ])("exits 1 with invalid parentRunId %s and never calls scheduler", async (badId) => {
+      await expect(forkCommand(badId, {})).rejects.toThrow("process.exit(1)");
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      // Critical: rejection happens before any state load or scheduler bootstrap
+      expect(schedulerResume).not.toHaveBeenCalled();
+      expect(mockBuildContext).not.toHaveBeenCalled();
+    });
+  });
+
 });

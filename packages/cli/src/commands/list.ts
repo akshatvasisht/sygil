@@ -9,7 +9,7 @@ import type { AdapterType, WorkflowRunState } from "@sygil/shared";
 const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor"];
 
 export async function listCommand(): Promise<void> {
-  console.log(chalk.bold("\nSigil — adapters & recent runs\n"));
+  console.log(chalk.bold("\nSygil — adapters & recent runs\n"));
 
   // --- Adapters ---
   console.log(chalk.underline("Adapters"));

@@ -20,6 +20,7 @@ import type {
 } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { extractJsonFromOutput } from "./extract-json.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -242,19 +243,4 @@ export class EchoAdapter implements AgentAdapter {
   }
 }
 
-/**
- * Best-effort: try to extract the last JSON object from a text string.
- * Iterates candidate matches from last to first, returning the first that parses.
- */
-function extractJsonFromOutput(text: string): unknown | undefined {
-  const matches = text.match(/\{[\s\S]*\}/g);
-  if (!matches) return undefined;
-  for (let i = matches.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(matches[i]!);
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
+// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

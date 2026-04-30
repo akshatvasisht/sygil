@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 
 export default function EditorError({
   error,
@@ -33,7 +33,7 @@ export default function EditorError({
     <main className="min-h-screen flex items-center justify-center bg-canvas text-bright px-6">
       <div className="max-w-md w-full card-glow-accent rounded-lg bg-panel border border-border p-8 flex flex-col gap-5">
         <div className="flex items-center gap-3">
-          <SigilLogo size={32} color="#e4e4e7" />
+          <SygilLogo size={32} color="#e4e4e7" />
           <span className="font-mono text-sm uppercase tracking-wider text-dim">sygil / editor / error</span>
         </div>
         <h1 className="text-lg font-sans">The editor hit an error.</h1>

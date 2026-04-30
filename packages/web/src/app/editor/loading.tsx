@@ -1,4 +1,4 @@
-import { SigilLogo } from "@/components/ui/SigilLogo";
+import { SygilLogo } from "@/components/ui/SygilLogo";
 
 export default function EditorLoading() {
   return (
@@ -9,7 +9,7 @@ export default function EditorLoading() {
       aria-label="Loading editor"
     >
       <nav className="h-11 border-b border-border flex items-center px-4 gap-2 bg-canvas">
-        <SigilLogo size={16} color="#71717a" />
+        <SygilLogo size={16} color="#71717a" />
         <span className="font-display font-semibold text-sm text-dim">sygil</span>
       </nav>
       <div className="flex-1 flex">
