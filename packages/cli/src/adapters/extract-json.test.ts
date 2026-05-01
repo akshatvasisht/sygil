@@ -59,4 +59,13 @@ describe("extractJsonFromOutput", () => {
     const text = '{"first":1} then {malformed';
     expect(extractJsonFromOutput(text)).toEqual({ first: 1 });
   });
+
+  it("recovers nested valid JSON inside a balanced-but-invalid outer span", () => {
+    // Outer `{ foo: {...} }` is brace-balanced but invalid JSON (unquoted key).
+    // Scanner must advance past i+1 (not endIdx+1) on parse failure so the
+    // inner valid object is still discoverable. Regression guard for the
+    // `parsed ? endIdx+1 : i+1` branch in extract-json.ts.
+    const text = 'output: { foo: {"valid": "json"} }';
+    expect(extractJsonFromOutput(text)).toEqual({ valid: "json" });
+  });
 });

@@ -283,9 +283,13 @@ describe("forkCommand", () => {
       });
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      // No --check-drift flag → drift detection skipped, no exit
+      // No --check-drift flag → drift detection skipped, no exit at all,
+      // and the diff function must not be invoked. Asserting the spy is
+      // untouched pins the invariant that the default path bypasses
+      // environment.ts entirely (parity with resume.test.ts).
       await forkCommand(parentId, {});
-      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+      expect(processExitSpy).not.toHaveBeenCalled();
+      expect(mockDiffEnvironment).not.toHaveBeenCalled();
       expect(schedulerResume).toHaveBeenCalledOnce();
     });
 

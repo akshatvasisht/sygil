@@ -137,10 +137,19 @@ export async function verifyTemplateSignature(
   let bundleRaw: string;
   try {
     bundleRaw = await readFile(sidecar, "utf8");
-  } catch {
-    // No sidecar → fail-open. User-authored workflows don't have one; unsigned
-    // bundled templates also take this path during the rollout window.
-    return { status: "no-signature" };
+  } catch (err) {
+    // ENOENT is the documented fail-open path: user-authored workflows
+    // don't have a sidecar, and unsigned bundled templates take this
+    // route during the rollout window. Any OTHER error (EACCES, EPERM,
+    // EISDIR) means the sidecar exists but we couldn't read it — that's
+    // a hard failure when the user has explicitly opted into verification.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "no-signature" };
+    }
+    return {
+      status: "failed",
+      reason: `cannot read sidecar at "${sidecar}": ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   let bundle: unknown;

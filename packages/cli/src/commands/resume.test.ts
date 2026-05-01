@@ -377,9 +377,13 @@ describe("resumeCommand", () => {
       });
       mockDiffEnvironment.mockReturnValue(["claude-cli: 2.5.0 → 2.6.0"]);
 
-      // No --check-drift flag → drift detection skipped, no exit
+      // No --check-drift flag → drift detection skipped, no exit at all,
+      // and the diff function must not be invoked. Asserting both pins the
+      // invariant that the default path skips environment.ts entirely
+      // (not just that it doesn't exit 1 by some other route).
       await resumeCommand("run-abc12345", {});
-      expect(processExitSpy).not.toHaveBeenCalledWith(1);
+      expect(processExitSpy).not.toHaveBeenCalled();
+      expect(mockDiffEnvironment).not.toHaveBeenCalled();
     });
 
     it("proceeds without drift check when state has no environment field", async () => {

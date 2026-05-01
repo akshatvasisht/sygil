@@ -342,6 +342,11 @@ export class WorkflowScheduler extends EventEmitter {
     for (const [edgeId, count] of Object.entries(savedState.retryCounters)) {
       this.retryCounters.set(edgeId, count);
     }
+    // Resume never uses NodeCache — there's no `nodeCacheEnabled` opt-in on
+    // ResumeOptions today. Explicitly null it out so a Scheduler instance
+    // reused across run() (with cache) → resume() can't carry the prior cache
+    // forward and silently skip nodes the user expects to re-execute.
+    this.nodeCache = null;
     // Do NOT clear sessionStore on resume — loop-back retries after resume
     // need to find previous sessions to continue conversation threads.
     this.checkpointManager = new CheckpointManager(process.cwd());

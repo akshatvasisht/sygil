@@ -49,11 +49,17 @@ export async function exportCommand(
   let content: string;
   try {
     content = await readFile(templateFile, "utf8");
-  } catch {
+  } catch (err) {
+    // Only fall through to the experimental dir on "file not found".
+    // EACCES / EPERM / EISDIR etc. are real operational failures and
+    // surfacing them as "template not found" misled past users into
+    // chasing a typo when permissions were the real cause.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     templateFile = join(experimentalDir, `${templateName}.json`);
     try {
       content = await readFile(templateFile, "utf8");
-    } catch {
+    } catch (err2) {
+      if ((err2 as NodeJS.ErrnoException).code !== "ENOENT") throw err2;
       // Template not found in either dir — list available templates from both
       let available: string[] = [];
       try {
