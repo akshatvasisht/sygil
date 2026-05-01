@@ -20,7 +20,7 @@ node /path/to/sygil/packages/cli/dist/index.js init
 node /path/to/sygil/packages/cli/dist/index.js run tdd-feature "add OAuth2 login"
 ```
 
-`sygil run` opens a real-time monitor in your browser. Pass `--no-monitor` for headless.
+`sygil run` shows a live terminal monitor by default. Pass `--web` to open the monitor in a browser instead (auto-opens on a TTY; pair with `--no-open` to suppress), or `--no-monitor` for fully headless.
 
 ## Commands
 
