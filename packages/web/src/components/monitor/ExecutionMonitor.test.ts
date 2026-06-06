@@ -31,18 +31,18 @@ const nodeStartImpl = makeNodeStartEvent("implementer", "codex", {
 
 describe("buildExecutionStateMap()", () => {
   it("returns empty map for empty event list", () => {
-    const map = buildExecutionStateMap([], null);
+    const map = buildExecutionStateMap([]);
     expect(map).toEqual({});
   });
 
   it("marks node as running on node_start", () => {
-    const map = buildExecutionStateMap([nodeStartPlanner], null);
+    const map = buildExecutionStateMap([nodeStartPlanner]);
     expect(map["planner"]?.status).toBe("running");
     expect(map["planner"]?.attempt).toBe(1);
   });
 
   it("marks node as completed on node_end", () => {
-    const map = buildExecutionStateMap([nodeStartPlanner, nodeEndPlanner], null);
+    const map = buildExecutionStateMap([nodeStartPlanner, nodeEndPlanner]);
     expect(map["planner"]?.status).toBe("completed");
     expect(map["planner"]?.durationMs).toBe(1200);
     expect(map["planner"]?.costUsd).toBe(0.012);
@@ -58,7 +58,7 @@ describe("buildExecutionStateMap()", () => {
         message: "script failed",
       },
     ];
-    const map = buildExecutionStateMap(events, null);
+    const map = buildExecutionStateMap(events);
     expect(map["planner"]?.status).toBe("failed");
   });
 
@@ -67,15 +67,14 @@ describe("buildExecutionStateMap()", () => {
       nodeStartPlanner,
       { type: "workflow_error", workflowId: "wf-1", message: "global error" },
     ];
-    const map = buildExecutionStateMap(events, null);
+    const map = buildExecutionStateMap(events);
     // planner still shows running — no nodeId on the error
     expect(map["planner"]?.status).toBe("running");
   });
 
   it("tracks multiple nodes independently", () => {
     const map = buildExecutionStateMap(
-      [nodeStartPlanner, nodeEndPlanner, nodeStartImpl],
-      null
+      [nodeStartPlanner, nodeEndPlanner, nodeStartImpl]
     );
     expect(map["planner"]?.status).toBe("completed");
     expect(map["implementer"]?.status).toBe("running");
@@ -92,13 +91,13 @@ describe("buildExecutionStateMap()", () => {
         maxRetries: 3,
       },
     ];
-    const map = buildExecutionStateMap(events, null);
+    const map = buildExecutionStateMap(events);
     expect(map["planner"]?.status).toBe("failed");
   });
 
   it("preserves attempt number from node_start", () => {
     const attempt2Start: WsServerEvent = { ...nodeStartPlanner, attempt: 2 };
-    const map = buildExecutionStateMap([attempt2Start], null);
+    const map = buildExecutionStateMap([attempt2Start]);
     expect(map["planner"]?.attempt).toBe(2);
   });
 });

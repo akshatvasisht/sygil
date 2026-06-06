@@ -51,6 +51,21 @@ import { RunModal } from "./RunModal";
 import { useWorkflowEditor, type NodeArchetype } from "@/hooks/useWorkflowEditor";
 import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sygil/shared";
 
+// ── Hooks ────────────────────────────────────────────────────────────────────
+
+/**
+ * Closes a popover/menu on the next window click while `open` is true.
+ * No-op when closed, so the listener is only attached when needed.
+ */
+function useCloseOnWindowClick(open: boolean, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` callers pass fresh setters; re-running on `open` is sufficient
+  }, [open]);
+}
+
 // ── Custom edge ──────────────────────────────────────────────────────────────
 
 interface SygilEdgeData {
@@ -302,29 +317,10 @@ export function WorkflowEditor({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isMonitor, editor]);
 
-  // ── Close context menu on any click ─────────────────────────────────────
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
-  }, [contextMenu]);
-
-  // ── Close shortcuts popover on outside click ───────────────────────────
-  useEffect(() => {
-    if (!showShortcuts) return;
-    const close = () => setShowShortcuts(false);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
-  }, [showShortcuts]);
-
-  // ── Close validation popover on outside click ─────────────────────────
-  useEffect(() => {
-    if (!showValidation) return;
-    const close = () => setShowValidation(false);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
-  }, [showValidation]);
+  // ── Close menus / popovers on outside click ────────────────────────────
+  useCloseOnWindowClick(!!contextMenu, () => setContextMenu(null));
+  useCloseOnWindowClick(showShortcuts, () => setShowShortcuts(false));
+  useCloseOnWindowClick(showValidation, () => setShowValidation(false));
 
   // ── Auto-focus first context menu item ────────────────────────────────
   useEffect(() => {
@@ -438,6 +434,7 @@ export function WorkflowEditor({
       editor.selectEdge(edge.id);
       setSidebarMode("edge");
       setRightCollapsed(false);
+      setEdgeEditMode(false);
     },
     [editor]
   );
@@ -455,6 +452,7 @@ export function WorkflowEditor({
       editor.onConnect(params);
       setSidebarMode("edge");
       setRightCollapsed(false);
+      setEdgeEditMode(false);
     },
     [editor]
   );

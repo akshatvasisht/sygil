@@ -22,6 +22,7 @@ import {
   Webhook,
 } from "lucide-react";
 import type { AgentEvent } from "@sygil/shared";
+import { formatHHMMSS } from "@/lib/format-time";
 
 export interface HumanReviewTimelineEntry {
   nodeId: string; // synthetic key (e.g. "human-review-<edgeId>")
@@ -196,11 +197,6 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
 export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTimelineProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
@@ -326,7 +322,7 @@ export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTime
                     {/* Metadata row */}
                     <div className="flex items-center gap-3 mt-0.5">
                       <span className="font-mono text-[10px] text-dim">{nodeEntry.adapter}</span>
-                      <span className="font-mono text-[10px] text-dim">{formatTime(nodeEntry.startedAt)}</span>
+                      <span className="font-mono text-[10px] text-dim">{formatHHMMSS(nodeEntry.startedAt)}</span>
                       {nodeEntry.costUsd !== undefined && (
                         <span className="font-mono text-[10px] text-dim">${nodeEntry.costUsd.toFixed(3)}</span>
                       )}
