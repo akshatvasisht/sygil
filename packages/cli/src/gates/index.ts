@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { GateConfig, GateCondition, NodeResult, WsClientEvent } from "@sygil/shared";
+import { SygilErrorCode } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 import { buildSafeEnv } from "../utils/safe-env.js";
 
@@ -14,13 +15,25 @@ const execFileAsync = promisify(execFile);
 export interface GateResult {
   passed: boolean;
   reason: string;
+  /**
+   * Structured error code for programmatic handling of gate-level failures
+   * (e.g. `HUMAN_REVIEW_TIMEOUT`). Optional — most gate verdicts don't carry
+   * a code. Drawn from `SygilErrorCode`.
+   */
+  errorCode?: SygilErrorCode;
 }
 
 /** Timeout for gate scripts to prevent runaway processes. */
-export const GATE_SCRIPT_TIMEOUT_MS = 30_000;
+const GATE_SCRIPT_TIMEOUT_MS = 30_000;
 
 /** Default timeout for human review gates (5 minutes). */
-export const HUMAN_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+const HUMAN_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Upper size bound for files read by path-based gates (regex, spec_compliance).
+ * Guards against OOM from huge or binary files.
+ */
+const MAX_GATE_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
 // ---------------------------------------------------------------------------
 // Script path injection guard
@@ -236,10 +249,9 @@ export class GateEvaluator {
       };
     }
     // Guard against OOM from huge or binary files
-    const MAX_REGEX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
     try {
       const info = await stat(resolved);
-      if (info.size > MAX_REGEX_FILE_BYTES) {
+      if (info.size > MAX_GATE_FILE_BYTES) {
         return { passed: false, reason: `regex gate: file ${resolved} is too large (${(info.size / 1024 / 1024).toFixed(1)} MB > 10 MB limit)` };
       }
     } catch {
@@ -340,10 +352,9 @@ export class GateEvaluator {
       };
     }
 
-    const MAX_SPEC_FILE_BYTES = 10 * 1024 * 1024; // 10 MB — match regex gate
     try {
       const info = await stat(resolved);
-      if (info.size > MAX_SPEC_FILE_BYTES) {
+      if (info.size > MAX_GATE_FILE_BYTES) {
         return {
           passed: false,
           reason: `spec_compliance gate: spec ${resolved} is too large (${(info.size / 1024 / 1024).toFixed(1)} MB > 10 MB limit)`,
@@ -471,8 +482,10 @@ export class GateEvaluator {
       });
 
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
       const timeoutPromise = new Promise<boolean>((_, reject) => {
         timeoutHandle = setTimeout(() => {
+          timedOut = true;
           detach();
           reject(new Error(`Human review timed out after ${timeoutMs}ms`));
         }, timeoutMs);
@@ -482,10 +495,12 @@ export class GateEvaluator {
       try {
         approved = await Promise.race([approvalPromise, timeoutPromise]);
       } catch (err) {
-        detach();
+        // `detach()` runs unconditionally in the `finally` below (idempotent),
+        // so it's not repeated here.
         return {
           passed: false,
           reason: err instanceof Error ? err.message : "Human review failed",
+          ...(timedOut ? { errorCode: SygilErrorCode.HUMAN_REVIEW_TIMEOUT } : {}),
         };
       } finally {
         // Clear the timer so the event loop can exit promptly once the race
@@ -532,8 +547,13 @@ export class GateEvaluator {
     try {
       answer = await Promise.race([answerPromise, timeoutPromise]);
     } catch {
-      rl.close();
-      return { passed: false, reason: "Human review timed out" };
+      // `rl.close()` runs unconditionally in the `finally` below, so it's not
+      // repeated here.
+      return {
+        passed: false,
+        reason: "Human review timed out",
+        errorCode: SygilErrorCode.HUMAN_REVIEW_TIMEOUT,
+      };
     } finally {
       // Clear the timer so an early CLI answer doesn't keep a 5-minute handle
       // pinned in the event loop.
