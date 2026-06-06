@@ -7,6 +7,13 @@ import { isFieldSupported } from "@sygil/shared";
 import type { NodeCardData } from "./NodeCard";
 // ── Constants ────────────────────────────────────────────────────────────────
 
+const DEFAULT_RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 3,
+  initialDelayMs: 1000,
+  backoffMultiplier: 2,
+  maxDelayMs: 30000,
+};
+
 const ADAPTER_OPTIONS: { value: AdapterType; label: string }[] = [
   { value: "claude-sdk", label: "claude-sdk" },
   { value: "claude-cli", label: "claude-cli" },
@@ -607,9 +614,10 @@ export function NodePropertyPanel({
                   className={inputCls}
                   placeholder="e.g. output, status"
                   aria-label="Context keys this node writes"
-                  onBlur={(e) =>
-                    onUpdate({ writesContext: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
-                  }
+                  onBlur={(e) => {
+                    const parts = splitComma(e.target.value);
+                    onUpdate({ writesContext: parts.length > 0 ? parts : undefined });
+                  }}
                   defaultValue={((config.writesContext as string[] | undefined) ?? []).join(", ")}
                   key={`writes-${JSON.stringify(config.writesContext)}`}
                 />
@@ -624,9 +632,10 @@ export function NodePropertyPanel({
                   className={inputCls}
                   placeholder="e.g. output"
                   aria-label="Context keys this node reads"
-                  onBlur={(e) =>
-                    onUpdate({ readsContext: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
-                  }
+                  onBlur={(e) => {
+                    const parts = splitComma(e.target.value);
+                    onUpdate({ readsContext: parts.length > 0 ? parts : undefined });
+                  }}
                   onChange={(e) => { void e; }}
                   defaultValue={((config.readsContext as string[] | undefined) ?? []).join(", ")}
                   key={`reads-${JSON.stringify(config.readsContext)}`}
@@ -642,9 +651,10 @@ export function NodePropertyPanel({
                   className={inputCls}
                   placeholder="e.g. report.md, summary.json"
                   aria-label="Expected output filenames"
-                  onBlur={(e) =>
-                    onUpdate({ expectedOutputs: splitComma(e.target.value).length > 0 ? splitComma(e.target.value) : undefined })
-                  }
+                  onBlur={(e) => {
+                    const parts = splitComma(e.target.value);
+                    onUpdate({ expectedOutputs: parts.length > 0 ? parts : undefined });
+                  }}
                   onChange={(e) => { void e; }}
                   defaultValue={((config.expectedOutputs as string[] | undefined) ?? []).join(", ")}
                   key={`expected-${JSON.stringify(config.expectedOutputs)}`}
@@ -710,7 +720,7 @@ export function NodePropertyPanel({
                         value={(config.retryPolicy as RetryPolicy | undefined)?.maxAttempts ?? ""}
                         placeholder="3"
                         onChange={(e) => {
-                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? DEFAULT_RETRY_POLICY;
                           onUpdate({ retryPolicy: e.target.value ? { ...prev, maxAttempts: Number(e.target.value) } : undefined });
                         }}
                       />
@@ -725,7 +735,7 @@ export function NodePropertyPanel({
                         value={(config.retryPolicy as RetryPolicy | undefined)?.initialDelayMs ?? ""}
                         placeholder="1000"
                         onChange={(e) => {
-                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? DEFAULT_RETRY_POLICY;
                           onUpdate({ retryPolicy: e.target.value ? { ...prev, initialDelayMs: Number(e.target.value) } : undefined });
                         }}
                       />
@@ -743,7 +753,7 @@ export function NodePropertyPanel({
                         value={(config.retryPolicy as RetryPolicy | undefined)?.backoffMultiplier ?? ""}
                         placeholder="2"
                         onChange={(e) => {
-                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? DEFAULT_RETRY_POLICY;
                           onUpdate({ retryPolicy: e.target.value ? { ...prev, backoffMultiplier: Number(e.target.value) } : undefined } );
                         }}
                       />
@@ -758,7 +768,7 @@ export function NodePropertyPanel({
                         value={(config.retryPolicy as RetryPolicy | undefined)?.maxDelayMs ?? ""}
                         placeholder="30000"
                         onChange={(e) => {
-                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                          const prev = (config.retryPolicy as RetryPolicy | undefined) ?? DEFAULT_RETRY_POLICY;
                           onUpdate({ retryPolicy: e.target.value ? { ...prev, maxDelayMs: Number(e.target.value) } : undefined });
                         }}
                       />
@@ -777,7 +787,7 @@ export function NodePropertyPanel({
                               checked={checked}
                               aria-label={`Retryable: ${cls}`}
                               onChange={() => {
-                                const prev = (config.retryPolicy as RetryPolicy | undefined) ?? { maxAttempts: 3, initialDelayMs: 1000, backoffMultiplier: 2, maxDelayMs: 30000 };
+                                const prev = (config.retryPolicy as RetryPolicy | undefined) ?? DEFAULT_RETRY_POLICY;
                                 const next = checked
                                   ? current.filter((c) => c !== cls)
                                   : [...current, cls];

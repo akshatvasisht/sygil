@@ -21,7 +21,6 @@ class HeroErrorBoundary extends React.Component<
 
 /* -- Design system adapter colors ------------- */
 const COLOR_CLAUDE = "#818cf8";
-const COLOR_CODEX = "#34d399";
 const COLOR_SUCCESS = "#34d399";
 const COLOR_WARNING = "#f5a623";
 
@@ -30,7 +29,7 @@ const NODE_W = 120;
 const NODE_H = 64;
 const NODES = [
   { id: "planner", x: 10, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-7", role: "TDD planner", tools: 3 },
-  { id: "implementer", x: 195, y: 45, adapter: "codex", color: COLOR_CODEX, model: "o3", role: "Impl agent", tools: 5 },
+  { id: "implementer", x: 195, y: 45, adapter: "codex", color: COLOR_SUCCESS, model: "o3", role: "Impl agent", tools: 5 },
   { id: "reviewer", x: 380, y: 45, adapter: "claude-sdk", color: COLOR_CLAUDE, model: "claude-opus-4-7", role: "Code reviewer", tools: 2 },
 ];
 

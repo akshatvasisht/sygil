@@ -21,6 +21,7 @@ import {
   Webhook,
 } from "lucide-react";
 import type { WsServerEvent, WsClientEvent } from "@sygil/shared";
+import { formatHHMMSS } from "@/lib/format-time";
 
 interface EventStreamProps {
   events: WsServerEvent[];
@@ -38,16 +39,6 @@ interface EventStreamProps {
   sendControl?: (event: WsClientEvent) => void;
   /** workflowId needed for human review control events. */
   workflowId?: string | null;
-}
-
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 }
 
 function truncate(str: string, n: number): string {
@@ -615,7 +606,7 @@ export function EventStream({ events, autoScroll = true, truncatedCount = 0, sen
             <EventRow
               key={`${event.type}-${event.timestamp ?? ""}-${i}`}
               event={event}
-              timestamp={event.timestamp ? formatTimestamp(event.timestamp) : "--:--:--"}
+              timestamp={event.timestamp ? formatHHMMSS(event.timestamp) : "--:--:--"}
               isRecent={i >= filteredEvents.length - 10}
               allEvents={events}
               sendControl={sendControl}

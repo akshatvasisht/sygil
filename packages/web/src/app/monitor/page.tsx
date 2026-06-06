@@ -23,7 +23,7 @@ function MonitorInner() {
     locationHostname: typeof window !== "undefined" ? window.location.hostname : "localhost",
   });
 
-  const displayWorkflow = workflowId ?? "tdd-feature";
+  const displayWorkflow = workflowId ?? "—";
 
   async function handleCopyUrl() {
     await navigator.clipboard.writeText(window.location.href);

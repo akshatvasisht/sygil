@@ -17,8 +17,7 @@ export type { NodeExecutionStatus };
 // ── buildExecutionStateMap ────────────────────────────────────────────────────
 
 export function buildExecutionStateMap(
-  events: WsServerEvent[],
-  _workflowState: WorkflowRunState | null
+  events: WsServerEvent[]
 ): Record<string, NodeExecutionStatus> {
   const map: Record<string, NodeExecutionStatus> = {};
   const attempts: Record<string, number> = {};
@@ -338,8 +337,8 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
 
   // Build per-node execution state map for the canvas overlays
   const executionState = useMemo(() => {
-    return buildExecutionStateMap(events, workflowState);
-  }, [events, workflowState]);
+    return buildExecutionStateMap(events);
+  }, [events]);
 
   // Latest metrics snapshot from the most recent metrics_tick event
   const latestMetrics = useMemo((): MetricsSnapshot | null => {
@@ -413,7 +412,6 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
   }
 
   const timelineEntries = buildTimelineEntries(workflowState, events);
-  const streamEvents = events;
   const displayRunId = workflowState?.id ?? workflowId ?? "—";
   const displayWorkflow = workflowState?.workflowName ?? workflowId ?? "—";
   const completedNodes = workflowState?.completedNodes.length ?? 0;
@@ -685,7 +683,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
                 <Terminal size={11} className="text-dim" />
                 <span className="font-mono text-[11px] text-dim">
                   Event log
-                  <span className="ml-1.5 text-dim">({streamEvents.length})</span>
+                  <span className="ml-1.5 text-dim">({events.length})</span>
                 </span>
               </div>
               {eventLogOpen ? (
@@ -699,7 +697,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
             {eventLogOpen && (
               <div className="flex-1 overflow-hidden">
                 <EventStream
-                  events={streamEvents}
+                  events={events}
                   autoScroll={status === "connected"}
                   truncatedCount={truncatedCount}
                   sendControl={hasAuth ? sendControl : undefined}
