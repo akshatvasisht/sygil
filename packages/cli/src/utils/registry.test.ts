@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   searchTemplates,
   listUserTemplates,
+  fetchRegistryIndex,
   REGISTRY_INDEX_URL,
 } from "./registry.js";
 import type { RegistryIndex, RegistryEntry } from "./registry.js";
@@ -38,6 +39,63 @@ describe("REGISTRY_INDEX_URL", () => {
   it("points to the expected GitHub URL", () => {
     expect(REGISTRY_INDEX_URL).toContain("github");
     expect(REGISTRY_INDEX_URL).toContain("index.json");
+  });
+});
+
+describe("fetchRegistryIndex — unreachable registry", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("includes the contacted URL in the error when fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND raw.githubusercontent.com"))
+    );
+
+    await expect(fetchRegistryIndex()).rejects.toThrow(REGISTRY_INDEX_URL);
+    await expect(fetchRegistryIndex()).rejects.toThrow(/Could not reach template registry at/);
+  });
+
+  it("includes a custom URL and the underlying cause", async () => {
+    const url = "https://example.com/registry/index.json";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("ECONNREFUSED"))
+    );
+
+    await expect(fetchRegistryIndex(url)).rejects.toThrow(
+      `Could not reach template registry at ${url}: ECONNREFUSED`
+    );
+  });
+});
+
+describe("installTemplate — prefetched body", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the prefetched body and does not fetch the network", async () => {
+    const { installTemplate } = await import("./registry.js");
+    const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    const dir = await mkdtemp(join(tmpdir(), "sygil-install-test-"));
+    try {
+      const entry = makeEntry({ name: "prefetched" });
+      const body = JSON.stringify({ name: "prefetched", nodes: {}, edges: [] });
+      const destPath = await installTemplate(entry, dir, body);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(destPath).toContain("prefetched.json");
+      expect(await readFile(destPath, "utf8")).toBe(body);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
