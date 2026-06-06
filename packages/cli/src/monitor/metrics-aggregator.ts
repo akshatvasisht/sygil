@@ -111,17 +111,12 @@ export class MetricsAggregator {
       case "workflow_end":
       case "workflow_error":
         // Keep the workflow's aggregates around so a final tick after
-        // completion reflects terminal counts. Callers can `dropWorkflow` if
-        // they need to free memory for long-running monitor servers.
+        // completion reflects terminal counts. Per-workflow maps are bounded,
+        // so there's no unbounded-growth concern for a single run.
         return;
       default:
         return;
     }
-  }
-
-  /** Remove all aggregates for a workflowId. Safe to call multiple times. */
-  dropWorkflow(workflowId: string): void {
-    this.byWorkflow.delete(workflowId);
   }
 
   /**

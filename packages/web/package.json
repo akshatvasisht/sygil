@@ -15,8 +15,6 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
-    "@react-three/drei": "^9.122.0",
-    "@react-three/fiber": "^8.18.0",
     "@sygil/shared": "*",
     "@xyflow/react": "^12.3.6",
     "lucide-react": "^0.468.0",
@@ -24,8 +22,6 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "shiki": "^4.0.2",
-    "three": "^0.168.0",
-    "ws": "^8.18.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -37,8 +33,6 @@
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
-    "@types/three": "^0.183.1",
-    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.0.0",
     "@vitest/coverage-v8": "^1.6.0",
     "autoprefixer": "^10.4.20",

@@ -9,13 +9,11 @@ import {
   createTarball,
   isTarball,
 } from "./bundle.js";
+import { SYGIL_CLI_VERSION } from "../scheduler/environment.js";
 
 function getTemplatesDir(): string {
   return fileURLToPath(new URL("../../templates", import.meta.url));
 }
-
-// CLI package version — read at startup so no sync I/O inside the command
-const SYGIL_VERSION = "0.1.0";
 
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -149,7 +147,7 @@ export async function exportCommand(
         workflowContent: content,
         workingDir: process.cwd(),
         bundledTemplatesDir: templatesDir,
-        sygilVersion: SYGIL_VERSION,
+        sygilVersion: SYGIL_CLI_VERSION,
         includeGateScripts: options.includeGateScripts !== false,
         includeSpecs: options.includeSpecs !== false,
       });

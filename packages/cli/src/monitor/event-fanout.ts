@@ -36,7 +36,6 @@ export class EventFanOut {
   private clients = new Map<string, ClientEntry>();
   private config: FanOutConfig;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private _totalSent = 0;
 
   constructor(config?: Partial<FanOutConfig>) {
     this.config = {
@@ -92,18 +91,6 @@ export class EventFanOut {
     this.flush();
   }
 
-  stats(): { clients: number; totalDropped: number; totalSent: number } {
-    let totalDropped = 0;
-    for (const [, entry] of this.clients) {
-      totalDropped += entry.buffer.dropped;
-    }
-    return {
-      clients: this.clients.size,
-      totalDropped,
-      totalSent: this._totalSent,
-    };
-  }
-
   // --- Private ---
 
   private flush(): void {
@@ -131,10 +118,8 @@ export class EventFanOut {
 
       if (coalesced.length === 1) {
         ws.send(coalesced[0]!);
-        this._totalSent++;
       } else {
         ws.send("[" + coalesced.join(",") + "]");
-        this._totalSent += coalesced.length;
       }
     }
   }

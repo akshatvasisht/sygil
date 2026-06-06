@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getAdapter } from "../adapters/index.js";
 import type { AdapterType, WorkflowRunState } from "@sygil/shared";
 
-const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor"];
+const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor", "gemini-cli", "local-oai"];
 
 export interface ListOptions {
   experimental?: boolean;

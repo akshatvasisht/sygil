@@ -104,6 +104,23 @@ sygil replay r_8x92kf --speed 2             # 2x speed
 | `-n, --node <nodeId>` | Only replay events from this node. |
 | `-s, --speed <multiplier>` | Playback speed. `0` = instant, `1` = real-time (default), `2` = double speed. |
 
+## `sygil monitor`
+
+Attaches to the active workflow run and renders live terminal status. Connection
+details are read from `.sygil/active-monitor.json`, which `sygil run` writes while
+a run is in progress. To inspect a past run instead, use `sygil replay <run-id>`.
+
+```bash
+sygil monitor                       # attach to the active run
+sygil monitor --url ws://...        # attach to a specific WebSocket URL
+```
+
+**Options**
+
+| Flag | Description |
+|---|---|
+| `--url <url>` | WebSocket URL to connect to directly (bypasses `.sygil/active-monitor.json`). |
+
 ## `sygil list`
 
 Lists available adapters and recent workflow runs.

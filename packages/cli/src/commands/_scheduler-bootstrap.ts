@@ -124,13 +124,6 @@ export async function buildSchedulerContext(
   };
 }
 
-/** Convenience: render the hooks field unchanged — placeholder to keep the
- * bootstrap API surface narrow. Callers pass `hooks` through to the scheduler's
- * `RunOptions` / `ResumeOptions`. */
-export function hooksFromContext(opts: BootstrapOpts): HooksConfig | undefined {
-  return opts.hooks;
-}
-
 /** Util: format the Prometheus URL for user display. Returned so the caller
  * decides whether to log it (run does, resume does not today). */
 export function formatMetricsUrl(port: number, token: string): string {

@@ -182,10 +182,9 @@ Examples:
 
   program
     .command("monitor")
-    .description("Attach to a running workflow and show live terminal status")
-    .argument("[run-id]", "Run ID to monitor (auto-detects if omitted)")
+    .description("Attach to the active workflow run and show live terminal status")
     .option("--url <url>", "WebSocket URL to connect to directly")
-    .action(monitorCommand);
+    .action((options: { url?: string }) => monitorCommand(options));
 
   program
     .command("import-template")

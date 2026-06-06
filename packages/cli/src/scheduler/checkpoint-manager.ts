@@ -81,13 +81,6 @@ export class CheckpointManager {
   }
 
   /**
-   * Returns the last write error, if any.
-   */
-  getLastError(): Error | undefined {
-    return this.lastError;
-  }
-
-  /**
    * Immediately write all pending state. Cancels any pending debounce timer.
    * Use at workflow end or graceful shutdown.
    */

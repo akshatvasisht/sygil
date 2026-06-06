@@ -132,7 +132,6 @@ describe("EventFanOut", () => {
     // Should have been disconnected, not sent
     expect(ws.send).not.toHaveBeenCalled();
     expect(ws.close).toHaveBeenCalled();
-    expect(fanOut.stats().clients).toBe(0);
   });
 
   it("text delta coalescing — consecutive text_deltas for same node merge", () => {
@@ -176,35 +175,13 @@ describe("EventFanOut", () => {
     expect(payload).toHaveLength(2);
   });
 
-  it("stats reflect actual sent/dropped counts", () => {
-    fanOut = new EventFanOut({ bufferCapacity: 2, flushIntervalMs: 50 });
-    const ws = makeMockWs();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock WebSocket object is structurally compatible but TypeScript requires the full ws.WebSocket type
-    fanOut.addClient("c1", ws as any);
-    fanOut.start();
-
-    // Fill buffer beyond capacity
-    fanOut.emit({ type: "node_start", workflowId: "wf-1", nodeId: "n1", config: {} as never, attempt: 1 });
-    fanOut.emit({ type: "node_start", workflowId: "wf-1", nodeId: "n2", config: {} as never, attempt: 1 });
-    fanOut.emit({ type: "node_start", workflowId: "wf-1", nodeId: "n3", config: {} as never, attempt: 1 }); // drops oldest
-
-    vi.advanceTimersByTime(50);
-
-    const stats = fanOut.stats();
-    expect(stats.totalDropped).toBe(1);
-    expect(stats.totalSent).toBeGreaterThanOrEqual(1);
-    expect(stats.clients).toBe(1);
-  });
-
   it("removeClient cleans up the ring buffer", () => {
     fanOut = new EventFanOut({ bufferCapacity: 16, flushIntervalMs: 50 });
     const ws = makeMockWs();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock WebSocket object is structurally compatible but TypeScript requires the full ws.WebSocket type
     fanOut.addClient("c1", ws as any);
 
-    expect(fanOut.stats().clients).toBe(1);
     fanOut.removeClient("c1");
-    expect(fanOut.stats().clients).toBe(0);
 
     // Events after removal should not be sent
     fanOut.start();
@@ -239,8 +216,6 @@ describe("EventFanOut", () => {
     }).not.toThrow();
 
     vi.advanceTimersByTime(50);
-    expect(fanOut.stats().clients).toBe(0);
-    expect(fanOut.stats().totalSent).toBe(0);
   });
 
   it("skips sending to clients with non-OPEN readyState", () => {

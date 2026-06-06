@@ -7,7 +7,7 @@
  * honor terminal / tempdir conventions.
  */
 
-export const ALLOWED_ENV_KEYS = [
+const ALLOWED_ENV_KEYS = [
   "PATH",
   "HOME",
   "SHELL",
