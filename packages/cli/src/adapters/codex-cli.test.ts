@@ -27,6 +27,7 @@ function makeSession(_adapter: CodexCLIAdapter, proc: ReturnType<typeof makeFake
     tokenUsage: { input: 0, output: 0 },
     stallTimer: null,
     maxQueueSize: 1000,
+    sessionId: null,
   });
 }
 
@@ -234,7 +235,10 @@ describe("CodexCLIAdapter", () => {
       expect(args).toContain("--json");
       expect(args).toContain("--sandbox");
       expect(args).toContain("workspace-write");
-      expect(args).toContain("--ephemeral");
+      // --ephemeral must NOT be passed: it suppresses session-rollout
+      // persistence, which makes resume-by-id silently start a fresh thread
+      // (openai/codex#15538). Persisting the rollout is required for resume().
+      expect(args).not.toContain("--ephemeral");
       expect(args).toContain("--model");
       expect(args).toContain("o4-mini");
       expect(args).toContain("Build the feature");
@@ -536,7 +540,7 @@ describe("CodexCLIAdapter", () => {
 
         const resultPromise = adapter.getResult(session);
 
-        // Advance past CODEX_GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
+        // Advance past GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
         await vi.advanceTimersByTimeAsync(10_000);
         // SIGTERM should have been sent immediately on timeout.
         expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
@@ -590,7 +594,41 @@ describe("CodexCLIAdapter", () => {
 
   // -------------------------------------------------------------------------
   describe("resume()", () => {
-    it("spawns with 'exec resume --last' arguments", async () => {
+    it("resumes the SPECIFIC session by captured thread id (not --last)", async () => {
+      const proc = makeFakeProc();
+      mockSpawn.mockReturnValue(proc);
+
+      const config = {
+        adapter: "codex" as const,
+        model: "o4-mini",
+        role: "agent",
+        prompt: "Original prompt",
+      };
+
+      // _internal.sessionId is the codex thread_id captured from the
+      // `thread.started` event during the prior spawn.
+      const previousSession: AgentSession = {
+        id: "prev-session-id-codex",
+        nodeId: "agent",
+        adapter: "codex",
+        startedAt: new Date(),
+        _internal: { sessionId: "thread-abc-123" },
+      };
+
+      await adapter.resume(config, previousSession, "Please try again");
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
+      const [binary, args] = mockSpawn.mock.calls[0] as [string, string[]];
+      expect(binary).toBe("codex");
+      expect(args[0]).toBe("exec");
+      expect(args[1]).toBe("resume");
+      expect(args[2]).toBe("thread-abc-123");
+      expect(args[3]).toBe("Please try again");
+      expect(args).not.toContain("--last");
+      expect(args).toContain("--json");
+    });
+
+    it("falls back to --last when no thread id was captured", async () => {
       const proc = makeFakeProc();
       mockSpawn.mockReturnValue(proc);
 
@@ -612,13 +650,28 @@ describe("CodexCLIAdapter", () => {
       await adapter.resume(config, previousSession, "Please try again");
 
       expect(mockSpawn).toHaveBeenCalledOnce();
-      const [binary, args] = mockSpawn.mock.calls[0] as [string, string[]];
-      expect(binary).toBe("codex");
+      const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
       expect(args[0]).toBe("exec");
       expect(args[1]).toBe("resume");
       expect(args[2]).toBe("--last");
       expect(args[3]).toBe("Please try again");
       expect(args).toContain("--json");
+    });
+
+    it("captures the thread id from a thread.started event during stream", async () => {
+      const proc = makeFakeProc();
+      const session = makeSession(adapter, proc);
+
+      const collected = collectEvents(adapter, session);
+      pushLines(proc.stdout, [
+        JSON.stringify({ type: "thread.started", thread_id: "thread-xyz-789" }),
+      ]);
+      proc.emit("exit", 0);
+      await collected;
+
+      expect((session._internal as { sessionId: string | null }).sessionId).toBe(
+        "thread-xyz-789",
+      );
     });
 
     it("returns a valid AgentSession preserving the previous session id", async () => {

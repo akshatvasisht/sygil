@@ -7,7 +7,6 @@
  */
 
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -18,8 +17,9 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { makeAgentSession } from "./session.js";
+import { exitCodeToSygilError } from "./constants.js";
 import { extractJsonFromOutput } from "./extract-json.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -82,42 +82,29 @@ export class EchoAdapter implements AgentAdapter {
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
 
-    return {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
+    return makeAgentSession(this.name, config.role, internal);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
     const internal = session._internal as EchoInternal;
     const { proc } = internal;
 
-    const push = (ev: AgentEvent): boolean => pushEvent(internal, ev);
     const finish = (): void => finishStream(internal);
 
-    let lineBuffer = "";
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
-      const lines = lineBuffer.split("\n");
-      lineBuffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        internal.outputLines.push(trimmed);
-        const event = this.parseLine(trimmed, internal);
-        if (event) push(event);
-      }
-    });
+    const stdoutSink = proc.stdout
+      ? wireStdoutBackpressure(
+          proc.stdout,
+          internal,
+          (line) => {
+            internal.outputLines.push(line);
+            const ev = this.parseLine(line, internal);
+            return ev ? [ev] : [];
+          },
+        )
+      : null;
 
     proc.stdout?.on("end", () => {
-      if (lineBuffer.trim()) {
-        internal.outputLines.push(lineBuffer.trim());
-        const event = this.parseLine(lineBuffer.trim(), internal);
-        if (event) push(event);
-      }
+      stdoutSink?.flush();
       finish();
     });
 
@@ -211,15 +198,7 @@ export class EchoAdapter implements AgentAdapter {
       ? extractJsonFromOutput(output)
       : undefined;
 
-    // Map exit code to structured error code
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output,

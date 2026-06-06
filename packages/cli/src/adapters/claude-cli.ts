@@ -7,19 +7,12 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
-import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS } from "./constants.js";
-import { createLineDecoder } from "./ndjson-line-decoder.js";
+import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS, GETRESULT_TIMEOUT_MS, exitCodeToSygilError } from "./constants.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
 import { logger } from "../utils/logger.js";
-
-/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
- * never legitimately exceed this; if it does, force-kill so a hung MCP server
- * can't pin the workflow. */
-const CLAUDE_CLI_GETRESULT_TIMEOUT_MS = 10_000;
 
 /** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
@@ -137,7 +130,6 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const internal = session._internal as ClaudeCLIInternal;
     const { proc } = internal;
 
-    const push = (ev: AgentEvent): boolean => pushEvent(internal, ev);
     const finish = (): void => finishStream(internal);
 
     const stderrBuf: string[] = [];
@@ -145,16 +137,17 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       stderrBuf.push(chunk.toString());
     });
 
-    const decoder = createLineDecoder();
     let stdoutClosed = false;
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      for (const trimmed of decoder.feed(chunk)) {
-        internal.outputLines.push(trimmed);
-        for (const event of this.parseLine(trimmed, internal)) {
-          push(event);
-        }
-      }
-    });
+    // Centralized: decodes UTF-8-safe lines, pushes parsed events in order, and
+    // pauses stdout on backpressure (resumed by drainEventQueue on drain).
+    const stdoutSink = proc.stdout
+      ? wireStdoutBackpressure(
+          proc.stdout,
+          internal,
+          (line) => this.parseLine(line, internal),
+          (line) => internal.outputLines.push(line),
+        )
+      : null;
 
     // Only the later of `end` and `exit` calls finish(). Calling finish() from
     // both handlers drops the trailing-line events when 'exit' fires first:
@@ -163,13 +156,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     // The trailing buffer can hold the final NDJSON record for fast-exiting
     // runs (e.g. auth failures that end without a newline).
     proc.stdout?.on("end", () => {
-      const trailing = decoder.flush();
-      if (trailing) {
-        internal.outputLines.push(trailing);
-        for (const event of this.parseLine(trailing, internal)) {
-          push(event);
-        }
-      }
+      stdoutSink?.flush();
       stdoutClosed = true;
       if (internal.exitCode !== null) finish();
     });
@@ -270,7 +257,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
 
     if (!internal.done || internal.exitCode === null) {
       await waitForDoneOrTimeout(internal, {
-        timeoutMs: CLAUDE_CLI_GETRESULT_TIMEOUT_MS,
+        timeoutMs: GETRESULT_TIMEOUT_MS,
         pollIntervalMs: GETRESULT_POLL_INTERVAL_MS,
         killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
@@ -287,15 +274,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
       ? extractJsonFromOutput(output)
       : undefined;
 
-    // Map exit code to structured error code
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output,
