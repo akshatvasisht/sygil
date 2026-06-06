@@ -115,6 +115,47 @@ describe("computeContentHash", () => {
     const hashPopulated = computeContentHash(base, { key: "" }, {});
     expect(hashEmpty).not.toBe(hashPopulated);
   });
+
+  // ---------------------------------------------------------------------------
+  // Determinism guard — the cache key MUST reflect resolved input CONTENT so two
+  // runs differing only in input-file content never collide on the same key.
+  // (Regression: the scheduler call site previously passed `{}` for
+  // resolvedInputs while hashing the original prompt template, so a node whose
+  // only changed input was a resolved file would have hit a stale cache entry.)
+  // ---------------------------------------------------------------------------
+
+  it("does NOT collide when only resolved input-file content differs (same template)", () => {
+    // Identical node config + identical prompt template; only the resolved
+    // content of a file-based input mapping var changes between the two runs.
+    const base = { prompt: "summarize {{plan}}", adapter: "claude-sdk" as const, model: "sonnet", tools: ["bash"] };
+    const run1 = computeContentHash(base, { plan: "plan content version A" }, {});
+    const run2 = computeContentHash(base, { plan: "plan content version B" }, {});
+    expect(run1).not.toBe(run2);
+  });
+
+  it("still hits the cache when template AND resolved input content are identical", () => {
+    const base = { prompt: "summarize {{plan}}", adapter: "claude-sdk" as const, model: "sonnet", tools: ["bash"] };
+    const run1 = computeContentHash(base, { plan: "identical content" }, {});
+    const run2 = computeContentHash(base, { plan: "identical content" }, {});
+    expect(run1).toBe(run2);
+  });
+
+  it("is independent of resolvedInputs key insertion order", () => {
+    // Stable serialization: the same key/value pairs in a different order must
+    // hash identically, so a run that resolves inputs in a different iteration
+    // order doesn't spuriously miss the cache.
+    const base = { prompt: "p", adapter: "claude-sdk" as const, model: "sonnet" };
+    const hashAB = computeContentHash(base, { a: "1", b: "2" }, {});
+    const hashBA = computeContentHash(base, { b: "2", a: "1" }, {});
+    expect(hashAB).toBe(hashBA);
+  });
+
+  it("is independent of upstreamHashes key insertion order", () => {
+    const base = { prompt: "p", adapter: "claude-sdk" as const, model: "sonnet" };
+    const hashAB = computeContentHash(base, {}, { up1: "x", up2: "y" });
+    const hashBA = computeContentHash(base, {}, { up2: "y", up1: "x" });
+    expect(hashAB).toBe(hashBA);
+  });
 });
 
 // ---------------------------------------------------------------------------

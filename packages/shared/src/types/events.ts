@@ -201,6 +201,13 @@ export interface WorkflowRunState {
    * Absent on checkpoints written before this field was introduced.
    */
   environment?: EnvironmentSnapshot;
+  /**
+   * Per-edge gate-failure reasons accumulated during execution (edgeId →
+   * reason). Persisted so `sygil resume` retains prior gate-failure context
+   * instead of starting with an empty map. Absent on checkpoints written
+   * before this field was introduced; the scheduler backfills it on resume.
+   */
+  gateFailureReasons?: Record<string, string>;
 }
 
 const NodeResultSchema = z.object({
@@ -262,6 +269,9 @@ export const WorkflowRunStateSchema = z.object({
     })
     .passthrough()
     .optional(),
+  // gateFailureReasons is absent on checkpoints written before it was
+  // introduced — backfilled by the scheduler on resume().
+  gateFailureReasons: z.record(z.string(), z.string()).optional(),
 }).passthrough();
 
 /**

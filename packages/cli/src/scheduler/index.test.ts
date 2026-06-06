@@ -552,6 +552,135 @@ describe("WorkflowScheduler", () => {
         expect(e.workflowId).not.toBe(savedState.id);
       }
     });
+
+    // Q3: resuming an edited/different workflow against old state cascade-fails
+    // confusingly, so resume() hard-throws on a workflowName mismatch.
+    it("rejects resume when the workflow name does not match the checkpoint", async () => {
+      const workflow = linearWorkflow(0); // name: "linear"
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 0 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      const savedState = {
+        id: randomUUID(),
+        workflowName: "some-other-workflow",
+        workflowPath: "",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        completedNodes: [],
+        nodeResults: {},
+        totalCostUsd: 0,
+        retryCounters: {},
+        sharedContext: {},
+      };
+
+      await expect(scheduler.resume(savedState)).rejects.toThrow(/Workflow mismatch/);
+      await expect(
+        scheduler.resume(savedState).catch((e: unknown) => {
+          throw e;
+        }),
+      ).rejects.toMatchObject({ code: "WORKFLOW_RESUME_FAILED" });
+    });
+
+    // Q3: identical name but the checkpoint references a node the current
+    // workflow no longer has → topology mismatch, hard throw.
+    it("rejects resume when the checkpoint references unknown nodes", async () => {
+      const workflow = linearWorkflow(0); // nodes: nodeA, nodeB
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 0 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      const savedState = {
+        id: randomUUID(),
+        workflowName: workflow.name,
+        workflowPath: "",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        completedNodes: ["nodeGhost"],
+        nodeResults: {
+          nodeGhost: { output: "x", exitCode: 0, durationMs: 1 },
+        },
+        totalCostUsd: 0,
+        retryCounters: {},
+        sharedContext: {},
+      };
+
+      await expect(scheduler.resume(savedState)).rejects.toThrow(/topology mismatch/);
+    });
+
+    // Q2: gateFailureReasons must round-trip through the checkpoint so prior
+    // gate-failure context survives a resume instead of starting empty.
+    it("persists gateFailureReasons to the checkpoint and restores them on resume", async () => {
+      // exit_code 0 expected on the forward gate, but the node returns 1 →
+      // the forward gate fails and records a reason for edge "a-to-b".
+      const workflow = linearWorkflow(0);
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 1 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      const runResult = await scheduler.run(workflow.name, {});
+      expect(runResult.success).toBe(false);
+
+      // Read the persisted checkpoint and confirm the gate-failure reason rode along.
+      const checkpointPath = join(testDir, ".sygil", "runs", `${runResult.runId}.json`);
+      const saved = JSON.parse(await readFile(checkpointPath, "utf8")) as {
+        gateFailureReasons?: Record<string, string>;
+      };
+      expect(saved.gateFailureReasons).toBeDefined();
+      expect(saved.gateFailureReasons?.["a-to-b"]).toBeTruthy();
+
+      // Resuming with that state restores the map (no throw; the field is
+      // accepted and backfilled). We resume the same workflow with a now-passing
+      // adapter so resume() completes cleanly.
+      const goodAdapter = createMockAdapter({ result: { exitCode: 0 } });
+      const resumeScheduler = new WorkflowScheduler(
+        workflow,
+        () => goodAdapter,
+        createMockMonitor() as WsMonitorServer,
+      );
+      const resumeResult = await resumeScheduler.resume({
+        ...saved,
+        id: runResult.runId,
+        workflowName: workflow.name,
+        workflowPath: "",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        completedNodes: [],
+        nodeResults: {},
+        totalCostUsd: 0,
+        retryCounters: {},
+        sharedContext: {},
+      } as never);
+      expect(resumeResult.success).toBe(true);
+    });
+
+    // Q2: old checkpoints lacking the field still parse and resume — the
+    // defensive backfill mirrors the sharedContext one.
+    it("backfills gateFailureReasons for old checkpoints lacking the field", async () => {
+      const workflow = linearWorkflow(0);
+      const monitor = createMockMonitor();
+      const adapter = createMockAdapter({ result: { exitCode: 0 } });
+      const scheduler = new WorkflowScheduler(workflow, () => adapter, monitor as WsMonitorServer);
+
+      // No gateFailureReasons field at all (pre-feature checkpoint shape).
+      const savedState = {
+        id: randomUUID(),
+        workflowName: workflow.name,
+        workflowPath: "",
+        status: "running" as const,
+        startedAt: new Date().toISOString(),
+        completedNodes: ["nodeA"],
+        nodeResults: {
+          nodeA: { output: "cached", exitCode: 0, durationMs: 1 },
+        },
+        totalCostUsd: 0,
+        retryCounters: {},
+        sharedContext: {},
+      };
+
+      const result = await scheduler.resume(savedState);
+      expect(result.success).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------

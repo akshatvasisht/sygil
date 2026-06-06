@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -14,7 +14,8 @@ import type {
   AgentEvent,
   AgentSession,
 } from "@sygil/shared";
-import { validateStructuredOutput, resolveInputMapping, STALL_EXIT_CODE } from "@sygil/shared";
+import { validateStructuredOutput, resolveInputMapping, STALL_EXIT_CODE, SygilErrorCode } from "@sygil/shared";
+import type { SygilError } from "@sygil/shared";
 import { GateEvaluator } from "../gates/index.js";
 import { LazyWorktreeManager } from "../worktree/lazy-worktree-manager.js";
 import { needsIsolation } from "../worktree/isolation-check.js";
@@ -328,10 +329,49 @@ export class WorkflowScheduler extends EventEmitter {
     const workflowId = savedState.workflowName;
     const startedAt = Date.now();
 
+    // Guard: the workflow being resumed must match the one the checkpoint was
+    // written for. Resuming an edited/different workflow against old state
+    // cascade-fails in confusing ways (missing nodes, mismatched edges), so we
+    // hard-fail early rather than letting executeGraph() blunder ahead.
+    if (savedState.workflowName !== this.workflow.name) {
+      throw this.makeCodedError(
+        SygilErrorCode.WORKFLOW_RESUME_FAILED,
+        `Workflow mismatch: checkpoint was written for "${savedState.workflowName}" but the ` +
+          `current workflow is "${this.workflow.name}". Resume with the matching workflow ` +
+          `(sygil resume <run-id> with the original workflow.json) or start a fresh run.`,
+      );
+    }
+    // Also compare the node-id set — identical names with divergent topology
+    // are just as dangerous.
+    const checkpointedNodeIds = new Set([
+      ...savedState.completedNodes,
+      ...Object.keys(savedState.nodeResults),
+    ]);
+    const unknownNodes = [...checkpointedNodeIds].filter((id) => !this.workflow.nodes[id]);
+    if (unknownNodes.length > 0) {
+      throw this.makeCodedError(
+        SygilErrorCode.WORKFLOW_RESUME_FAILED,
+        `Workflow topology mismatch: checkpoint references node(s) [${unknownNodes.join(", ")}] ` +
+          `not present in the current workflow "${this.workflow.name}". ` +
+          `Resume with the matching workflow or start fresh.`,
+      );
+    }
+
     // Backfill sharedContext for pre-sharedContext-feature checkpoints
     // (pre-existing on-disk state has no `sharedContext` field).
     if (savedState.sharedContext === undefined) {
       savedState.sharedContext = {};
+    }
+
+    // Backfill gateFailureReasons for checkpoints written before the field
+    // existed, then restore the persisted reasons into the in-memory map so
+    // prior gate-failure context survives the resume.
+    if (savedState.gateFailureReasons === undefined) {
+      savedState.gateFailureReasons = {};
+    }
+    this.gateFailureReasons.clear();
+    for (const [edgeId, reason] of Object.entries(savedState.gateFailureReasons)) {
+      this.gateFailureReasons.set(edgeId, reason);
     }
 
     savedState.status = "running";
@@ -630,7 +670,14 @@ export class WorkflowScheduler extends EventEmitter {
             this.completionMutex = this.completionMutex.then(() => {
               running.delete(nodeId);
               failed.add(nodeId);
-              this.emitError(workflowId, nodeId, new Error(`Node "${nodeId}" edge "${edge.id}": ${reason}`));
+              this.emitError(
+                workflowId,
+                nodeId,
+                this.makeCodedError(
+                  SygilErrorCode.NODE_CONTRACT_FAILED,
+                  `Node "${nodeId}" edge "${edge.id}": ${reason}`,
+                ),
+              );
             });
             await this.completionMutex;
             return;
@@ -708,6 +755,7 @@ export class WorkflowScheduler extends EventEmitter {
             if (retryCount > maxRetries) {
               failed.add(nodeId);
               this.gateFailureReasons.set(edge.id, gateResult.reason);
+              this.persistGateFailureReasons(runState);
               this.emitError(workflowId, nodeId, new Error(
                 `Loop-back edge "${edge.id}": exceeded maxRetries (${maxRetries}) — gate: ${gateResult.reason}`
               ));
@@ -802,6 +850,7 @@ export class WorkflowScheduler extends EventEmitter {
         for (const { edgeId, targetNodeId, reason } of forwardGateFailures) {
           failed.add(targetNodeId);
           this.gateFailureReasons.set(edgeId, reason);
+          this.persistGateFailureReasons(runState);
           this.emitError(workflowId, targetNodeId, new Error(
             `Gate failed on forward edge "${edgeId}" from "${nodeId}": ${reason}`
           ));
@@ -857,7 +906,11 @@ export class WorkflowScheduler extends EventEmitter {
     const { traceId, spanId } = traceCtx;
 
     // Input mapping (Contract): resolve {{var}} substitutions from predecessor outputs
-    nodeConfig = await this.buildNodeInput(nodeId, incomingForwardEdges, nodeConfig, runState, parameters);
+    const built = await this.buildNodeInput(nodeId, incomingForwardEdges, nodeConfig, runState, parameters);
+    nodeConfig = built.nodeConfig;
+    // Resolved file-based input content — folded into the cache key below so two
+    // runs differing only in input-file content don't collide on the same hash.
+    const resolvedInputs = built.resolvedInputs;
 
     // Lifecycle hook: preNode. Runs once per node execution,
     // before the cache check and provider loop. Non-zero exit fails the
@@ -905,7 +958,7 @@ export class WorkflowScheduler extends EventEmitter {
         };
         const hash = computeContentHash(
           hashInputs,
-          {},
+          resolvedInputs,
           upstreamHashes
         );
         const cached = await this.nodeCache.get(hash);
@@ -944,7 +997,24 @@ export class WorkflowScheduler extends EventEmitter {
 
     // Worktree isolation: create per-node worktree only if the node needs it
     if (worktreeManager && needsIsolation(nodeConfig)) {
-      const worktreePath = await worktreeManager.getOrCreate(nodeId, nodeConfig, signal);
+      // Files this node READS via incoming-edge inputMapping must be checked
+      // out into the sparse worktree, else the node hits "file not found".
+      // Derive the repo-relative directory holding each input source file
+      // (source format: "path/to/file.json#field", relative to the
+      // predecessor's declared outputDir).
+      const inputSourceDirs: string[] = [];
+      for (const edgeId of incomingForwardEdges.get(nodeId) ?? []) {
+        const edge = this.graphIndex.edgeById.get(edgeId);
+        const mapping = edge?.contract?.inputMapping;
+        if (!mapping) continue;
+        const predecessorOutputDir = this.workflow.nodes[edge!.from]?.outputDir ?? "";
+        for (const source of Object.values(mapping)) {
+          const filePath = source.split("#")[0];
+          if (!filePath) continue;
+          inputSourceDirs.push(dirname(join(predecessorOutputDir, filePath)));
+        }
+      }
+      const worktreePath = await worktreeManager.getOrCreate(nodeId, nodeConfig, signal, inputSourceDirs);
       nodeConfig = { ...nodeConfig, outputDir: worktreePath };
     }
 
@@ -1421,8 +1491,12 @@ export class WorkflowScheduler extends EventEmitter {
     nodeConfig: NodeConfig,
     runState: WorkflowRunState,
     parameters: Record<string, string> = {}
-  ): Promise<NodeConfig> {
+  ): Promise<{ nodeConfig: NodeConfig; resolvedInputs: Record<string, string> }> {
     const allVars: Record<string, string> = {};
+    // Resolved CONTENT of file-based input mappings (Pass 2 below). Captured
+    // separately so the node cache key can reflect input-file content even when
+    // a declared mapping var isn't referenced in the prompt template.
+    const resolvedInputs: Record<string, string> = {};
 
     // Pass 1: resolve {{nodes.<id>.output}} and {{nodes.<id>.structuredOutput.<path>}} from runState
     const nodeRefPattern = /\{\{nodes\.([\w-]+)\.(output|structuredOutput(?:\.[\w.]+)?)\}\}/g;
@@ -1472,6 +1546,7 @@ export class WorkflowScheduler extends EventEmitter {
         }
         for (const [varName, value] of Object.entries(resolved)) {
           allVars[varName] = value;
+          resolvedInputs[varName] = value;
         }
       }
     }
@@ -1502,14 +1577,14 @@ export class WorkflowScheduler extends EventEmitter {
     }
 
     // Single-pass replacement of all {{key}} placeholders
-    if (Object.keys(allVars).length === 0) return nodeConfig;
+    if (Object.keys(allVars).length === 0) return { nodeConfig, resolvedInputs };
 
     const prompt = nodeConfig.prompt.replace(/\{\{([\w./-]+)\}\}/g, (wholeMatch, key: string) => {
       if (key in allVars) return allVars[key]!;
       return wholeMatch; // leave unresolved (may be a workflow parameter)
     });
 
-    return { ...nodeConfig, prompt };
+    return { nodeConfig: { ...nodeConfig, prompt }, resolvedInputs };
   }
 
   /**
@@ -1560,6 +1635,26 @@ export class WorkflowScheduler extends EventEmitter {
       isStalled: () => stallDetected,
       markStalled,
     };
+  }
+
+  /**
+   * Mirror the in-memory `gateFailureReasons` map into the run state so it
+   * rides along in the checkpoint. Called right after every mutation of the
+   * map; on `resume()` the field is restored back into the map. Deterministic
+   * (plain object copy — no timestamps/randomness), so replay is unaffected.
+   */
+  private persistGateFailureReasons(runState: WorkflowRunState): void {
+    runState.gateFailureReasons = Object.fromEntries(this.gateFailureReasons);
+  }
+
+  /**
+   * Build an Error tagged with a structured `SygilErrorCode` so callers can
+   * branch on `err.code` while the human-readable `message` stays primary.
+   */
+  private makeCodedError(code: SygilErrorCode, message: string): Error {
+    const err = new Error(message) as Error & SygilError;
+    err.code = code;
+    return err;
   }
 
   private emitError(workflowId: string, nodeId: string, err: Error): void {

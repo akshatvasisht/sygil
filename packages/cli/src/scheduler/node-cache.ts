@@ -31,10 +31,27 @@ export interface HashableNodeInputs {
 }
 
 /**
+ * Serialize a string-keyed map with keys sorted, so the resulting JSON is
+ * independent of insertion order. Determinism guard: two runs that produce the
+ * same key/value pairs in a different order must hash identically.
+ */
+function sortedEntries(map: Record<string, string>): Array<[string, string]> {
+  return Object.keys(map)
+    .sort()
+    .map((k) => [k, map[k]!] as [string, string]);
+}
+
+/**
  * Compute a deterministic SHA-256 content hash from a node's effective inputs.
  *
+ * The hash MUST reflect the resolved CONTENT of file-based input mappings, not
+ * just the prompt template: two runs differing only in resolved input-file
+ * content must produce different cache keys, or a stale cached result would be
+ * served (a determinism violation).
+ *
  * @param nodeInputs  - Relevant fields from the node config (post variable substitution)
- * @param resolvedInputs - Resolved input mapping key-value pairs
+ * @param resolvedInputs - Resolved input mapping key-value pairs (the actual
+ *                         file/field content interpolated into the node prompt)
  * @param upstreamHashes - Map of upstream nodeId -> content hash of their result
  * @returns 64-char hex SHA-256 digest
  */
@@ -43,13 +60,17 @@ export function computeContentHash(
   resolvedInputs: Record<string, string>,
   upstreamHashes: Record<string, string>
 ): string {
+  // Merge call-site resolved inputs with any carried on nodeInputs, then sort
+  // keys so insertion order never affects the digest.
+  const mergedResolved = { ...resolvedInputs, ...(nodeInputs.resolvedInputs ?? {}) };
+
   const canonical = {
     prompt: nodeInputs.prompt,
     adapter: nodeInputs.adapter,
     model: nodeInputs.model,
     tools: nodeInputs.tools ?? [],
-    resolvedInputs: { ...resolvedInputs, ...(nodeInputs.resolvedInputs ?? {}) },
-    upstreamHashes,
+    resolvedInputs: sortedEntries(mergedResolved),
+    upstreamHashes: sortedEntries(upstreamHashes),
   };
 
   return createHash("sha256")
