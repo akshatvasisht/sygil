@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import ora from "ora";
 import open from "open";
-import { loadWorkflow, interpolateWorkflow, validateWorkflowInvariants } from "../utils/workflow.js";
+import { loadWorkflow, validateWorkflowInvariants } from "../utils/workflow.js";
+import { parseParamPairs, resolveWorkflowParams } from "../utils/params.js";
 import { pruneWorktrees } from "../worktree/index.js";
-import { readConfig, readConfigSafe } from "../utils/config.js";
+import { readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT, WorkflowGraphSchema } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
@@ -23,8 +24,6 @@ import {
 } from "../monitor/terminal-renderer.js";
 import type { TerminalMonitorState, NodeMonitorState } from "../monitor/terminal-renderer.js";
 import type { AgentEvent } from "@sygil/shared";
-
-// readConfig import is used for side-effect (warm path detection)
 
 /** Resolve bare template names (e.g. "tdd-feature") to their bundled .json path.
  *
@@ -167,69 +166,19 @@ export async function runCommand(
     }
   }
 
-  // 3. Parse parameters
+  // 3. Parse parameters. The positional `task` arg is a run-only convenience
+  //    that seeds the `task` parameter; CLI --param pairs override it.
   const parameters: Record<string, string> = {};
   if (task) {
     parameters["task"] = task;
   }
   if (options.param) {
-    for (const pair of options.param) {
-      const idx = pair.indexOf("=");
-      if (idx === -1) {
-        console.error(chalk.red(`Invalid parameter format: "${pair}" — expected key=value`));
-        process.exit(1);
-      }
-      const key = pair.slice(0, idx);
-      const value = pair.slice(idx + 1);
-      if (key) parameters[key] = value;
-    }
+    Object.assign(parameters, parseParamPairs(options.param));
   }
 
-  // 4. Resolve parameters: merge CLI params with workflow defaults, then interpolate
-  const resolvedParams: Record<string, string> = {};
-
-  // Apply defaults from graph.parameters first
-  if (workflow.parameters) {
-    for (const [key, paramDef] of Object.entries(workflow.parameters)) {
-      if (paramDef.default != null) {
-        resolvedParams[key] = String(paramDef.default);
-      }
-    }
-  }
-
-  // CLI-supplied params override defaults
-  for (const [key, value] of Object.entries(parameters)) {
-    resolvedParams[key] = value;
-  }
-
-  // Validate required parameters are present
-  if (workflow.parameters) {
-    const missing: string[] = [];
-    for (const [key, paramDef] of Object.entries(workflow.parameters)) {
-      if (paramDef.required && !(key in resolvedParams)) {
-        missing.push(key);
-      }
-    }
-    if (missing.length > 0) {
-      console.error(
-        chalk.red(
-          `Missing required parameters: ${missing.join(", ")}\n` +
-          `Supply them with --param key=value`
-        )
-      );
-      process.exit(1);
-    }
-  }
-
-  // Interpolate {{param}} placeholders in the workflow graph
-  try {
-    workflow = interpolateWorkflow(workflow, resolvedParams);
-  } catch (err) {
-    console.error(
-      chalk.red(`Parameter interpolation failed: ${err instanceof Error ? err.message : String(err)}`)
-    );
-    process.exit(1);
-  }
+  // 4. Resolve parameters: merge CLI params with workflow defaults, validate
+  //    required fields, then interpolate {{param}} placeholders.
+  workflow = resolveWorkflowParams(workflow, parameters, "Supply them with --param key=value");
 
   // Resolve static modelTier → concrete model IDs using the project's tier
   // mapping. Happens AFTER interpolation and BEFORE the scheduler
@@ -251,9 +200,6 @@ export async function runCommand(
     console.log(`  Edges: ${workflow.edges.length}`);
     return;
   }
-
-  // 5. Load config (used for default adapter hints if needed)
-  await readConfig(process.env["SYGIL_CONFIG_DIR"]).catch(() => null);
 
   // Warn if any node uses claude-cli with an outputSchema (unreliable structured output)
   for (const [nodeId, nodeConfig] of Object.entries(workflow.nodes)) {

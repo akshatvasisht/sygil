@@ -109,6 +109,19 @@ describe("registryCommand", () => {
         expect.stringContaining("Could not reach template registry")
       );
     });
+
+    it("surfaces the contacted registry URL in the error message", async () => {
+      const url = "https://raw.githubusercontent.com/sygil-dev/registry/main/index.json";
+      mockFetchRegistryIndex.mockRejectedValue(
+        new Error(`Could not reach template registry at ${url}: ENOTFOUND`)
+      );
+
+      await expect(
+        registryCommand.parseAsync(["list"], { from: "user" })
+      ).rejects.toThrow("process.exit(1)");
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining(url));
+    });
   });
 
   describe("search subcommand", () => {
@@ -141,12 +154,10 @@ describe("registryCommand", () => {
       mockInstallTemplate.mockResolvedValue("/home/test/.sygil/templates/install-me.json");
 
       // Mock fetch for the template download
+      const body = JSON.stringify({ name: "install-me", nodes: { a: {} }, edges: [] });
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
-        text: () =>
-          Promise.resolve(
-            JSON.stringify({ name: "install-me", nodes: { a: {} }, edges: [] })
-          ),
+        text: () => Promise.resolve(body),
       });
       vi.stubGlobal("fetch", mockFetch);
 
@@ -155,6 +166,13 @@ describe("registryCommand", () => {
       const output = consoleLogSpy.mock.calls.flat().join("\n");
       expect(output).toContain("Installed template");
       expect(output).toContain("install-me");
+
+      // The body fetched + validated by the command must be threaded into
+      // installTemplate as the 3rd arg so the helper does not re-fetch
+      // entry.url. One network round-trip total.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockInstallTemplate.mock.calls[0]![0]).toBe(entry);
+      expect(mockInstallTemplate.mock.calls[0]![2]).toBe(body);
 
       vi.unstubAllGlobals();
     });

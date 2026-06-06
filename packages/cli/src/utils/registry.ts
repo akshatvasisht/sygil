@@ -36,15 +36,15 @@ export function validateTemplateUrl(url: string): void {
 
 export async function fetchRegistryIndex(url = REGISTRY_INDEX_URL): Promise<RegistryIndex> {
   validateTemplateUrl(url);
-  // Use Node 18+ fetch. Set 5s timeout using AbortController.
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`Registry fetch failed: ${res.status}`);
     return await res.json() as RegistryIndex;
-  } finally {
-    clearTimeout(timeout);
+  } catch (err) {
+    // Re-throw with the contacted URL so connectivity failures (firewall,
+    // proxy, DNS) are diagnosable. The bare fetch error never names the host.
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not reach template registry at ${url}: ${cause}`);
   }
 }
 
@@ -57,19 +57,24 @@ export function searchTemplates(index: RegistryIndex, query: string): RegistryEn
   );
 }
 
-export async function installTemplate(entry: RegistryEntry, destDir: string): Promise<string> {
+export async function installTemplate(
+  entry: RegistryEntry,
+  destDir: string,
+  prefetchedBody?: string,
+): Promise<string> {
   validateTemplateUrl(entry.url);
-  // Fetch template JSON from entry.url with a 10s timeout
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  let res: Response;
-  try {
-    res = await fetch(entry.url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
+  // The registry `install` command fetches and structurally validates the
+  // template body before calling this helper. When it passes that body in via
+  // `prefetchedBody` we reuse it, avoiding a second network round-trip. If it's
+  // omitted (e.g. a direct caller), fetch the JSON with a 10s timeout.
+  let json: string;
+  if (prefetchedBody !== undefined) {
+    json = prefetchedBody;
+  } else {
+    const res = await fetch(entry.url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`Failed to download template: ${res.status}`);
+    json = await res.text();
   }
-  if (!res.ok) throw new Error(`Failed to download template: ${res.status}`);
-  const json = await res.text();
 
   // Sanitize entry.name — strip directory components to prevent path traversal
   // (a compromised registry could set name to "../../.bashrc" to escape destDir)

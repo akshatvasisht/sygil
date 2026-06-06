@@ -22,14 +22,17 @@ async function handleNetworkError(fn: () => Promise<void>): Promise<void> {
     await fn();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (
+    if (message.includes("Could not reach")) {
+      // `fetchRegistryIndex` already names the contacted URL — surface it as-is
+      // so firewall/proxy issues are diagnosable, then add the connection hint.
+      console.error(chalk.red(`${message}. Check your connection.`));
+    } else if (
       message.includes("fetch") ||
       message.includes("network") ||
       message.includes("ENOTFOUND") ||
       message.includes("ECONNREFUSED") ||
       message.includes("abort") ||
-      message.includes("Registry fetch failed") ||
-      message.includes("Could not reach")
+      message.includes("Registry fetch failed")
     ) {
       console.error(chalk.red("Could not reach template registry. Check your connection."));
     } else {
@@ -114,8 +117,10 @@ const installSubCommand = new Command("install")
         process.exit(1);
       }
 
+      // Reuse the body we already fetched and validated above — installTemplate
+      // would otherwise re-fetch entry.url, doubling the network round-trip.
       const destDir = USER_TEMPLATES_DIR();
-      const destPath = await installTemplate(entry, destDir);
+      const destPath = await installTemplate(entry, destDir, json);
 
       console.log(chalk.green(`✓ Installed template '${name}' → ${destPath}`));
       console.log(

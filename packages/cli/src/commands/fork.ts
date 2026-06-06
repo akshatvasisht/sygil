@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ora from "ora";
-import { loadWorkflow, interpolateWorkflow } from "../utils/workflow.js";
+import { loadWorkflow } from "../utils/workflow.js";
+import { parseParamPairs, resolveWorkflowParams } from "../utils/params.js";
 import { readConfigSafe } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
@@ -106,19 +107,7 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
   }
 
   // Parse --param overrides (mirrors run.ts).
-  const parameters: Record<string, string> = {};
-  if (options.param) {
-    for (const pair of options.param) {
-      const idx = pair.indexOf("=");
-      if (idx === -1) {
-        console.error(chalk.red(`Invalid parameter format: "${pair}" — expected key=value`));
-        process.exit(1);
-      }
-      const key = pair.slice(0, idx);
-      const value = pair.slice(idx + 1);
-      if (key) parameters[key] = value;
-    }
-  }
+  const parameters = options.param ? parseParamPairs(options.param) : {};
 
   // Load the parent's workflow file so we can re-run. Fork v1 does NOT search
   // heuristic paths — parents written after workflowPath was persisted always
@@ -144,44 +133,12 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
     process.exit(1);
   }
 
-  // Merge workflow defaults + CLI params, then validate required fields.
-  const resolvedParams: Record<string, string> = {};
-  if (workflow.parameters) {
-    for (const [key, paramDef] of Object.entries(workflow.parameters)) {
-      if (paramDef.default != null) {
-        resolvedParams[key] = String(paramDef.default);
-      }
-    }
-  }
-  for (const [key, value] of Object.entries(parameters)) {
-    resolvedParams[key] = value;
-  }
-  if (workflow.parameters) {
-    const missing: string[] = [];
-    for (const [key, paramDef] of Object.entries(workflow.parameters)) {
-      if (paramDef.required && !(key in resolvedParams)) {
-        missing.push(key);
-      }
-    }
-    if (missing.length > 0) {
-      console.error(
-        chalk.red(
-          `Missing required parameters: ${missing.join(", ")}\n` +
-            `Fork does not inherit params from the parent — supply each via --param key=value.`,
-        ),
-      );
-      process.exit(1);
-    }
-  }
-
-  try {
-    workflow = interpolateWorkflow(workflow, resolvedParams);
-  } catch (err) {
-    console.error(
-      chalk.red(`Parameter interpolation failed: ${err instanceof Error ? err.message : String(err)}`),
-    );
-    process.exit(1);
-  }
+  // Merge workflow defaults + CLI params, validate required fields, interpolate.
+  workflow = resolveWorkflowParams(
+    workflow,
+    parameters,
+    "Fork does not inherit params from the parent — supply each via --param key=value.",
+  );
 
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
