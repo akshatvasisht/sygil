@@ -24,8 +24,7 @@ function makeSession(_adapter: CursorCLIAdapter, proc: ReturnType<typeof makeFak
     resolve: null,
     totalCostUsd: 0,
     outputText: "",
-    resultEvent: null,
-    stallTimer: null,
+    resultEvent: null,    stallTimer: null,
     maxQueueSize: 1000,
   });
 }
@@ -562,8 +561,7 @@ describe("CursorCLIAdapter", () => {
           resolve: null,
           totalCostUsd: 0,
           outputText: "streaming output",
-          resultEvent: { result: "Final result", session_id: "sess-1", duration_ms: 3000 },
-          stallTimer: null,
+          resultEvent: { result: "Final result", session_id: "sess-1", duration_ms: 3000 },          stallTimer: null,
           maxQueueSize: 1000,
         },
       };
@@ -590,8 +588,7 @@ describe("CursorCLIAdapter", () => {
           resolve: null,
           totalCostUsd: 0,
           outputText: "fallback text",
-          resultEvent: null,
-          stallTimer: null,
+          resultEvent: null,          stallTimer: null,
           maxQueueSize: 1000,
         },
       };
@@ -617,8 +614,7 @@ describe("CursorCLIAdapter", () => {
           resolve: null,
           totalCostUsd: 0,
           outputText: 'Here is the result: {"status": "ok", "count": 42}',
-          resultEvent: null,
-          stallTimer: null,
+          resultEvent: null,          stallTimer: null,
           maxQueueSize: 1000,
         },
       };
@@ -643,6 +639,31 @@ describe("CursorCLIAdapter", () => {
           resolve: null,
           totalCostUsd: 0,
           outputText: "plain text only",
+          resultEvent: null,          stallTimer: null,
+          maxQueueSize: 1000,
+        },
+      };
+
+      const result = await adapter.getResult(session);
+      expect(result).not.toHaveProperty("structuredOutput");
+    });
+
+    it("omits costUsd when no cost data was emitted", async () => {
+      const proc = makeFakeProc();
+      const session: AgentSession = {
+        id: "test",
+        nodeId: "node",
+        adapter: "cursor-cli",
+        startedAt: new Date(),
+        _internal: {
+          proc,
+          stdout: [],
+          exitCode: 0,
+          done: true,
+          eventQueue: [],
+          resolve: null,
+          totalCostUsd: 0,
+          outputText: "ok",
           resultEvent: null,
           stallTimer: null,
           maxQueueSize: 1000,
@@ -650,7 +671,8 @@ describe("CursorCLIAdapter", () => {
       };
 
       const result = await adapter.getResult(session);
-      expect(result).not.toHaveProperty("structuredOutput");
+      // cursor-agent never emits dollar cost — costUsd is omitted, not $0.
+      expect(result).not.toHaveProperty("costUsd");
     });
   });
 

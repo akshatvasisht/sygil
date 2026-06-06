@@ -10,23 +10,20 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
 import {
   GETRESULT_KILL_GRACE_MS,
   GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
+  GETRESULT_TIMEOUT_MS,
   STALL_GRACE_MS,
+  exitCodeToSygilError,
 } from "./constants.js";
-import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
 
 const KILL_GRACE_PERIOD_MS = 2_000;
-
-/** Upper bound on `getResult`'s wait-for-exit poll. */
-const GEMINI_GETRESULT_TIMEOUT_MS = 10_000;
 
 interface GeminiInternal {
   proc: ReturnType<typeof spawn>;
@@ -164,7 +161,6 @@ export class GeminiCLIAdapter implements AgentAdapter {
     const internal = session._internal as GeminiInternal;
     const { proc } = internal;
 
-    const push = (ev: AgentEvent): boolean => pushEvent(internal, ev);
     const finish = (): void => finishStream(internal);
 
     proc.stderr?.on("data", () => {
@@ -172,23 +168,22 @@ export class GeminiCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    const decoder = createLineDecoder();
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      for (const trimmed of decoder.feed(chunk)) {
-        internal.stdout.push(trimmed);
-        const event = this.parseLine(trimmed, internal);
-        if (event) push(event);
-      }
-    });
+    // Centralized: UTF-8-safe line decode, in-order event push, and source
+    // pause on backpressure (resumed by drainEventQueue once it drains).
+    const stdoutSink = proc.stdout
+      ? wireStdoutBackpressure(
+          proc.stdout,
+          internal,
+          (line) => {
+            const event = this.parseLine(line, internal);
+            return event ? [event] : [];
+          },
+          (line) => internal.stdout.push(line),
+        )
+      : null;
 
     proc.stdout?.on("end", () => {
-      const trailing = decoder.flush();
-      if (trailing) {
-        internal.stdout.push(trailing);
-        const event = this.parseLine(trailing, internal);
-        if (event) push(event);
-      }
+      stdoutSink?.flush();
       stdoutClosed = true;
 
       if (internal.exitCode !== null) {
@@ -197,7 +192,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
         internal.stallTimer = setTimeout(() => {
           internal.stallTimer = null;
           if (!internal.done) {
-            push({ type: "stall", reason: "process_stdout_closed_without_exit" });
+            pushEvent(internal, { type: "stall", reason: "process_stdout_closed_without_exit" });
             finish();
           }
         }, STALL_GRACE_MS);
@@ -225,7 +220,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
 
     if (!internal.done || internal.exitCode === null) {
       await waitForDoneOrTimeout(internal, {
-        timeoutMs: GEMINI_GETRESULT_TIMEOUT_MS,
+        timeoutMs: GETRESULT_TIMEOUT_MS,
         pollIntervalMs: POLL_INTERVAL_MS,
         killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
@@ -236,14 +231,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
     const exitCode = internal.exitCode ?? 1;
     const tokenUsage = internal.resultEvent?.tokenUsage;
 
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output: outputText,

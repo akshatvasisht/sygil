@@ -693,7 +693,7 @@ describe("ClaudeCLIAdapter", () => {
 
         const resultPromise = adapter.getResult(session);
 
-        // Advance past CLAUDE_CLI_GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
+        // Advance past GETRESULT_TIMEOUT_MS (10_000) so the timeout branch fires.
         await vi.advanceTimersByTimeAsync(10_050);
         // SIGTERM issued; grace window (2_000) then SIGKILL.
         await vi.advanceTimersByTimeAsync(2_050);

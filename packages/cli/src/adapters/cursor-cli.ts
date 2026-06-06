@@ -10,27 +10,22 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
 import {
   GETRESULT_KILL_GRACE_MS,
   GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
+  GETRESULT_TIMEOUT_MS,
   STALL_GRACE_MS,
+  exitCodeToSygilError,
 } from "./constants.js";
-import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
 
 /** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
-
-/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream
- * teardown should never legitimately exceed this; if it does, we force-kill so
- * the workflow isn't pinned forever by an MCP server that pins the child. */
-const CURSOR_GETRESULT_TIMEOUT_MS = 10_000;
 
 /** Credential file paths checked to verify Cursor authentication. */
 const CURSOR_CREDENTIAL_PATHS = [
@@ -186,7 +181,6 @@ export class CursorCLIAdapter implements AgentAdapter {
     const internal = session._internal as CursorInternal;
     const { proc } = internal;
 
-    const push = (ev: AgentEvent): boolean => pushEvent(internal, ev);
     const finish = (): void => finishStream(internal);
 
     proc.stderr?.on("data", () => {
@@ -194,23 +188,22 @@ export class CursorCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    const decoder = createLineDecoder();
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      for (const trimmed of decoder.feed(chunk)) {
-        internal.stdout.push(trimmed);
-        const event = this.parseLine(trimmed, internal);
-        if (event) push(event);
-      }
-    });
+    // Centralized: UTF-8-safe line decode, in-order event push, and source
+    // pause on backpressure (resumed by drainEventQueue once it drains).
+    const stdoutSink = proc.stdout
+      ? wireStdoutBackpressure(
+          proc.stdout,
+          internal,
+          (line) => {
+            const event = this.parseLine(line, internal);
+            return event ? [event] : [];
+          },
+          (line) => internal.stdout.push(line),
+        )
+      : null;
 
     proc.stdout?.on("end", () => {
-      const trailing = decoder.flush();
-      if (trailing) {
-        internal.stdout.push(trailing);
-        const event = this.parseLine(trailing, internal);
-        if (event) push(event);
-      }
+      stdoutSink?.flush();
       stdoutClosed = true;
 
       if (internal.exitCode !== null) {
@@ -222,7 +215,7 @@ export class CursorCLIAdapter implements AgentAdapter {
         internal.stallTimer = setTimeout(() => {
           internal.stallTimer = null;
           if (!internal.done) {
-            push({ type: "stall", reason: "process_stdout_closed_without_exit" });
+            pushEvent(internal, { type: "stall", reason: "process_stdout_closed_without_exit" });
             finish();
           }
         }, STALL_GRACE_MS);
@@ -253,13 +246,16 @@ export class CursorCLIAdapter implements AgentAdapter {
 
     if (!internal.done || internal.exitCode === null) {
       await waitForDoneOrTimeout(internal, {
-        timeoutMs: CURSOR_GETRESULT_TIMEOUT_MS,
+        timeoutMs: GETRESULT_TIMEOUT_MS,
         pollIntervalMs: POLL_INTERVAL_MS,
         killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
     }
 
     const outputText = internal.resultEvent?.result ?? internal.outputText;
+    // cursor-agent's stream-json emits no dollar-cost field (Cursor bills against
+    // the plan, not per-call USD), so costUsd stays undefined rather than a
+    // misleading $0. See cursor.com/docs/cli/reference/output-format.
     const costUsd = internal.totalCostUsd > 0 ? internal.totalCostUsd : undefined;
     const exitCode = internal.exitCode ?? 1;
 
@@ -268,15 +264,7 @@ export class CursorCLIAdapter implements AgentAdapter {
       ? extractJsonFromOutput(outputText)
       : undefined;
 
-    // Map exit code to structured error code
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output: outputText,

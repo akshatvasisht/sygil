@@ -7,24 +7,19 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
 import {
   GETRESULT_KILL_GRACE_MS,
   GETRESULT_POLL_INTERVAL_MS,
+  GETRESULT_TIMEOUT_MS,
   STALL_GRACE_MS,
+  exitCodeToSygilError,
 } from "./constants.js";
-import { createLineDecoder } from "./ndjson-line-decoder.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
-
-/** Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
- * never legitimately exceed this; if it does, we assume a hung socket or a misbehaving
- * MCP server pinning the child and force-kill so the workflow isn't pinned forever. */
-const CODEX_GETRESULT_TIMEOUT_MS = 10_000;
 
 /** Grace period before SIGKILL after SIGTERM during kill(). */
 const KILL_GRACE_PERIOD_MS = 2_000;
@@ -46,6 +41,10 @@ interface CodexInternal {
   tokenUsage: TokenUsage;
   stallTimer: ReturnType<typeof setTimeout> | null;
   maxQueueSize: number;
+  /** Codex's own conversation id, captured from the `thread.started` NDJSON
+   * event. Used to resume the SPECIFIC session by id (not `--last`). Null until
+   * the event arrives, or if `--ephemeral` suppressed persistence. */
+  sessionId: string | null;
 }
 
 export class CodexCLIAdapter implements AgentAdapter {
@@ -97,12 +96,17 @@ export class CodexCLIAdapter implements AgentAdapter {
     const sandbox = config.sandbox ?? "workspace-write";
     const cwd = config.outputDir ?? process.cwd();
 
+    // NOTE: we intentionally do NOT pass `--ephemeral` here. `--ephemeral`
+    // skips persisting the session rollout file to disk, which makes the
+    // session unresumable — `codex exec resume <thread_id>` then silently
+    // starts a fresh thread with no prior context (openai/codex#15538). Since
+    // resume() relies on the persisted rollout to reuse the conversation on
+    // loop-back retries, the rollout must survive the spawn process exiting.
     const args: string[] = [
       "exec",
       "--json",
       "--sandbox",
       sandbox,
-      "--ephemeral",
       "--model",
       config.model,
       config.prompt,
@@ -126,6 +130,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       tokenUsage: { input: 0, output: 0 },
       stallTimer: null,
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
+      sessionId: null,
     };
 
     proc.on("error", (err) => {
@@ -141,13 +146,21 @@ export class CodexCLIAdapter implements AgentAdapter {
   async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, ctx?: SpawnContext): Promise<AgentSession> {
     const cwd = config.outputDir ?? process.cwd();
 
-    const args: string[] = [
-      "exec",
-      "resume",
-      "--last",
-      feedbackMessage,
-      "--json",
-    ];
+    // Resume the SPECIFIC codex session by its thread id (captured from the
+    // `thread.started` event during the prior spawn) rather than `--last`.
+    // `--last` resumes the most-recent session in this cwd, which on loop-back
+    // retries across a multi-node workflow can resume the wrong conversation.
+    // Syntax: `codex exec resume <SESSION_ID> "<prompt>"`
+    // (https://developers.openai.com/codex/cli/reference). Mirrors the
+    // cursor-cli adapter's captured-session-id resume pattern.
+    const prev = previousSession._internal as Partial<CodexInternal> | undefined;
+    const sessionId = prev?.sessionId ?? null;
+
+    const args: string[] = sessionId
+      ? ["exec", "resume", sessionId, feedbackMessage, "--json"]
+      : // No thread id captured (e.g. resuming from a checkpoint whose internal
+        // state wasn't retained) — fall back to the most-recent session.
+        ["exec", "resume", "--last", feedbackMessage, "--json"];
 
     const proc = spawn("codex", args, {
       cwd,
@@ -167,6 +180,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       tokenUsage: { input: 0, output: 0 },
       stallTimer: null,
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
+      sessionId,
     };
 
     proc.on("error", (err) => {
@@ -183,7 +197,6 @@ export class CodexCLIAdapter implements AgentAdapter {
     const internal = session._internal as CodexInternal;
     const { proc } = internal;
 
-    const push = (ev: AgentEvent): boolean => pushEvent(internal, ev);
     const finish = (): void => finishStream(internal);
 
     proc.stderr?.on("data", () => {
@@ -191,23 +204,22 @@ export class CodexCLIAdapter implements AgentAdapter {
     });
 
     let stdoutClosed = false;
-    const decoder = createLineDecoder();
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      for (const trimmed of decoder.feed(chunk)) {
-        internal.outputLines.push(trimmed);
-        const event = this.parseLine(trimmed, internal);
-        if (event) push(event);
-      }
-    });
+    // Centralized: UTF-8-safe line decode, in-order event push, and source
+    // pause on backpressure (resumed by drainEventQueue once it drains).
+    const stdoutSink = proc.stdout
+      ? wireStdoutBackpressure(
+          proc.stdout,
+          internal,
+          (line) => {
+            const event = this.parseLine(line, internal);
+            return event ? [event] : [];
+          },
+          (line) => internal.outputLines.push(line),
+        )
+      : null;
 
     proc.stdout?.on("end", () => {
-      const trailing = decoder.flush();
-      if (trailing) {
-        internal.outputLines.push(trailing);
-        const event = this.parseLine(trailing, internal);
-        if (event) push(event);
-      }
+      stdoutSink?.flush();
       stdoutClosed = true;
 
       if (internal.exitCode !== null) {
@@ -218,7 +230,7 @@ export class CodexCLIAdapter implements AgentAdapter {
         internal.stallTimer = setTimeout(() => {
           internal.stallTimer = null;
           if (!internal.done) {
-            push({ type: "stall", reason: "process_stdout_closed_without_exit" });
+            pushEvent(internal, { type: "stall", reason: "process_stdout_closed_without_exit" });
             finish();
           }
         }, STALL_GRACE_MS);
@@ -255,7 +267,7 @@ export class CodexCLIAdapter implements AgentAdapter {
 
     if (!internal.done || internal.exitCode === null) {
       await waitForDoneOrTimeout(internal, {
-        timeoutMs: CODEX_GETRESULT_TIMEOUT_MS,
+        timeoutMs: GETRESULT_TIMEOUT_MS,
         pollIntervalMs: GETRESULT_POLL_INTERVAL_MS,
         killGraceMs: GETRESULT_KILL_GRACE_MS,
       });
@@ -270,15 +282,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       ? extractJsonFromOutput(internal.outputText)
       : undefined;
 
-    // Map exit code to structured error code
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output: internal.outputText,
@@ -401,6 +405,16 @@ const handleItemEvent = (
 };
 
 const CODEX_EVENT_MAPPING: EventMapping<Record<string, unknown>, CodexInternal> = {
+  // First event of a `codex exec --json` run: { type: "thread.started",
+  // thread_id: "<uuid>" }. Capture the thread id so resume() can target this
+  // exact session by id instead of `--last`.
+  "thread.started": (raw, internal) => {
+    const threadId = raw["thread_id"];
+    if (typeof threadId === "string" && threadId.length > 0) {
+      internal.sessionId = threadId;
+    }
+    return null;
+  },
   "turn.started": () => null,
   "turn.completed": handleTurnCompleted,
   "item.done": handleTurnCompleted,

@@ -14,7 +14,7 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
+import { exitCodeToSygilError } from "./constants.js";
 
 // ---------------------------------------------------------------------------
 // Security helper — path-traversal-safe tool permission check
@@ -173,15 +173,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
     const tokenUsage = summary["tokenUsage"] as NodeResult["tokenUsage"] | undefined;
     const exitCode = Number(summary["exitCode"] ?? 0);
 
-    // Map exit code to structured error code
-    let errorCode: SygilErrorCode | undefined;
-    if (exitCode === STALL_EXIT_CODE) {
-      errorCode = SygilErrorCode.NODE_STALLED;
-    } else if (exitCode === 124) {
-      errorCode = SygilErrorCode.NODE_TIMEOUT;
-    } else if (exitCode !== 0) {
-      errorCode = SygilErrorCode.NODE_CRASHED;
-    }
+    const errorCode = exitCodeToSygilError(exitCode);
 
     return {
       output: String(summary["output"] ?? ""),
