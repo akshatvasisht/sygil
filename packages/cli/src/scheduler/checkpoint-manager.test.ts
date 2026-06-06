@@ -282,8 +282,8 @@ describe("CheckpointManager", () => {
     expect(Object.keys(loaded.nodeResults)).toHaveLength(0);
   });
 
-  // 11. getLastError() returns the last write error
-  it("getLastError() returns the error after a failed write", async () => {
+  // 11. lastError captures the last write error
+  it("lastError holds the error after a failed write", async () => {
     const invalidDir = join(tmpdir(), `sygil-ckpt-test-\0invalid`);
     const state = makeRunState();
     const mgr = new CheckpointManager(invalidDir);
@@ -291,21 +291,21 @@ describe("CheckpointManager", () => {
     mgr.markDirty(state);
     await mgr.flush();
 
-    const lastErr = mgr.getLastError();
+    const lastErr = mgr.lastError;
     expect(lastErr).toBeDefined();
     expect(lastErr).toBeInstanceOf(Error);
 
     mgr.dispose();
   });
 
-  it("getLastError() returns undefined when no errors occurred", async () => {
+  it("lastError is undefined when no errors occurred", async () => {
     const state = makeRunState();
     const mgr = new CheckpointManager(testDir);
 
     mgr.markDirty(state);
     await mgr.flush();
 
-    expect(mgr.getLastError()).toBeUndefined();
+    expect(mgr.lastError).toBeUndefined();
 
     mgr.dispose();
   });

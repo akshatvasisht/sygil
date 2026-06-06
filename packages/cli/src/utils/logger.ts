@@ -12,11 +12,6 @@ export function setVerbose(v: boolean): void {
   verbose = v;
 }
 
-/** Returns true if verbose mode is currently enabled. */
-export function isVerbose(): boolean {
-  return verbose;
-}
-
 /**
  * Structured logger with coloured output.
  * - info: plain stdout

@@ -66,7 +66,12 @@ async function probeAdapterVersion(adapter: AgentAdapter): Promise<string | null
     // Race against a 1s timeout — don't block run start on a slow version probe.
     const result = await Promise.race<string | null>([
       adapter.getVersion(),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_000)),
+      new Promise<null>((resolve) => {
+        // unref so a pending probe timer never keeps the process alive — matches
+        // the pattern at checkpoint-manager.ts:163.
+        const t = setTimeout(() => resolve(null), 1_000);
+        t.unref?.();
+      }),
     ]);
     return result;
   } catch {

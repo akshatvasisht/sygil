@@ -16,6 +16,7 @@ import { MetricsAggregator } from "./metrics-aggregator.js";
 import type { PrometheusMetrics } from "./prometheus-metrics.js";
 import type { AdapterPool } from "../adapters/adapter-pool.js";
 import { constantTimeEquals } from "../utils/ct-equals.js";
+import { checkHttpAuth } from "./_auth.js";
 
 interface SubscriberInfo {
   ws: WebSocket;
@@ -227,17 +228,7 @@ export class WsMonitorServer {
    *   - `?token=<token>` query parameter
    */
   private isHttpAuthorized(req: IncomingMessage): boolean {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    const queryToken = url.searchParams.get("token");
-    if (queryToken !== null && constantTimeEquals(queryToken, this.authToken)) return true;
-
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-      const bearerToken = authHeader.slice(7);
-      if (constantTimeEquals(bearerToken, this.authToken)) return true;
-    }
-
-    return false;
+    return checkHttpAuth(req, this.authToken);
   }
 
   /**

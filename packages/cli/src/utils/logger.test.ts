@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
-import { logger, setVerbose, isVerbose } from "./logger.js";
+import { logger, setVerbose } from "./logger.js";
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -26,20 +26,23 @@ describe("logger", () => {
     setVerbose(false);
   });
 
-  describe("setVerbose / isVerbose", () => {
-    it("defaults to false", () => {
-      expect(isVerbose()).toBe(false);
+  describe("setVerbose", () => {
+    it("suppresses debug output by default", () => {
+      logger.debug("hidden");
+      expect(consoleLogSpy).not.toHaveBeenCalled();
     });
 
-    it("returns true after setVerbose(true)", () => {
+    it("enables debug output after setVerbose(true)", () => {
       setVerbose(true);
-      expect(isVerbose()).toBe(true);
+      logger.debug("shown");
+      expect(consoleLogSpy).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false after setVerbose(false)", () => {
+    it("re-suppresses debug output after setVerbose(false)", () => {
       setVerbose(true);
       setVerbose(false);
-      expect(isVerbose()).toBe(false);
+      logger.debug("hidden again");
+      expect(consoleLogSpy).not.toHaveBeenCalled();
     });
   });
 

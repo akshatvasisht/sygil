@@ -57,7 +57,6 @@ async function readActiveMonitor(): Promise<ActiveMonitorInfo | null> {
 
 
 export async function monitorCommand(
-  runId: string | undefined,
   options: { url?: string }
 ): Promise<void> {
   let wsUrl: string;

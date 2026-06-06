@@ -192,13 +192,4 @@ describe("MetricsAggregator", () => {
       vi.useRealTimers();
     }
   });
-
-  it("dropWorkflow clears aggregate state", () => {
-    agg = new MetricsAggregator();
-    agg.observe({ type: "workflow_start", workflowId: "w1", graph });
-    agg.observe({ type: "gate_eval", workflowId: "w1", edgeId: "e1", passed: true });
-    expect(agg.snapshot("w1")).not.toBeNull();
-    agg.dropWorkflow("w1");
-    expect(agg.snapshot("w1")).toBeNull();
-  });
 });

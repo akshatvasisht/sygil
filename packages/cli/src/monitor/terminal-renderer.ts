@@ -43,14 +43,7 @@ function formatCost(usd: number): string {
 }
 
 function formatTokenCount(n: number): string {
-  if (n < 1000) return String(n);
-  const parts: string[] = [];
-  let remaining = n;
-  while (remaining > 0) {
-    parts.unshift(String(remaining % 1000).padStart(parts.length > 0 ? 3 : 1, "0"));
-    remaining = Math.floor(remaining / 1000);
-  }
-  return parts.join(",");
+  return n.toLocaleString("en-US");
 }
 
 function truncate(s: string, max: number): string {
@@ -85,7 +78,7 @@ function statusLabel(status: NodeStatus): string {
 
 const STATUS_LABEL_WIDTH = 9; // "completed" is the longest
 
-export function renderTree(state: TerminalMonitorState, spinnerFrame: number): string {
+function renderTree(state: TerminalMonitorState, spinnerFrame: number): string {
   const { nodeOrder, nodes } = state;
   const lines: string[] = [];
   const count = nodeOrder.length;

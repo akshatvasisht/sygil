@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import type { PrometheusMetrics } from "./prometheus-metrics.js";
-import { constantTimeEquals } from "../utils/ct-equals.js";
+import { checkHttpAuth } from "./_auth.js";
 
 /**
  * Tiny HTTP server that exposes the Prometheus `/metrics` endpoint.
@@ -130,18 +130,6 @@ export class MetricsServer {
   }
 
   private isAuthorized(req: http.IncomingMessage): boolean {
-    // Query parameter
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const queryToken = url.searchParams.get("token");
-    if (queryToken && constantTimeEquals(queryToken, this.authToken)) return true;
-
-    // Authorization header (Bearer <token>)
-    const header = req.headers.authorization;
-    if (typeof header === "string") {
-      const m = /^Bearer\s+(.+)$/i.exec(header.trim());
-      if (m && constantTimeEquals(m[1]!, this.authToken)) return true;
-    }
-
-    return false;
+    return checkHttpAuth(req, this.authToken);
   }
 }

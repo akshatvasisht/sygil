@@ -52,14 +52,4 @@ export class RingBuffer<T> {
   get dropped(): number {
     return this._dropped;
   }
-
-  /** Clear all items without affecting the dropped count. */
-  clear(): void {
-    for (let i = 0; i < this.size; i++) {
-      const idx = (this.head + i) % this.cap;
-      this.buf[idx] = undefined;
-    }
-    this.head = 0;
-    this.size = 0;
-  }
 }

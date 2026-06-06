@@ -65,18 +65,6 @@ describe("RingBuffer", () => {
     expect(buf.length).toBe(4);
   });
 
-  it("clear resets buffer and length but preserves dropped count", () => {
-    const buf = new RingBuffer<number>(2);
-    buf.push(1);
-    buf.push(2);
-    buf.push(3); // drops 1
-
-    buf.clear();
-    expect(buf.length).toBe(0);
-    expect(buf.drain()).toEqual([]);
-    expect(buf.dropped).toBe(1);
-  });
-
   it("works correctly after drain and re-fill", () => {
     const buf = new RingBuffer<number>(3);
     buf.push(1);
@@ -127,18 +115,5 @@ describe("RingBuffer", () => {
     // Cycle 3: partial fill
     buf.push(100);
     expect(buf.drain()).toEqual([100]);
-  });
-
-  it("clear after overflow allows correct subsequent usage", () => {
-    const buf = new RingBuffer<number>(2);
-    buf.push(1);
-    buf.push(2);
-    buf.push(3); // drops 1
-    buf.clear();
-
-    buf.push(10);
-    buf.push(20);
-    expect(buf.drain()).toEqual([10, 20]);
-    expect(buf.dropped).toBe(1); // preserved from before clear
   });
 });

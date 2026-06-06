@@ -6,11 +6,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type {
   AgentAdapter,
   AgentSession,
@@ -23,42 +18,6 @@ import type {
   WsServerEvent,
 } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
-
-const execFileAsync = promisify(execFile);
-
-// ---------------------------------------------------------------------------
-// Temp directory management
-// ---------------------------------------------------------------------------
-
-const tempDirs: string[] = [];
-
-export async function makeTempDir(prefix = "sygil-integ-"): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-export async function cleanupTempDirs(): Promise<void> {
-  for (const dir of tempDirs.splice(0).reverse()) {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Temp git repo
-// ---------------------------------------------------------------------------
-
-export async function createTempGitRepo(): Promise<string> {
-  const dir = await makeTempDir("sygil-git-");
-  await execFileAsync("git", ["init", dir]);
-  await execFileAsync("git", ["-C", dir, "config", "user.email", "test@sygil.dev"]);
-  await execFileAsync("git", ["-C", dir, "config", "user.name", "Sygil Test"]);
-  // Create an initial commit so HEAD exists
-  await writeFile(join(dir, "README.md"), "# test repo\n");
-  await execFileAsync("git", ["-C", dir, "add", "."]);
-  await execFileAsync("git", ["-C", dir, "commit", "-m", "initial commit"]);
-  return dir;
-}
 
 // ---------------------------------------------------------------------------
 // Session factory
@@ -200,17 +159,6 @@ export function createScriptedAdapter(options: ScriptedAdapterOptions = {}): Age
 }
 
 // ---------------------------------------------------------------------------
-// Routing adapter factory — returns different adapters per AdapterType
-// ---------------------------------------------------------------------------
-
-export function createRoutingAdapterFactory(
-  adapters: Partial<Record<AdapterType, AgentAdapter>>
-): (type: AdapterType) => AgentAdapter {
-  const fallback = createScriptedAdapter();
-  return (type: AdapterType) => adapters[type] ?? fallback;
-}
-
-// ---------------------------------------------------------------------------
 // Simple mock adapter — minimal surface used by contract/node-output tests
 // ---------------------------------------------------------------------------
 
@@ -344,102 +292,6 @@ export function linearWorkflow(
   };
 }
 
-export function diamondWorkflow(): WorkflowGraph {
-  return {
-    version: "1",
-    name: "diamond",
-    nodes: {
-      start: makeNodeConfig({ prompt: "start" }),
-      left: makeNodeConfig({ prompt: "left" }),
-      right: makeNodeConfig({ prompt: "right" }),
-      merge: makeNodeConfig({ prompt: "merge" }),
-    },
-    edges: [
-      { id: "e-start-left", from: "start", to: "left" },
-      { id: "e-start-right", from: "start", to: "right" },
-      { id: "e-left-merge", from: "left", to: "merge" },
-      { id: "e-right-merge", from: "right", to: "merge" },
-    ],
-  };
-}
-
-export function loopBackWorkflow(maxRetries = 2): WorkflowGraph {
-  return {
-    version: "1",
-    name: "loop-back",
-    nodes: {
-      writer: makeNodeConfig({ prompt: "write code" }),
-      reviewer: makeNodeConfig({ prompt: "review code" }),
-    },
-    edges: [
-      { id: "e-write-review", from: "writer", to: "reviewer" },
-      {
-        id: "e-review-loop",
-        from: "reviewer",
-        to: "writer",
-        isLoopBack: true,
-        maxRetries,
-        gate: { conditions: [{ type: "exit_code", value: 0 }] },
-      },
-    ],
-  };
-}
-
-export function contractWorkflow(
-  outputSchema: Record<string, unknown>,
-  inputMapping?: Record<string, string>
-): WorkflowGraph {
-  return {
-    version: "1",
-    name: "contract",
-    nodes: {
-      producer: makeNodeConfig({ prompt: "produce data" }),
-      consumer: makeNodeConfig({ prompt: "consume data with {{result}}" }),
-    },
-    edges: [
-      {
-        id: "e-produce-consume",
-        from: "producer",
-        to: "consumer",
-        contract: {
-          outputSchema,
-          ...(inputMapping !== undefined ? { inputMapping } : {}),
-        },
-      },
-    ],
-  };
-}
-
-/** Multi-node workflow: start -> [impl, test] -> validate (diamond with gates). */
-export function fullDagWorkflow(): WorkflowGraph {
-  return {
-    version: "1",
-    name: "full-dag",
-    nodes: {
-      plan: makeNodeConfig({ prompt: "plan the feature" }),
-      impl: makeNodeConfig({ prompt: "implement the feature" }),
-      test: makeNodeConfig({ prompt: "write tests" }),
-      validate: makeNodeConfig({ prompt: "validate everything" }),
-    },
-    edges: [
-      { id: "e-plan-impl", from: "plan", to: "impl" },
-      { id: "e-plan-test", from: "plan", to: "test" },
-      {
-        id: "e-impl-validate",
-        from: "impl",
-        to: "validate",
-        gate: { conditions: [{ type: "exit_code", value: 0 }] },
-      },
-      {
-        id: "e-test-validate",
-        from: "test",
-        to: "validate",
-        gate: { conditions: [{ type: "exit_code", value: 0 }] },
-      },
-    ],
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Assertion helpers
 // ---------------------------------------------------------------------------
@@ -449,17 +301,4 @@ export function monitorEventsOfType<T extends WsServerEvent["type"]>(
   type: T
 ): Extract<WsServerEvent, { type: T }>[] {
   return events.filter((e): e is Extract<WsServerEvent, { type: T }> => e.type === type);
-}
-
-/** Wait for a condition with timeout. */
-export async function waitFor(
-  condition: () => boolean,
-  timeoutMs = 5000,
-  intervalMs = 50
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
 }

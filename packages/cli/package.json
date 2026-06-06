@@ -69,8 +69,7 @@
     "sirv": "^3.0.2",
     "tar": "^7.5.13",
     "write-file-atomic": "^6.0.0",
-    "ws": "^8.17.0",
-    "zod": "^4.3.6"
+    "ws": "^8.17.0"
   },
   "optionalDependencies": {
     "sigstore": "^3.1.0"
