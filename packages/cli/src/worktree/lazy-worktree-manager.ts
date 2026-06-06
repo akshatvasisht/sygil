@@ -5,8 +5,9 @@ import path from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { Mutex } from "async-mutex";
 import type { NodeConfig } from "@sygil/shared";
+import { SygilErrorCode } from "@sygil/shared";
 import { logger } from "../utils/logger.js";
-import { ensureGitRepo } from "../utils/git-check.js";
+import { isContainedIn } from "../gates/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,23 +38,37 @@ export class LazyWorktreeManager {
   /**
    * Get an existing worktree path or create one lazily.
    * Returns the same path on repeated calls for the same nodeId.
+   *
+   * `inputSourceDirs` are repo-relative directories holding files this node
+   * READS via incoming-edge `inputMapping` contracts. They're added to the
+   * sparse-checkout set so the node doesn't hit "file not found" at runtime.
    */
-  async getOrCreate(nodeId: string, nodeConfig: NodeConfig, signal?: AbortSignal): Promise<string> {
+  async getOrCreate(
+    nodeId: string,
+    nodeConfig: NodeConfig,
+    signal?: AbortSignal,
+    inputSourceDirs?: string[]
+  ): Promise<string> {
     const existing = this.worktrees.get(nodeId);
     if (existing) {
       return existing.path;
     }
 
-    return this.createSparse(nodeId, nodeConfig, signal);
+    return this.createSparse(nodeId, nodeConfig, signal, inputSourceDirs);
   }
 
   /**
    * Create a sparse-checkout worktree for a node.
    * Uses the mutex to prevent concurrent git worktree add operations.
    */
-  private async createSparse(nodeId: string, nodeConfig: NodeConfig, signal?: AbortSignal): Promise<string> {
+  private async createSparse(
+    nodeId: string,
+    nodeConfig: NodeConfig,
+    signal?: AbortSignal,
+    inputSourceDirs?: string[]
+  ): Promise<string> {
     // Determine which directories to check out
-    const sparseDirs = this.computeSparseDirs(nodeConfig);
+    const sparseDirs = this.computeSparseDirs(nodeConfig, inputSourceDirs);
 
     // Get current branch name
     const { stdout: branch } = await execFileAsync("git", [
@@ -114,26 +129,60 @@ export class LazyWorktreeManager {
   /**
    * Compute the directories that need to be checked out for sparse checkout.
    * Includes the outputDir and any inputMapping source paths from incoming edges.
+   *
+   * `inputSourceDirs` come from the scheduler, which resolves each incoming
+   * edge's `inputMapping` source file to the directory containing it. They may
+   * be absolute (resolved against a predecessor's outputDir) or repo-relative;
+   * either way we normalise to a repo-relative path and drop anything that
+   * escapes the repo boundary — sparse-checkout patterns must stay inside the
+   * repo, and staging an out-of-tree path is both useless and a containment hole.
    */
-  private computeSparseDirs(nodeConfig: NodeConfig): string[] {
-    const dirs: string[] = [];
+  private computeSparseDirs(nodeConfig: NodeConfig, inputSourceDirs?: string[]): string[] {
+    const dirs = new Set<string>();
 
     if (nodeConfig.outputDir) {
-      dirs.push(nodeConfig.outputDir);
+      dirs.add(nodeConfig.outputDir);
+    }
+
+    for (const src of inputSourceDirs ?? []) {
+      const rel = this.toContainedRepoRelative(src);
+      if (rel) dirs.add(rel);
     }
 
     // Always include at least the root so the worktree isn't completely empty
-    if (dirs.length === 0) {
-      dirs.push(".");
+    if (dirs.size === 0) {
+      dirs.add(".");
     }
 
-    return dirs;
+    return [...dirs];
+  }
+
+  /**
+   * Normalise a path (absolute or repo-relative) to a repo-relative,
+   * forward-slash directory inside the repo. Returns undefined when the path
+   * escapes the repo boundary — those are dropped from the sparse set rather
+   * than checked out, matching the path-containment contract used by gates.
+   */
+  private toContainedRepoRelative(p: string): string | undefined {
+    const abs = path.isAbsolute(p) ? p : path.resolve(this.repoRoot, p);
+    if (!isContainedIn(abs, this.repoRoot)) return undefined;
+    const rel = path.relative(this.repoRoot, abs);
+    // Empty rel means the repo root itself → ".".
+    if (rel === "" || rel === ".") return ".";
+    // Guard against traversal that survived (defensive — isContainedIn already
+    // rejects escapes, but normalise removes any "./" noise).
+    if (rel.startsWith("..")) return undefined;
+    return rel.split(path.sep).join("/");
   }
 
   /**
    * Merge a node's worktree changes into a target branch.
    */
-  async merge(nodeId: string, targetBranch: string, signal?: AbortSignal): Promise<{ conflicts: string[] }> {
+  async merge(
+    nodeId: string,
+    targetBranch: string,
+    signal?: AbortSignal
+  ): Promise<{ conflicts: string[]; errorCode?: SygilErrorCode }> {
     const info = this.worktrees.get(nodeId);
     if (!info) throw new Error(`No worktree for node ${nodeId}`);
 
@@ -143,8 +192,10 @@ export class LazyWorktreeManager {
 
     // Commit any changes in the worktree — operates on the node's own worktree
     // path, no `.git/index.lock` involved, so these stay outside the mutex.
-    await execFileAsync("git", ["-C", info.path, "add", "-A"]).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
-    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sygil: node ${nodeId} output`]).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+    // Thread the signal so workflow cancel can interrupt staging/commit too,
+    // matching the merge op below.
+    await execFileAsync("git", ["-C", info.path, "add", "-A"], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sygil: node ${nodeId} output`], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
 
     // Serialize main-repo merges against concurrent `worktree add` / `worktree
     // remove` and each other. Two fan-in nodes completing at once would
@@ -167,7 +218,14 @@ export class LazyWorktreeManager {
           "-C", this.repoRoot, "diff", "--name-only", "--diff-filter=U",
         ]).catch(() => ({ stdout: "" }));
         const conflicts = stdout.trim().split("\n").filter(Boolean);
-        await execFileAsync("git", ["-C", this.repoRoot, "merge", "--abort"]).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+        await execFileAsync("git", ["-C", this.repoRoot, "merge", "--abort"], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+        // Tag genuine conflicts with the structured code so callers can branch
+        // on it. Lock-contention failures yield no unmerged files (empty
+        // `conflicts`) and are deliberately left uncoded — they're retryable
+        // backpressure, not a real merge conflict.
+        if (conflicts.length > 0) {
+          return { conflicts, errorCode: SygilErrorCode.WORKTREE_MERGE_CONFLICT };
+        }
         return { conflicts };
       }
     } finally {
