@@ -4,7 +4,6 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { logger } from "../utils/logger.js";
-import { ensureGitRepo } from "../utils/git-check.js";
 
 const execFileAsync = promisify(execFile);
 

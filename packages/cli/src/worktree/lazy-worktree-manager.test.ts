@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 import type { NodeConfig } from "@sygil/shared";
+import { SygilErrorCode } from "@sygil/shared";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -369,6 +370,143 @@ describe("LazyWorktreeManager", () => {
       expect(mergeCall).toBeDefined();
       const opts = mergeCall![2] as { signal?: AbortSignal };
       expect(opts?.signal).toBe(controller.signal);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("sparse checkout — inputMapping source dirs (M1)", () => {
+    it("includes input source dirs in the sparse-checkout set", async () => {
+      makeExecFileResolve("main\n");
+
+      const config: NodeConfig = { ...BASE_CONFIG, outputDir: "results/node-2" };
+      // Predecessor writes results/node-1/output.json → node-2 reads it.
+      await manager.getOrCreate("node-2", config, undefined, ["results/node-1"]);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+      const sparseCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("sparse-checkout") && args.includes("set");
+      });
+      expect(sparseCall).toBeDefined();
+      const sparseArgs = sparseCall![1] as string[];
+      expect(sparseArgs).toContain("results/node-2"); // outputDir
+      expect(sparseArgs).toContain("results/node-1"); // input source dir
+    });
+
+    it("normalises an absolute input dir inside the repo to repo-relative", async () => {
+      makeExecFileResolve("main\n");
+
+      const absInput = path.join(REPO_ROOT, "shared", "inputs");
+      await manager.getOrCreate("node-abs", BASE_CONFIG, undefined, [absInput]);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+      const sparseCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("sparse-checkout") && args.includes("set");
+      });
+      const sparseArgs = sparseCall![1] as string[];
+      expect(sparseArgs).toContain("shared/inputs");
+    });
+
+    it("drops input dirs that escape the repo boundary", async () => {
+      makeExecFileResolve("main\n");
+
+      // Traversal + absolute outside-repo paths must not be staged.
+      await manager.getOrCreate("node-escape", BASE_CONFIG, undefined, [
+        "../../etc",
+        "/etc",
+      ]);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+      const sparseCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("sparse-checkout") && args.includes("set");
+      });
+      const sparseArgs = sparseCall![1] as string[];
+      expect(sparseArgs.some((a) => a.includes("etc"))).toBe(false);
+      expect(sparseArgs.some((a) => a.startsWith(".."))).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("merge() — abort signal on add/commit (Q4)", () => {
+    it("threads the signal to git add and git commit", async () => {
+      const controller = new AbortController();
+      makeExecFileResolve("main\n");
+      await manager.getOrCreate("node-q4", BASE_CONFIG);
+
+      vi.clearAllMocks();
+      makeExecFileResolve("");
+
+      await manager.merge("node-q4", "main", controller.signal);
+
+      const calls = mockExecFile.mock.calls as unknown[][];
+
+      const addCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("add") && args.includes("-A");
+      });
+      expect(addCall).toBeDefined();
+      expect((addCall![2] as { signal?: AbortSignal })?.signal).toBe(controller.signal);
+
+      const commitCall = calls.find((c) => {
+        const args = c[1] as string[];
+        return args.includes("commit");
+      });
+      expect(commitCall).toBeDefined();
+      expect((commitCall![2] as { signal?: AbortSignal })?.signal).toBe(controller.signal);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("merge() — conflict error code", () => {
+    it("tags genuine conflicts with WORKTREE_MERGE_CONFLICT", async () => {
+      makeExecFileResolve("main\n");
+      await manager.getOrCreate("node-conflict-code", BASE_CONFIG);
+
+      vi.clearAllMocks();
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string }
+        ) => void;
+        const gitArgs = args[1] as string[];
+        if (gitArgs.includes("--no-ff")) {
+          cb(new Error("CONFLICT"));
+        } else if (gitArgs.includes("--diff-filter=U")) {
+          cb(null, { stdout: "README.md\n", stderr: "" });
+        } else {
+          cb(null, { stdout: "", stderr: "" });
+        }
+      });
+
+      const result = await manager.merge("node-conflict-code", "main");
+      expect(result.conflicts).toEqual(["README.md"]);
+      expect(result.errorCode).toBe(SygilErrorCode.WORKTREE_MERGE_CONFLICT);
+    });
+
+    it("leaves lock-contention (empty conflicts) uncoded", async () => {
+      makeExecFileResolve("main\n");
+      await manager.getOrCreate("node-lock", BASE_CONFIG);
+
+      vi.clearAllMocks();
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string }
+        ) => void;
+        const gitArgs = args[1] as string[];
+        if (gitArgs.includes("--no-ff")) {
+          cb(new Error("index.lock"));
+        } else {
+          // diff --diff-filter=U returns nothing → no real conflicts.
+          cb(null, { stdout: "", stderr: "" });
+        }
+      });
+
+      const result = await manager.merge("node-lock", "main");
+      expect(result.conflicts).toEqual([]);
+      expect(result.errorCode).toBeUndefined();
     });
   });
 
