@@ -430,16 +430,40 @@ describe("LazyWorktreeManager", () => {
 
   // -------------------------------------------------------------------------
   describe("merge() — abort signal on add/commit (Q4)", () => {
-    it("threads the signal to git add and git commit", async () => {
+    it("threads the signal to git add/commit and rejects (not swallows) on abort", async () => {
       const controller = new AbortController();
       makeExecFileResolve("main\n");
       await manager.getOrCreate("node-q4", BASE_CONFIG);
 
       vi.clearAllMocks();
-      makeExecFileResolve("");
 
-      await manager.merge("node-q4", "main", controller.signal);
+      // git add/commit reject with an AbortError when invoked with the passed
+      // signal (mirrors execFile's behavior when its signal fires). Everything
+      // else resolves normally.
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (
+          err: Error | null,
+          result?: { stdout: string; stderr: string }
+        ) => void;
+        const gitArgs = args[1] as string[];
+        const options = args[2] as { signal?: AbortSignal } | undefined;
+        const isAddOrCommit =
+          (gitArgs.includes("add") && gitArgs.includes("-A")) ||
+          gitArgs.includes("commit");
+        if (isAddOrCommit && options?.signal === controller.signal) {
+          const abortErr = new Error("The operation was aborted");
+          abortErr.name = "AbortError";
+          cb(abortErr);
+          return;
+        }
+        cb(null, { stdout: "", stderr: "" });
+      });
 
+      // The abort must propagate as a rejection, not be swallowed into a fake
+      // `{conflicts: []}` success.
+      await expect(manager.merge("node-q4", "main", controller.signal)).rejects.toThrow();
+
+      // Still verify the signal was forwarded to git add and git commit.
       const calls = mockExecFile.mock.calls as unknown[][];
 
       const addCall = calls.find((c) => {
@@ -448,13 +472,6 @@ describe("LazyWorktreeManager", () => {
       });
       expect(addCall).toBeDefined();
       expect((addCall![2] as { signal?: AbortSignal })?.signal).toBe(controller.signal);
-
-      const commitCall = calls.find((c) => {
-        const args = c[1] as string[];
-        return args.includes("commit");
-      });
-      expect(commitCall).toBeDefined();
-      expect((commitCall![2] as { signal?: AbortSignal })?.signal).toBe(controller.signal);
     });
   });
 

@@ -663,6 +663,8 @@ describe("CodexCLIAdapter", () => {
       const session = makeSession(adapter, proc);
 
       const collected = collectEvents(adapter, session);
+      // Let the async generator attach its stdout listeners before emitting.
+      await Promise.resolve();
       pushLines(proc.stdout, [
         JSON.stringify({ type: "thread.started", thread_id: "thread-xyz-789" }),
       ]);

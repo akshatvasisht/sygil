@@ -6,6 +6,7 @@ import {
   installTemplate,
   listUserTemplates,
   USER_TEMPLATES_DIR,
+  validateTemplateUrl,
   type RegistryEntry,
 } from "../utils/registry.js";
 
@@ -90,6 +91,11 @@ const installSubCommand = new Command("install")
         console.log(chalk.dim("Run 'sygil registry list' to see available templates."));
         process.exit(1);
       }
+
+      // Enforce the URL-scheme allowlist BEFORE the prefetch — a compromised
+      // registry could point `entry.url` at file:// / data: etc. (installTemplate
+      // validates too, but the prefetch fetch happens first).
+      validateTemplateUrl(entry.url);
 
       // Download and validate JSON structure. 10s timeout mirrors the
       // `installTemplate` helper below — without this, a hung CDN connection

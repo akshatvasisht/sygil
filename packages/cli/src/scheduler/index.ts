@@ -356,6 +356,29 @@ export class WorkflowScheduler extends EventEmitter {
           `Resume with the matching workflow or start fresh.`,
       );
     }
+    // Also compare the edge-id set. `retryCounters` and `gateFailureReasons`
+    // are keyed by edge id (retryCounters is additionally keyed by node id for
+    // node-level retry tracking), so any key that resolves to neither a known
+    // edge id nor a known node id means the topology diverged. A full topology
+    // hash would catch reordered/re-pointed edges too, but that needs a
+    // checkpoint-format change — out of scope for this minimal guard.
+    const knownEdgeIds = new Set(this.workflow.edges.map((e) => e.id));
+    const knownNodeIds = new Set(Object.keys(this.workflow.nodes));
+    const checkpointedEdgeKeys = new Set([
+      ...Object.keys(savedState.retryCounters ?? {}),
+      ...Object.keys(savedState.gateFailureReasons ?? {}),
+    ]);
+    const unknownEdges = [...checkpointedEdgeKeys].filter(
+      (id) => !knownEdgeIds.has(id) && !knownNodeIds.has(id),
+    );
+    if (unknownEdges.length > 0) {
+      throw this.makeCodedError(
+        SygilErrorCode.WORKFLOW_RESUME_FAILED,
+        `Workflow topology mismatch: checkpoint references edge(s) [${unknownEdges.join(", ")}] ` +
+          `not present in the current workflow "${this.workflow.name}". ` +
+          `Resume with the matching workflow or start fresh.`,
+      );
+    }
 
     // Backfill sharedContext for pre-sharedContext-feature checkpoints
     // (pre-existing on-disk state has no `sharedContext` field).
@@ -670,6 +693,10 @@ export class WorkflowScheduler extends EventEmitter {
             this.completionMutex = this.completionMutex.then(() => {
               running.delete(nodeId);
               failed.add(nodeId);
+              // Persist the structured code on the failed node's stored result so
+              // downstream consumers (resume, audits) see why it failed.
+              result.errorCode = SygilErrorCode.NODE_CONTRACT_FAILED;
+              runState.nodeResults[nodeId] = result;
               this.emitError(
                 workflowId,
                 nodeId,
@@ -1658,11 +1685,16 @@ export class WorkflowScheduler extends EventEmitter {
   }
 
   private emitError(workflowId: string, nodeId: string, err: Error): void {
+    // Preserve a structured SygilErrorCode if the Error carries one (via
+    // makeCodedError) so monitor clients / replay see the machine-readable code
+    // and not just the human message.
+    const code = (err as Partial<SygilError>).code;
     this.monitor.emit({
       type: "workflow_error",
       workflowId,
       nodeId,
       message: err.message,
+      ...(code !== undefined ? { errorCode: code } : {}),
     });
   }
 

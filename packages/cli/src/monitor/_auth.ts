@@ -15,7 +15,14 @@ import { constantTimeEquals } from "../utils/ct-equals.js";
  * Token comparison is constant-time to avoid leaking the token via timing.
  */
 export function checkHttpAuth(req: IncomingMessage, token: string): boolean {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  // Parse against a FIXED origin — never the attacker-controlled Host header —
+  // and treat any parse failure as unauthorized.
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    return false;
+  }
   const queryToken = url.searchParams.get("token");
   if (queryToken !== null && constantTimeEquals(queryToken, token)) return true;
 

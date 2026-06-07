@@ -29,6 +29,12 @@ interface WorkflowState {
   gatePassed: number;
   gateFailed: number;
   inFlight: Set<string>;
+  /**
+   * Set once a `workflow_end` / `workflow_error` arrives. The entry survives
+   * one more tick (so the final tick reflects terminal counts) and is then
+   * evicted, bounding `byWorkflow` growth on a long-running monitor.
+   */
+  terminal: boolean;
 }
 
 export interface MetricsAggregatorConfig {
@@ -72,6 +78,7 @@ export class MetricsAggregator {
         gatePassed: 0,
         gateFailed: 0,
         inFlight: new Set(),
+        terminal: false,
       });
       return;
     }
@@ -110,9 +117,11 @@ export class MetricsAggregator {
         return;
       case "workflow_end":
       case "workflow_error":
-        // Keep the workflow's aggregates around so a final tick after
-        // completion reflects terminal counts. Per-workflow maps are bounded,
-        // so there's no unbounded-growth concern for a single run.
+        // Keep the workflow's aggregates around for one more tick so a final
+        // tick after completion reflects terminal counts, then evict it on the
+        // next tick. Without eviction, `byWorkflow` grows unboundedly on a
+        // long-running monitor that observes many runs.
+        ws.terminal = true;
         return;
       default:
         return;
@@ -201,10 +210,18 @@ export class MetricsAggregator {
   /** Force a single tick now (useful for tests). */
   tick(): void {
     if (!this.emitFn) return;
-    for (const workflowId of this.byWorkflow.keys()) {
+    const toEvict: string[] = [];
+    for (const [workflowId, ws] of this.byWorkflow) {
       const snap = this.snapshot(workflowId);
-      if (!snap) continue;
-      this.emitFn({ type: "metrics_tick", workflowId, data: snap });
+      if (snap) {
+        this.emitFn({ type: "metrics_tick", workflowId, data: snap });
+      }
+      // Emit one final tick for terminated workflows, then evict so the map
+      // stays bounded across many runs.
+      if (ws.terminal) toEvict.push(workflowId);
+    }
+    for (const workflowId of toEvict) {
+      this.byWorkflow.delete(workflowId);
     }
   }
 }

@@ -11,6 +11,17 @@ import { isContainedIn } from "../gates/index.js";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * True when an error came from an aborted operation — either a child-process
+ * `AbortError` (raised by execFile when its `signal` fires) or the workflow's
+ * signal having flipped to `aborted`. Used to distinguish cancellation (must
+ * propagate) from ordinary git failures (lock contention, real conflicts).
+ */
+function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  return err instanceof Error && err.name === "AbortError";
+}
+
 export interface LazyWorktreeInfo {
   path: string;
   nodeId: string;
@@ -194,8 +205,14 @@ export class LazyWorktreeManager {
     // path, no `.git/index.lock` involved, so these stay outside the mutex.
     // Thread the signal so workflow cancel can interrupt staging/commit too,
     // matching the merge op below.
-    await execFileAsync("git", ["-C", info.path, "add", "-A"], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
-    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sygil: node ${nodeId} output`], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+    await execFileAsync("git", ["-C", info.path, "add", "-A"], { signal }).catch((e: unknown) => {
+      if (isAbortError(e, signal)) throw e;
+      logger.debug(`worktree git op failed: ${e}`);
+    });
+    await execFileAsync("git", ["-C", info.path, "commit", "-m", `sygil: node ${nodeId} output`], { signal }).catch((e: unknown) => {
+      if (isAbortError(e, signal)) throw e;
+      logger.debug(`worktree git op failed: ${e}`);
+    });
 
     // Serialize main-repo merges against concurrent `worktree add` / `worktree
     // remove` and each other. Two fan-in nodes completing at once would
@@ -213,12 +230,18 @@ export class LazyWorktreeManager {
           "-m", `Merge node ${nodeId} output`,
         ], { signal });
         return { conflicts: [] };
-      } catch {
+      } catch (mergeErr) {
+        // A cancelled merge must not be misreported as a (fake) clean
+        // `{conflicts: []}` — propagate the abort instead.
+        if (isAbortError(mergeErr, signal)) throw mergeErr;
         const { stdout } = await execFileAsync("git", [
           "-C", this.repoRoot, "diff", "--name-only", "--diff-filter=U",
         ]).catch(() => ({ stdout: "" }));
         const conflicts = stdout.trim().split("\n").filter(Boolean);
-        await execFileAsync("git", ["-C", this.repoRoot, "merge", "--abort"], { signal }).catch((e: unknown) => logger.debug(`worktree git op failed: ${e}`));
+        await execFileAsync("git", ["-C", this.repoRoot, "merge", "--abort"], { signal }).catch((e: unknown) => {
+          if (isAbortError(e, signal)) throw e;
+          logger.debug(`worktree git op failed: ${e}`);
+        });
         // Tag genuine conflicts with the structured code so callers can branch
         // on it. Lock-contention failures yield no unmerged files (empty
         // `conflicts`) and are deliberately left uncoded — they're retryable

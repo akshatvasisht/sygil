@@ -524,6 +524,15 @@ export class GateEvaluator {
     }
 
     // CLI-only mode: use readline to prompt the user
+    // Short-circuit if already cancelled before we even open the prompt.
+    if (signal?.aborted) {
+      return {
+        passed: false,
+        reason: "Gate evaluation cancelled",
+        errorCode: SygilErrorCode.WORKFLOW_CANCELLED,
+      };
+    }
+
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     const answerPromise = new Promise<string>((resolve) => {
@@ -543,12 +552,33 @@ export class GateEvaluator {
       );
     });
 
+    // Race the abort signal too — on workflow cancel, clear the timer, close
+    // the readline prompt, and reject so the gate resolves as cancelled instead
+    // of hanging on stdin forever.
+    let aborted = false;
+    let onAbort: (() => void) | undefined;
+    const abortPromise = new Promise<string>((_, reject) => {
+      if (!signal) return;
+      onAbort = () => {
+        aborted = true;
+        reject(new Error("Gate evaluation cancelled"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+
     let answer: string;
     try {
-      answer = await Promise.race([answerPromise, timeoutPromise]);
+      answer = await Promise.race([answerPromise, timeoutPromise, abortPromise]);
     } catch {
       // `rl.close()` runs unconditionally in the `finally` below, so it's not
       // repeated here.
+      if (aborted) {
+        return {
+          passed: false,
+          reason: "Gate evaluation cancelled",
+          errorCode: SygilErrorCode.WORKFLOW_CANCELLED,
+        };
+      }
       return {
         passed: false,
         reason: "Human review timed out",
@@ -558,6 +588,7 @@ export class GateEvaluator {
       // Clear the timer so an early CLI answer doesn't keep a 5-minute handle
       // pinned in the event loop.
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
       rl.close();
     }
 

@@ -36,15 +36,28 @@ export function validateTemplateUrl(url: string): void {
 
 export async function fetchRegistryIndex(url = REGISTRY_INDEX_URL): Promise<RegistryIndex> {
   validateTemplateUrl(url);
+
+  // Connectivity errors (DNS/proxy/firewall/timeout) surface as AbortError or
+  // TypeError from fetch — only those get wrapped with the contacted URL, since
+  // the bare error never names the host. HTTP-status and JSON-parse failures are
+  // distinct conditions and must NOT masquerade as a connectivity problem.
+  let res: Response;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error(`Registry fetch failed: ${res.status}`);
-    return await res.json() as RegistryIndex;
+    res = await fetch(url, { signal: AbortSignal.timeout(5000) });
   } catch (err) {
-    // Re-throw with the contacted URL so connectivity failures (firewall,
-    // proxy, DNS) are diagnosable. The bare fetch error never names the host.
     const cause = err instanceof Error ? err.message : String(err);
     throw new Error(`Could not reach template registry at ${url}: ${cause}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Registry fetch failed: ${res.status}`);
+  }
+
+  try {
+    return (await res.json()) as RegistryIndex;
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new Error(`Registry index at ${url} is not valid JSON: ${cause}`);
   }
 }
 
