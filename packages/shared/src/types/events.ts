@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentEvent, NodeResult } from "./adapter.js";
+import type { SygilErrorCode } from "./errors.js";
 import type { NodeConfig, WorkflowGraph } from "./workflow.js";
 
 /** Events emitted by the Sygil server to monitor clients over WebSocket */
@@ -12,7 +13,7 @@ export type WsServerEvent =
   | { type: "loop_back"; workflowId: string; timestamp?: string; edgeId: string; attempt: number; maxRetries: number }
   | { type: "rate_limit"; workflowId: string; timestamp?: string; nodeId: string; retryAfterMs: number }
   | { type: "workflow_end"; workflowId: string; timestamp?: string; success: boolean; durationMs: number; totalCostUsd?: number }
-  | { type: "workflow_error"; workflowId: string; timestamp?: string; nodeId?: string; message: string }
+  | { type: "workflow_error"; workflowId: string; timestamp?: string; nodeId?: string; message: string; errorCode?: SygilErrorCode }
   | {
       /**
        * Emitted by the scheduler when execution pauses between nodes (via the

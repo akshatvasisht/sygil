@@ -10,6 +10,14 @@ vi.mock("../utils/registry.js", () => ({
   installTemplate: vi.fn(),
   listUserTemplates: vi.fn(),
   USER_TEMPLATES_DIR: vi.fn().mockReturnValue("/home/test/.sygil/templates"),
+  // Real allowlist semantics: accept http(s), reject everything else. The
+  // install command calls this before its prefetch fetch.
+  validateTemplateUrl: vi.fn((url: string) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("Template URL must use http or https protocol");
+    }
+  }),
 }));
 
 import {

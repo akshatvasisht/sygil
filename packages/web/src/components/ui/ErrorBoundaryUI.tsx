@@ -44,9 +44,15 @@ export function ErrorBoundaryUI({
     ]
       .filter(Boolean)
       .join("\n");
-    await navigator.clipboard.writeText(payload);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(payload);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      // Clipboard access can be denied (permissions, insecure context, no API).
+      // Surface it instead of leaving an unhandled rejection.
+      console.error("Failed to copy error details to clipboard:", err);
+    }
   };
 
   return (

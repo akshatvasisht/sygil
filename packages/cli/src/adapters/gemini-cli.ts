@@ -10,6 +10,7 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
+import { STALL_EXIT_CODE } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
@@ -192,6 +193,9 @@ export class GeminiCLIAdapter implements AgentAdapter {
         internal.stallTimer = setTimeout(() => {
           internal.stallTimer = null;
           if (!internal.done) {
+            // Classify as NODE_STALLED (not NODE_CRASHED) by giving getResult the
+            // stall sentinel exit code before finishing the stream.
+            internal.exitCode = STALL_EXIT_CODE;
             pushEvent(internal, { type: "stall", reason: "process_stdout_closed_without_exit" });
             finish();
           }
