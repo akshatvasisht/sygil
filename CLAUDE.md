@@ -9,7 +9,6 @@ This file captures **load-bearing invariants and gotchas** — the non-obvious c
 - CLI flags and `workflow.json` schema → `docs/API.md`
 - Style conventions → `docs/STYLE.md`
 - Testing strategy → `docs/TESTING.md`
-- Rationale and rejected alternatives → `agentcontext/decisions.md`
 
 ## Repository layout
 
@@ -159,38 +158,9 @@ All path-based gate conditions (`file_exists`, `regex`, `script`, `spec_complian
 - **Touch targets** — interactive elements use `min-h-[44px]`.
 - After any `@sygil/shared` type change or package rename: `rm -rf packages/web/.next`.
 
-## Bundle format (sygil export --bundle)
-
-`sygil export <template> <output> --bundle` emits a directory containing:
-
-```
-output/
-  sygil-manifest.json   – SygilManifest (sygilVersion, workflow, adapters, assets, createdAt)
-  workflow.json         – the workflow graph
-  gates/<script>.sh     – referenced script-gate files (if any)
-  specs/<file>.md       – referenced spec-compliance files (if any)
-```
-
-With `--format=tarball` the directory is packed into `<output>.tar.gz` (requires `tar@^7.5.13`, already in dependencies).
-
-`sygil import-template <path-or-url>` auto-detects the format:
-- `.tar.gz` → extracts to a temp dir first, then validates manifest
-- directory with `sygil-manifest.json` → treated as a bundle dir
-- `.json` file or URL → legacy single-file import
-
-After import, files land at `~/.sygil/templates/<name>/`. Manifest validation uses `SygilManifestSchema.safeParse`; malformed manifests are rejected. Missing adapters produce a warning (not a hard error).
-
 ## Environment snapshot in WorkflowRunState
 
-`WorkflowRunState.environment` (optional, backward-compat) captures:
-- `sygilVersion` — Sygil CLI version (from `packages/cli/package.json`)
-- `adapterVersions` — version strings keyed by adapter type (only adapters used by the workflow; populated by the optional `AgentAdapter.getVersion()` method)
-- `envVarHashes` — `sha256(name + ":" + first10chars(value))` truncated to 16 hex chars for `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `CURSOR_API_KEY`, `SYGIL_LOCAL_OAI_URL`, `SYGIL_LOCAL_OAI_KEY`
-- `nodeVersion`, `platform`
-
-On `sygil resume` and `sygil fork`, the stored snapshot is compared to a fresh one via `diffEnvironment` **only when the operator passes `--check-drift`**. Without the flag, both commands proceed silently regardless of drift. The opt-in shape is intentional — most resumes are routine ("agent crashed, run again"); blocking on every version bump was too noisy in practice. Pass `--check-drift` for compliance / repro / regulated workflows where the safety net matters.
-
-Old checkpoints without the `environment` field still parse and resume/fork without drift warnings.
+`WorkflowRunState.environment` (optional, back-compat) is diffed against a fresh snapshot on `sygil resume` / `sygil fork` **only when `--check-drift` is passed** — the default proceeds silently (blocking on every version bump was too noisy). Old checkpoints without the field still parse/resume/fork.
 
 ## Experimental features
 
