@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { X, Cpu, Trash2, AlertTriangle, ChevronDown, Copy, Clipboard } from "lucide-react";
-import type { NodeConfig, AdapterType, SandboxMode, ProviderConfig, RetryPolicy, RetryableErrorClass } from "@sygil/shared";
+import type { NodeConfig, AdapterType, SandboxMode, ProviderConfig, RetryPolicy } from "@sygil/shared";
 import { isFieldSupported, RetryableErrorClassSchema } from "@sygil/shared";
 import type { NodeCardData } from "./NodeCard";
 // ── Constants ────────────────────────────────────────────────────────────────

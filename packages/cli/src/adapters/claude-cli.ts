@@ -7,7 +7,7 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, wireSpawnError, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { finishStream, drainEventQueue, wireStdoutBackpressure, wireSpawnError, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { buildSpawnEnv, warnOutputSchemaPartial, getCliVersion, KILL_GRACE_PERIOD_MS, GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS, GETRESULT_TIMEOUT_MS, exitCodeToSygilError } from "./constants.js";
 import { makeAgentSession } from "./session.js";

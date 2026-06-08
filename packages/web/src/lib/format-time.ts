@@ -25,7 +25,8 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s - m * 60);
+  const total = Math.round(s);
+  const m = Math.floor(total / 60);
+  const rem = total % 60;
   return `${m}m${rem.toString().padStart(2, "0")}s`;
 }

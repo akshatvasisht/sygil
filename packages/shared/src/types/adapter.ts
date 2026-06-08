@@ -25,7 +25,14 @@ export interface SpawnContext {
 
 export interface AgentAdapter {
   readonly name: string;
-  isAvailable(): Promise<boolean>;
+  /**
+   * Probe whether the adapter's backend is reachable/usable. Accepts an
+   * optional representative `NodeConfig` so config-scoped endpoints (e.g.
+   * `local-oai`'s `adapterOptions.localOai.baseUrl`) are probed at the same
+   * endpoint `spawn()` will use, not just the env/default one. Adapters that
+   * ignore per-node config keep their existing no-arg implementations.
+   */
+  isAvailable(config?: NodeConfig): Promise<boolean>;
   spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession>;
   /**
    * Resume a previous session with additional feedback context.
@@ -41,8 +48,10 @@ export interface AgentAdapter {
    * Used by the environment snapshot to capture adapter versions at run start.
    * Returns null when the version cannot be determined (missing binary, network
    * error, etc.). Optional so existing adapters need not implement it.
+   * Accepts an optional representative `NodeConfig` for the same
+   * config-scoped-endpoint reason as `isAvailable`.
    */
-  getVersion?(): Promise<string | null>;
+  getVersion?(config?: NodeConfig): Promise<string | null>;
 }
 
 export interface AgentSession {

@@ -354,17 +354,26 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
   const isControllable = isRunning || isPaused;
   const hasAuth = authToken !== null && authToken !== "";
 
-  // Collect pending human review requests (not yet responded to)
+  // Collect pending human review requests (not yet responded to).
+  // Sequence-aware: walk events in order so a later request for an edge that was
+  // already responded to (retry / loop-back re-prompt) becomes pending again.
   const pendingReviewRequests = useMemo(() => {
-    const respondedEdges = new Set(
-      events
-        .filter((e) => e.type === "human_review_response")
-        .map((e) => (e as Extract<typeof e, { type: "human_review_response" }>).edgeId)
+    type ReviewRequest = Extract<(typeof events)[number], { type: "human_review_request" }>;
+    const pendingByEdge = new Map<string, ReviewRequest | null>();
+    for (const ev of events) {
+      if (ev.type === "human_review_request") {
+        pendingByEdge.set(ev.edgeId, ev);
+      } else if (ev.type === "human_review_response") {
+        pendingByEdge.set(ev.edgeId, null);
+      }
+    }
+    const stillPending = new Set<ReviewRequest>();
+    for (const req of pendingByEdge.values()) {
+      if (req !== null) stillPending.add(req);
+    }
+    return events.filter((ev): ev is ReviewRequest =>
+      ev.type === "human_review_request" && stillPending.has(ev)
     );
-    return events.filter((ev): ev is Extract<typeof ev, { type: "human_review_request" }> => {
-      if (ev.type !== "human_review_request") return false;
-      return !respondedEdges.has(ev.edgeId);
-    });
   }, [events]);
 
   const activeReview = pendingReviewRequests[0] ?? null;
