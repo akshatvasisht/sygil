@@ -9,8 +9,6 @@
  * awareness to find the matching `}`. The earlier all-adapters implementation
  * used a single greedy regex `/\{[\s\S]*\}/g` which collapsed multi-JSON
  * outputs into one unparseable span — losing the structured output silently.
- * See agentcontext/build-log.md cycle 20 for the trigger that motivated
- * the rewrite.
  *
  * Worst case: O(n²) on pathological input, but adapter outputs are bounded
  * by the configured `maxBudgetUsd` / `maxTurns` so this is not a hot path.

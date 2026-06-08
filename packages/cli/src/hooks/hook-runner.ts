@@ -6,14 +6,11 @@ import type { AgentEvent } from "@sygil/shared";
 import type { HooksConfig } from "../utils/config.js";
 import { isContainedIn } from "../gates/index.js";
 import { buildSafeEnv } from "../utils/safe-env.js";
+import { SCRIPT_TIMEOUT_MS } from "../adapters/constants.js";
 
 const execFileAsync = promisify(execFile);
 
-/**
- * Hook script timeout. Mirrors the gate-script timeout (30s) since hooks
- * are the same kind of out-of-band shell invocation.
- */
-export const HOOK_SCRIPT_TIMEOUT_MS = 30_000;
+export const HOOK_SCRIPT_TIMEOUT_MS = SCRIPT_TIMEOUT_MS;
 
 export type HookType = "preNode" | "postNode" | "preGate" | "postGate";
 

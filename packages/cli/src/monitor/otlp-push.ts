@@ -71,9 +71,7 @@ export class OtlpPusher {
     }, this.exportIntervalMs);
     // Prevent the timer from keeping the process alive after the workflow
     // finishes — the workflow lifecycle decides when to stop the pusher.
-    if (this.timer !== null && typeof (this.timer as { unref?: () => void }).unref === "function") {
-      (this.timer as { unref: () => void }).unref();
-    }
+    this.timer.unref?.();
   }
 
   async stop(): Promise<void> {

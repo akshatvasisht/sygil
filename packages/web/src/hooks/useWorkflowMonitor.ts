@@ -23,6 +23,7 @@ export interface MonitorState {
   events: WsServerEvent[];
   /** Count of events dropped off the oldest end because the cap was exceeded. */
   truncatedCount: number;
+  // TODO: data source for the deferred circuit-breaker badge in ExecutionMonitor (UI deferred per ux-audit).
   /** Per-adapter-type circuit breaker transition state. Empty before the first transition. */
   circuitBreakers: Record<string, CircuitBreakerState>;
   error: string | null;
@@ -32,16 +33,14 @@ export interface MonitorState {
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 3000;
 
-/**
- * Hard cap on the monitor's in-memory event buffer. Long runs that emit
- * `text_delta` / `metrics_tick` at a steady cadence accumulate tens of thousands
- * of entries; each append used to trigger a full re-render over an ever-growing
- * array. We keep the most recent MAX_MONITOR_EVENTS entries and surface the
- * drop count via `truncatedCount` so the UI can render a "N events truncated"
- * banner. The authoritative buffer lives in the CLI's fanout ring (see CLAUDE.md
- * — WebSocket ring buffer 1024 events/client); this cap exists purely to bound
- * client memory and render cost.
- */
+// Hard cap on the monitor's in-memory event buffer. Long runs that emit
+// `text_delta` / `metrics_tick` at a steady cadence accumulate tens of thousands
+// of entries; each append used to trigger a full re-render over an ever-growing
+// array. We keep the most recent MAX_MONITOR_EVENTS entries and surface the
+// drop count via `truncatedCount` so the UI can render a "N events truncated"
+// banner. The authoritative buffer lives in the CLI's fanout ring (see CLAUDE.md
+// — WebSocket ring buffer 1024 events/client); this cap exists purely to bound
+// client memory and render cost.
 const MAX_MONITOR_EVENTS = 2000;
 
 export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | null) {
@@ -133,6 +132,7 @@ export function useWorkflowMonitor(wsUrl: string | null, workflowId: string | nu
         const workflowState = applyEvent(prev.workflowState, event);
         // Track circuit breaker transitions in a separate slice so the UI can
         // render a badge without scanning the events array.
+        // TODO: data source for the deferred circuit-breaker badge in ExecutionMonitor (UI deferred per ux-audit).
         let circuitBreakers = prev.circuitBreakers;
         if (event.type === "circuit_breaker") {
           circuitBreakers = {

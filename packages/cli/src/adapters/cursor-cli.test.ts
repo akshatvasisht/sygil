@@ -17,7 +17,7 @@ import { logger } from "../utils/logger.js";
 function makeSession(_adapter: CursorCLIAdapter, proc: ReturnType<typeof makeFakeProc>): AgentSession {
   return makeSessionEnvelope("cursor-cli", {
     proc,
-    stdout: [],
+    outputLines: [],
     exitCode: null,
     done: false,
     eventQueue: [],
@@ -554,7 +554,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(Date.now() - 1000),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],
@@ -581,7 +581,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(Date.now() - 500),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 1,
           done: true,
           eventQueue: [],
@@ -607,7 +607,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],
@@ -632,7 +632,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],
@@ -657,7 +657,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],
@@ -835,7 +835,7 @@ describe("CursorCLIAdapter", () => {
         startedAt: new Date(),
         _internal: {
           proc: makeFakeProc(),
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],

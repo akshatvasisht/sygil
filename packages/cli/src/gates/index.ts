@@ -4,11 +4,12 @@ import { join, isAbsolute, resolve as pathResolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
 import type { GateConfig, GateCondition, NodeResult, WsClientEvent } from "@sygil/shared";
 import { SygilErrorCode } from "@sygil/shared";
 import type { WsMonitorServer } from "../monitor/websocket.js";
 import { buildSafeEnv } from "../utils/safe-env.js";
+import { SCRIPT_TIMEOUT_MS } from "../adapters/constants.js";
+import { getTemplatesDir } from "../utils/templates.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,7 +25,7 @@ export interface GateResult {
 }
 
 /** Timeout for gate scripts to prevent runaway processes. */
-const GATE_SCRIPT_TIMEOUT_MS = 30_000;
+export const GATE_SCRIPT_TIMEOUT_MS = SCRIPT_TIMEOUT_MS;
 
 /** Default timeout for human review gates (5 minutes). */
 const HUMAN_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
@@ -47,9 +48,7 @@ export function isContainedIn(child: string, parent: string): boolean {
   return realChild.startsWith(realParent);
 }
 
-const BUNDLED_TEMPLATES_DIR = pathResolve(
-  fileURLToPath(new URL("../../templates", import.meta.url))
-);
+const BUNDLED_TEMPLATES_DIR = pathResolve(getTemplatesDir());
 
 /**
  * Resolve a caller-supplied path against a working directory and check that

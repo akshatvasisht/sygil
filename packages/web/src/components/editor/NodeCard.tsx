@@ -7,7 +7,6 @@ import type { AdapterType, NodeExecutionStatus } from "@sygil/shared";
 
 export type NodeStatus = "idle" | "running" | "completed" | "failed" | "gate";
 
-export type { NodeExecutionStatus };
 
 export interface NodeCardData {
   nodeId: string;

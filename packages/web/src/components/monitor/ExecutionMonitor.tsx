@@ -6,7 +6,7 @@ import { NodeTimeline, type NodeTimelineEntry, type HumanReviewTimelineEntry } f
 import { EventStream } from "./EventStream";
 import { MetricsStrip } from "./MetricsStrip";
 import { WorkflowEditor } from "@/components/editor/WorkflowEditor";
-import { useWorkflowMonitor } from "@/hooks/useWorkflowMonitor";
+import { useWorkflowMonitor, type CircuitBreakerState } from "@/hooks/useWorkflowMonitor";
 import type { WsServerEvent, WorkflowRunState, WorkflowGraph, NodeExecutionStatus, MetricsSnapshot } from "@sygil/shared";
 import { exportAsJson, exportAsMarkdown, triggerDownload } from "@/utils/exportLog";
 
@@ -64,10 +64,10 @@ export function buildTimelineEntries(
   const entries = new Map<string, NodeTimelineEntry | HumanReviewTimelineEntry>();
 
   // Track edgeId -> target nodeId from workflow_start graph
-  const edgeTargetMap = new Map<string, string>(); // edgeId -> nodeId (to)
+  const edgeTargetMap = new Map<string, string>();
 
   // Track current attempt per nodeId so we can build the right key
-  const currentAttemptKey = new Map<string, string>(); // nodeId -> current entry key
+  const currentAttemptKey = new Map<string, string>();
 
   for (const ev of events) {
     if (ev.type === "workflow_start") {
@@ -302,7 +302,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
   const approveRef = useRef<HTMLButtonElement>(null);
   const rejectRef = useRef<HTMLButtonElement>(null);
 
-  const { status, workflowState, events, truncatedCount, reconnectAttempt, sendControl, reconnect } =
+  const { status, workflowState, events, truncatedCount, reconnectAttempt, circuitBreakers, sendControl, reconnect } =
     useWorkflowMonitor(wsUrl, workflowId);
 
   useEffect(() => {
@@ -355,14 +355,17 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
   const hasAuth = authToken !== null && authToken !== "";
 
   // Collect pending human review requests (not yet responded to)
-  const pendingReviewRequests = events.filter((ev): ev is Extract<typeof ev, { type: "human_review_request" }> => {
-    if (ev.type !== "human_review_request") return false;
-    // Check if a response was already sent
-    const responded = events.some(
-      (e) => e.type === "human_review_response" && e.edgeId === ev.edgeId
+  const pendingReviewRequests = useMemo(() => {
+    const respondedEdges = new Set(
+      events
+        .filter((e) => e.type === "human_review_response")
+        .map((e) => (e as Extract<typeof e, { type: "human_review_response" }>).edgeId)
     );
-    return !responded;
-  });
+    return events.filter((ev): ev is Extract<typeof ev, { type: "human_review_request" }> => {
+      if (ev.type !== "human_review_request") return false;
+      return !respondedEdges.has(ev.edgeId);
+    });
+  }, [events]);
 
   const activeReview = pendingReviewRequests[0] ?? null;
 
@@ -411,7 +414,7 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
     setExportMenuOpen(false);
   }
 
-  const timelineEntries = buildTimelineEntries(workflowState, events);
+  const timelineEntries = useMemo(() => buildTimelineEntries(workflowState, events), [workflowState, events]);
   const displayRunId = workflowState?.id ?? workflowId ?? "—";
   const displayWorkflow = workflowState?.workflowName ?? workflowId ?? "—";
   const completedNodes = workflowState?.completedNodes.length ?? 0;
@@ -623,6 +626,41 @@ export function ExecutionMonitor({ wsUrl = null, workflowId = null, authToken = 
 
       {/* Metrics strip — hidden until first metrics_tick arrives */}
       <MetricsStrip metrics={latestMetrics} />
+
+      {/* Circuit breaker badges — shown only when at least one breaker is non-closed */}
+      {Object.keys(circuitBreakers).some(
+        (k) => (circuitBreakers[k] as CircuitBreakerState).state !== "closed"
+      ) && (
+        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface/50 shrink-0 flex-wrap">
+          {Object.entries(circuitBreakers).map(([adapterType, cb]) => {
+            if (cb.state === "closed") return null;
+            const isOpen = cb.state === "open";
+            return (
+              <span
+                key={adapterType}
+                aria-live={isOpen ? "assertive" : undefined}
+                aria-atomic={isOpen ? "true" : undefined}
+                title={cb.reason ?? undefined}
+                className={`inline-flex items-center gap-1.5 font-mono text-[10px] px-2 py-0.5 rounded border ${
+                  isOpen
+                    ? "text-accent-red border-accent-red/30 bg-accent-red/10"
+                    : "text-accent-amber border-accent-amber/30 bg-accent-amber/10"
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    isOpen ? "bg-accent-red" : "bg-accent-amber"
+                  }`}
+                />
+                {adapterType}
+                <span className={isOpen ? "text-accent-red" : "text-accent-amber"}>
+                  {isOpen ? "circuit open" : "half-open"}
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main split pane */}
       <div className="flex flex-1 overflow-hidden">

@@ -14,7 +14,7 @@ function makeSession(proc: ReturnType<typeof makeFakeProc>): AgentSession {
     "gemini-cli",
     {
       proc,
-      stdout: [],
+      outputLines: [],
       exitCode: null,
       done: false,
       eventQueue: [],
@@ -288,7 +288,7 @@ describe("GeminiCLIAdapter", () => {
         startedAt: new Date(Date.now() - 1000),
         _internal: {
           proc,
-          stdout: [],
+          outputLines: [],
           exitCode: 0,
           done: true,
           eventQueue: [],

@@ -11,7 +11,7 @@ import type {
   SpawnContext,
 } from "@sygil/shared";
 import { STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, wireSpawnError, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
@@ -20,13 +20,14 @@ import {
   GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
   GETRESULT_TIMEOUT_MS,
   STALL_GRACE_MS,
+  KILL_GRACE_PERIOD_MS,
   exitCodeToSygilError,
+  buildSpawnEnv,
+  warnOutputSchemaPartial,
+  getCliVersion,
 } from "./constants.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
-
-/** Grace period before SIGKILL after SIGTERM during kill(). */
-const KILL_GRACE_PERIOD_MS = 2_000;
 
 /** Credential file paths checked to verify Cursor authentication. */
 const CURSOR_CREDENTIAL_PATHS = [
@@ -36,7 +37,7 @@ const CURSOR_CREDENTIAL_PATHS = [
 
 interface CursorInternal {
   proc: ReturnType<typeof spawn>;
-  stdout: string[];
+  outputLines: string[];
   exitCode: number | null;
   done: boolean;
   eventQueue: AgentEvent[];
@@ -93,20 +94,10 @@ export class CursorCLIAdapter implements AgentAdapter {
   }
 
   async getVersion(): Promise<string | null> {
-    try {
-      const out = execSync("agent --version", {
-        encoding: "utf8",
-        timeout: 1_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const firstLine = out.split("\n")[0]?.trim();
-      return firstLine ?? null;
-    } catch {
-      return null;
-    }
+    return getCliVersion("agent");
   }
 
-  private _buildArgs(prompt: string, config: NodeConfig, resumeSessionId?: string): string[] {
+  private buildArgs(prompt: string, config: NodeConfig, resumeSessionId?: string): string[] {
     const args: string[] = [];
 
     if (resumeSessionId) {
@@ -125,19 +116,20 @@ export class CursorCLIAdapter implements AgentAdapter {
     return args;
   }
 
-  private _spawnWithArgs(config: NodeConfig, prompt: string, resumeSessionId?: string, ctx?: SpawnContext): AgentSession {
-    const args = this._buildArgs(prompt, config, resumeSessionId);
+  private spawnWithArgs(config: NodeConfig, prompt: string, resumeSessionId?: string, ctx?: SpawnContext): AgentSession {
+    const args = this.buildArgs(prompt, config, resumeSessionId);
     const cwd = config.outputDir ?? process.cwd();
 
     const proc = spawn("agent", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: CursorInternal = {
       proc,
-      stdout: [],
+      outputLines: [],
       exitCode: null,
       done: false,
       eventQueue: [],
@@ -148,6 +140,10 @@ export class CursorCLIAdapter implements AgentAdapter {
       stallTimer: null,
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
+
+    // Wire up process error handler immediately after spawn.
+    // Without this, ENOENT / EACCES errors surface as an unhandled 'error' event.
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal);
   }
@@ -160,11 +156,7 @@ export class CursorCLIAdapter implements AgentAdapter {
       );
     }
 
-    if (config.outputSchema) {
-      logger.info(
-        `cursor-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
-      );
-    }
+    warnOutputSchemaPartial(this.name, config);
 
     // The cursor CLI has no documented tool allowlist flag; `NodeConfig.tools`
     // is accepted for cross-adapter shape parity but has no runtime effect
@@ -175,7 +167,7 @@ export class CursorCLIAdapter implements AgentAdapter {
       );
     }
 
-    return this._spawnWithArgs(config, config.prompt, undefined, ctx);
+    return this.spawnWithArgs(config, config.prompt, undefined, ctx);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -199,7 +191,7 @@ export class CursorCLIAdapter implements AgentAdapter {
             const event = this.parseLine(line, internal);
             return event ? [event] : [];
           },
-          (line) => internal.stdout.push(line),
+          (line) => internal.outputLines.push(line),
         )
       : null;
 
@@ -303,7 +295,7 @@ export class CursorCLIAdapter implements AgentAdapter {
           }
           resolve();
         }, KILL_GRACE_PERIOD_MS);
-        internal.proc.on("exit", () => {
+        internal.proc.once("exit", () => {
           clearTimeout(killTimeout);
           resolve();
         });
@@ -329,14 +321,16 @@ export class CursorCLIAdapter implements AgentAdapter {
 
     if (sessionId) {
       // Resume the previous conversation using --resume <session_id>
-      return this._spawnWithArgs(config, feedbackMessage, sessionId, ctx);
+      return this.spawnWithArgs(config, feedbackMessage, sessionId, ctx);
     } else {
-      // No session_id available — fall back to cold start with feedback context
+      // No session_id available — fall back to cold start with feedback context.
+      // Call spawnWithArgs directly to skip the redundant isAvailable() check
+      // already performed above; observable behavior is unchanged.
       const newConfig: NodeConfig = {
         ...config,
         prompt: `${config.prompt}\n\nFeedback from previous attempt: ${feedbackMessage}`,
       };
-      return this.spawn(newConfig, ctx);
+      return this.spawnWithArgs(newConfig, newConfig.prompt, undefined, ctx);
     }
   }
 }
@@ -401,5 +395,3 @@ const CURSOR_EVENT_MAPPING: EventMapping<Record<string, unknown>, CursorInternal
     return null;
   },
 };
-
-// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

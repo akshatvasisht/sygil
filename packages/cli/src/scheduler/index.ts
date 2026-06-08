@@ -1,4 +1,6 @@
 import { join, dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,6 +15,7 @@ import type {
   AdapterType,
   AgentEvent,
   AgentSession,
+  SpawnContext,
 } from "@sygil/shared";
 import { validateStructuredOutput, resolveInputMapping, STALL_EXIT_CODE, SygilErrorCode } from "@sygil/shared";
 import type { SygilError } from "@sygil/shared";
@@ -83,7 +86,10 @@ export interface RunOptions {
    * and `sygil_checkpoint_write_total` stay populated. Other metrics flow via
    * `WsMonitorServer.setPrometheusMetrics` from the command layer.
    */
-  metricsObserver?: MetricsObserver;
+  metricsObserver?: {
+    recordAcquireWait(adapterType: string, waitMs: number): void;
+    recordCheckpointWrite(): void;
+  };
   /**
    * Opt-in: construct the content-addressable NodeCache on `run()`.
    * Default false. Wire from `.sygil/config.json > performance.nodeCache`.
@@ -93,33 +99,7 @@ export interface RunOptions {
   nodeCacheEnabled?: boolean;
 }
 
-/** Minimal interface so the scheduler doesn't depend on the full PrometheusMetrics class. */
-export interface MetricsObserver {
-  recordAcquireWait(adapterType: string, waitMs: number): void;
-  recordCheckpointWrite(): void;
-}
-
 type SchedulerState = "idle" | "running" | "paused" | "cancelled";
-
-// ---------------------------------------------------------------------------
-// Graph topology helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Build a map: nodeId -> list of edge IDs whose `to` is that node (forward edges only).
- * Uses GraphIndex for O(1) edge lookups.
- */
-function buildIncomingForwardEdgeIds(graphIndex: GraphIndex): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const nodeId of graphIndex.nodeIds) {
-    const incoming = graphIndex.edgesByTo.get(nodeId) ?? [];
-    const forwardEdgeIds = incoming
-      .filter((e) => !e.isLoopBack)
-      .map((e) => e.id);
-    map.set(nodeId, forwardEdgeIds);
-  }
-  return map;
-}
 
 /**
  * WorkflowScheduler — executes a WorkflowGraph using a topological ready-queue.
@@ -143,6 +123,12 @@ export class WorkflowScheduler extends EventEmitter {
   private eventRecorder: EventRecorder | null = null;
   private gateFailureReasons = new Map<string, string>();
   private graphIndex: GraphIndex;
+  /**
+   * nodeId -> list of edge IDs whose `to` is that node (forward edges only).
+   * Pure projection of `graphIndex.edgesByTo`; the graph is immutable
+   * post-construction so this is computed once alongside the index.
+   */
+  private readonly forwardEdgeIdsByTo: Map<string, string[]>;
   private actualOutputDirs: Map<string, string> = new Map();
   private nodeCache: NodeCache | null = null;
   private contentHashes = new Map<string, string>();
@@ -163,6 +149,14 @@ export class WorkflowScheduler extends EventEmitter {
   ) {
     super();
     this.graphIndex = new GraphIndex(workflow);
+    this.forwardEdgeIdsByTo = new Map<string, string[]>();
+    for (const nodeId of this.graphIndex.nodeIds) {
+      const incoming = this.graphIndex.edgesByTo.get(nodeId) ?? [];
+      this.forwardEdgeIdsByTo.set(
+        nodeId,
+        incoming.filter((e) => !e.isLoopBack).map((e) => e.id),
+      );
+    }
   }
 
   /**
@@ -322,7 +316,14 @@ export class WorkflowScheduler extends EventEmitter {
    */
   async resume(
     savedState: WorkflowRunState,
-    options: { hooks?: HooksConfig; metricsObserver?: MetricsObserver; runReason?: RunReason } = {},
+    options: {
+      hooks?: HooksConfig;
+      metricsObserver?: {
+        recordAcquireWait(adapterType: string, waitMs: number): void;
+        recordCheckpointWrite(): void;
+      };
+      runReason?: RunReason;
+    } = {},
   ): Promise<RunResult> {
     // Use workflowName (not the run UUID) as workflowId so monitor fanout
     // filtering matches the URL slug the web UI subscribes to.
@@ -460,6 +461,7 @@ export class WorkflowScheduler extends EventEmitter {
         workflowId,
         success: false,
         durationMs,
+        totalCostUsd: savedState.totalCostUsd,
       });
 
       return {
@@ -526,8 +528,6 @@ export class WorkflowScheduler extends EventEmitter {
     isResume = false,
     worktreeManager?: LazyWorktreeManager
   ): Promise<void> {
-    const incomingForwardEdges = buildIncomingForwardEdgeIds(this.graphIndex);
-
     const completed = new Set<string>(isResume ? runState.completedNodes : []);
     const failed = new Set<string>();
     const running = new Set<string>();
@@ -574,7 +574,7 @@ export class WorkflowScheduler extends EventEmitter {
       }
 
       // Find nodes that are ready: all forward-edge predecessors completed, not running/done/failed
-      const ready = this.findReadyNodes(completed, running, failed, incomingForwardEdges);
+      const ready = this.findReadyNodes(completed, running, failed);
 
       if (ready.length === 0) {
         if (running.size === 0) {
@@ -609,7 +609,6 @@ export class WorkflowScheduler extends EventEmitter {
         runState.currentNodeId = nodeId;
         void this.executeNodeAndHandleResult(
           workflowId, nodeId, runState, parameters,
-          incomingForwardEdges,
           completed, failed, running, worktreeManager, abortTree
         ).finally(wake);
       }
@@ -637,7 +636,6 @@ export class WorkflowScheduler extends EventEmitter {
     nodeId: string,
     runState: WorkflowRunState,
     parameters: Record<string, string>,
-    incomingForwardEdges: Map<string, string[]>,
     completed: Set<string>,
     failed: Set<string>,
     running: Set<string>,
@@ -648,7 +646,7 @@ export class WorkflowScheduler extends EventEmitter {
     const nodeSignal = abortTree?.createChild(nodeId);
 
     try {
-      const result = await this.executeNode(workflowId, nodeId, runState, parameters, incomingForwardEdges, worktreeManager, nodeSignal);
+      const result = await this.executeNode(workflowId, nodeId, runState, parameters, worktreeManager, nodeSignal);
 
       // --- Async work outside the mutex ---
       // All async operations (gate eval, contract validation, I/O checks) run here
@@ -671,9 +669,7 @@ export class WorkflowScheduler extends EventEmitter {
       // Validate expected outputs exist (I/O, outside mutex)
       const expectedOutputs = nodeConfig?.expectedOutputs;
       if (expectedOutputs && expectedOutputs.length > 0) {
-        const { existsSync } = await import("node:fs");
-        const { join: joinPath } = await import("node:path");
-        const missing = expectedOutputs.filter(f => !existsSync(joinPath(actualOutputDir, f)));
+        const missing = expectedOutputs.filter(f => !existsSync(join(actualOutputDir, f)));
         if (missing.length > 0) {
           const msg = `Node "${nodeId}" failed to produce expected outputs: ${missing.join(", ")}`;
           this.monitor.emit({ type: "workflow_error", workflowId, nodeId, message: msg });
@@ -872,6 +868,10 @@ export class WorkflowScheduler extends EventEmitter {
           runState.totalCostUsd += result.costUsd;
         }
         this.actualOutputDirs.set(nodeId, actualOutputDir);
+        // Persist this node's result incrementally (per-node file) so a crash
+        // before the next debounced full-state checkpoint still recovers it;
+        // loadRunState merges these on resume/fork. Cheap and additive.
+        this.checkpointManager?.markNodeResult(runState.id, nodeId, result);
 
         // Apply forward gate failures
         for (const { edgeId, targetNodeId, reason } of forwardGateFailures) {
@@ -906,7 +906,6 @@ export class WorkflowScheduler extends EventEmitter {
     nodeId: string,
     runState: WorkflowRunState,
     parameters: Record<string, string>,
-    incomingForwardEdges: Map<string, string[]>,
     worktreeManager?: LazyWorktreeManager,
     signal?: AbortSignal
   ): Promise<NodeResult> {
@@ -931,9 +930,12 @@ export class WorkflowScheduler extends EventEmitter {
     // clients can deep-link to external tracing backends.
     const traceCtx = deriveTraceContext(runState.id, nodeId);
     const { traceId, spanId } = traceCtx;
+    // Thread the node's abort signal into adapter startup (spawn/SDK-create/HTTP)
+    // so a workflow cancel interrupts a long launch, not just the streaming loop.
+    const spawnCtx: SpawnContext = { ...traceCtx, ...(signal !== undefined ? { signal } : {}) };
 
     // Input mapping (Contract): resolve {{var}} substitutions from predecessor outputs
-    const built = await this.buildNodeInput(nodeId, incomingForwardEdges, nodeConfig, runState, parameters);
+    const built = await this.buildNodeInput(nodeId, nodeConfig, runState, parameters);
     nodeConfig = built.nodeConfig;
     // Resolved file-based input content — folded into the cache key below so two
     // runs differing only in input-file content don't collide on the same hash.
@@ -950,6 +952,8 @@ export class WorkflowScheduler extends EventEmitter {
       { workflowId, nodeId, outputDir: preNodeOutputDir },
       signal,
       /* abortOnFailure */ true,
+      traceId,
+      spanId,
     );
 
     // Check node cache — skip execution if we have a cached result with deterministic gates.
@@ -970,7 +974,7 @@ export class WorkflowScheduler extends EventEmitter {
       const outgoingEdges = this.graphIndex.edgesByFrom.get(nodeId) ?? [];
       if (areGatesDeterministic(outgoingEdges)) {
         const upstreamHashes: Record<string, string> = {};
-        for (const edgeId of (incomingForwardEdges.get(nodeId) ?? [])) {
+        for (const edgeId of (this.forwardEdgeIdsByTo.get(nodeId) ?? [])) {
           const edge = this.graphIndex.edgeById.get(edgeId);
           if (edge) {
             const h = this.contentHashes.get(edge.from);
@@ -1009,6 +1013,8 @@ export class WorkflowScheduler extends EventEmitter {
             },
             signal,
             false,
+            traceId,
+            spanId,
           );
           this.emit("node_end", nodeId, cached.exitCode === 0);
           // Flag the result so the monitor can render a `cached` status
@@ -1030,7 +1036,7 @@ export class WorkflowScheduler extends EventEmitter {
       // (source format: "path/to/file.json#field", relative to the
       // predecessor's declared outputDir).
       const inputSourceDirs: string[] = [];
-      for (const edgeId of incomingForwardEdges.get(nodeId) ?? []) {
+      for (const edgeId of this.forwardEdgeIdsByTo.get(nodeId) ?? []) {
         const edge = this.graphIndex.edgeById.get(edgeId);
         const mapping = edge?.contract?.inputMapping;
         if (!mapping) continue;
@@ -1047,7 +1053,6 @@ export class WorkflowScheduler extends EventEmitter {
 
     // Ensure outputDir exists before spawning the adapter (it's used as cwd)
     if (nodeConfig.outputDir) {
-      const { mkdir } = await import("node:fs/promises");
       await mkdir(nodeConfig.outputDir, { recursive: true });
     }
 
@@ -1147,7 +1152,7 @@ export class WorkflowScheduler extends EventEmitter {
 
             session = this.sessionStore.get(nodeId);
             if (!session) {
-              session = await adapter.spawn(effectiveConfig, traceCtx);
+              session = await adapter.spawn(effectiveConfig, spawnCtx);
             }
             this.sessionStore.set(nodeId, session);
 
@@ -1190,6 +1195,10 @@ export class WorkflowScheduler extends EventEmitter {
                   const seconds = Math.ceil(retryAfterMs / 1000);
                   logger.info(`Rate limit hit — waiting ${seconds}s before resuming...`);
                   this.monitor.emit({ type: "rate_limit", workflowId, nodeId, retryAfterMs });
+                  // Also record on the per-node AgentEvent stream so NDJSON replay
+                  // sees the throttle in node-event order (run-level WsServerEvent
+                  // above drives live UI; this one drives replay/audit).
+                  this.eventRecorder?.record(nodeId, { type: "rate_limit", retryAfterMs });
 
                   const prevSession = session;
                   await killAdapter();
@@ -1201,11 +1210,11 @@ export class WorkflowScheduler extends EventEmitter {
                       effectiveConfig,
                       prevSession,
                       "Continuing after rate limit pause. Please continue where you left off.",
-                      traceCtx,
+                      spawnCtx,
                     );
                   } catch {
                     // resume failed (e.g. no session ID) — fall back to cold start
-                    session = await adapter.spawn(effectiveConfig, traceCtx);
+                    session = await adapter.spawn(effectiveConfig, spawnCtx);
                   }
                   this.sessionStore.set(nodeId, session);
                   // Fresh session — allow killAdapter to run again on the
@@ -1283,7 +1292,7 @@ export class WorkflowScheduler extends EventEmitter {
 
             // Worktree fan-in: merge this node's worktree into the main branch at fan-in points
             if (worktreeManager) {
-              const isFanIn = (incomingForwardEdges.get(nodeId)?.length ?? 0) > 1;
+              const isFanIn = (this.forwardEdgeIdsByTo.get(nodeId)?.length ?? 0) > 1;
               if (isFanIn) {
                 const { stdout: branchStdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ({ stdout: "main" }));
                 const currentBranch = branchStdout.trim();
@@ -1313,6 +1322,8 @@ export class WorkflowScheduler extends EventEmitter {
               },
               signal,
               false,
+              traceId,
+              spanId,
             );
 
             this.emit("node_end", nodeId, success);
@@ -1462,9 +1473,9 @@ export class WorkflowScheduler extends EventEmitter {
       throw finalErr;
     } finally {
       // Release the workflow-scoped sync slot if one was acquired.
-      if (syncRelease && syncKey !== undefined && syncLimit !== undefined) {
+      if (syncRelease) {
         syncRelease.release();
-        const syncReleaseEvent: AgentEvent = { type: "sync_release", key: syncKey, limit: syncLimit };
+        const syncReleaseEvent: AgentEvent = { type: "sync_release", key: syncKey!, limit: syncLimit! };
         this.emit("node_event", nodeId, syncReleaseEvent);
         this.monitor.emit({ type: "node_event", workflowId, nodeId, event: syncReleaseEvent, traceId, spanId });
         this.eventRecorder?.record(nodeId, syncReleaseEvent);
@@ -1489,12 +1500,11 @@ export class WorkflowScheduler extends EventEmitter {
   private findReadyNodes(
     completed: Set<string>,
     running: Set<string>,
-    failed: Set<string>,
-    incomingForwardEdges: Map<string, string[]>
+    failed: Set<string>
   ): string[] {
     return this.graphIndex.nodeIds.filter((nodeId) => {
       if (completed.has(nodeId) || running.has(nodeId) || failed.has(nodeId)) return false;
-      const incomingEdgeIds = incomingForwardEdges.get(nodeId) ?? [];
+      const incomingEdgeIds = this.forwardEdgeIdsByTo.get(nodeId) ?? [];
       return incomingEdgeIds.every((edgeId) => {
         const edge = this.graphIndex.edgeById.get(edgeId);
         return edge ? completed.has(edge.from) : true;
@@ -1514,7 +1524,6 @@ export class WorkflowScheduler extends EventEmitter {
    */
   private async buildNodeInput(
     nodeId: string,
-    incomingForwardEdges: Map<string, string[]>,
     nodeConfig: NodeConfig,
     runState: WorkflowRunState,
     parameters: Record<string, string> = {}
@@ -1560,7 +1569,7 @@ export class WorkflowScheduler extends EventEmitter {
     }
 
     // Pass 2: resolve file-based inputMapping from edge contracts
-    const incomingEdgeIds = incomingForwardEdges.get(nodeId) ?? [];
+    const incomingEdgeIds = this.forwardEdgeIdsByTo.get(nodeId) ?? [];
     for (const edgeId of incomingEdgeIds) {
       const edge = this.graphIndex.edgeById.get(edgeId);
       if (edge?.contract?.inputMapping) {
@@ -1706,8 +1715,7 @@ export class WorkflowScheduler extends EventEmitter {
    * that NDJSON replay observes the same sequence as the live run.
    *
    * When `abortOnFailure` is true (only used for preNode) a non-zero exit
-   * throws an Error — mirroring "same semantics as a failed gate" from the
-   * proposed shape.
+   * throws an Error — keeping lifecycle-hook failures consistent with gate failures.
    */
   private async runHook(
     type: HookType,
@@ -1716,6 +1724,8 @@ export class WorkflowScheduler extends EventEmitter {
     context: HookContext,
     signal: AbortSignal | undefined,
     abortOnFailure: boolean,
+    traceId?: string,
+    spanId?: string,
   ): Promise<void> {
     if (!this.hookRunner || !this.hookRunner.has(type)) return;
 
@@ -1724,7 +1734,14 @@ export class WorkflowScheduler extends EventEmitter {
 
     const event = hookResultToEvent(type, result, this.hookRunner.getRunReason());
     this.emit("node_event", nodeId, event);
-    this.monitor.emit({ type: "node_event", workflowId, nodeId, event });
+    this.monitor.emit({
+      type: "node_event",
+      workflowId,
+      nodeId,
+      event,
+      ...(traceId !== undefined ? { traceId } : {}),
+      ...(spanId !== undefined ? { spanId } : {}),
+    });
     this.eventRecorder?.record(nodeId, event);
 
     if (result.exitCode !== 0 && abortOnFailure) {

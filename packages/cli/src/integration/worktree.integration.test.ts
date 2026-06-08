@@ -1,8 +1,8 @@
 /**
- * Integration tests for WorktreeManager — real git operations in temp repos.
+ * Integration tests for LazyWorktreeManager — real git operations in temp repos.
  *
  * No mocks. Each test spins up a fresh git repository in a OS temp directory,
- * exercises WorktreeManager against it, and tears the directory down afterwards.
+ * exercises LazyWorktreeManager against it, and tears the directory down afterwards.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -12,9 +12,22 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { WorktreeManager } from "../worktree/index.js";
+import type { NodeConfig } from "@sygil/shared";
+import { LazyWorktreeManager } from "../worktree/lazy-worktree-manager.js";
 
 const execFileAsync = promisify(execFile);
+
+// ---------------------------------------------------------------------------
+// Minimal NodeConfig for getOrCreate() — no outputDir so sparse checkout
+// defaults to "." (the repo root).
+// ---------------------------------------------------------------------------
+
+const MINIMAL_NODE_CONFIG: NodeConfig = {
+  adapter: "claude-cli",
+  model: "claude-3-5-haiku-20241022",
+  role: "agent",
+  prompt: "test",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,12 +80,12 @@ afterEach(async () => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("WorktreeManager integration", () => {
+describe("LazyWorktreeManager integration", () => {
   it("creates a worktree directory at the expected path", async () => {
     const runId = randomUUID();
-    const manager = new WorktreeManager(runId, repoDir);
+    const manager = new LazyWorktreeManager(runId, repoDir);
 
-    const worktreePath = await manager.create("nodeA");
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     // Returned path must equal the canonical location
     const expectedPath = join(repoDir, ".sygil", "worktrees", runId, "nodeA");
@@ -90,8 +103,8 @@ describe("WorktreeManager integration", () => {
   });
 
   it("worktree branch is based on current HEAD", async () => {
-    const manager = new WorktreeManager(randomUUID(), repoDir);
-    const worktreePath = await manager.create("nodeA");
+    const manager = new LazyWorktreeManager(randomUUID(), repoDir);
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     // The worktree should share the initial commit from main
     const { stdout } = await execFileAsync("git", ["-C", worktreePath, "log", "--oneline"]);
@@ -99,8 +112,8 @@ describe("WorktreeManager integration", () => {
   });
 
   it("worktree allows independent file creation", async () => {
-    const manager = new WorktreeManager(randomUUID(), repoDir);
-    const worktreePath = await manager.create("nodeA");
+    const manager = new LazyWorktreeManager(randomUUID(), repoDir);
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     const worktreeFile = join(worktreePath, "worktree-only.txt");
     await writeFile(worktreeFile, "hello from worktree", "utf8");
@@ -114,8 +127,8 @@ describe("WorktreeManager integration", () => {
   });
 
   it("merge brings worktree changes into main branch", async () => {
-    const manager = new WorktreeManager(randomUUID(), repoDir);
-    const worktreePath = await manager.create("nodeA");
+    const manager = new LazyWorktreeManager(randomUUID(), repoDir);
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     // Write, stage, and commit a new file inside the worktree
     const newFile = join(worktreePath, "output.txt");
@@ -136,8 +149,8 @@ describe("WorktreeManager integration", () => {
   });
 
   it("merge detects conflicts and returns conflict list", async () => {
-    const manager = new WorktreeManager(randomUUID(), repoDir);
-    const worktreePath = await manager.create("nodeA");
+    const manager = new LazyWorktreeManager(randomUUID(), repoDir);
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     // Modify README.md in the MAIN repo and commit it
     await writeFile(join(repoDir, "README.md"), "# main branch edit\n", "utf8");
@@ -163,8 +176,8 @@ describe("WorktreeManager integration", () => {
 
   it("remove cleans up worktree directory and branch", async () => {
     const runId = randomUUID();
-    const manager = new WorktreeManager(runId, repoDir);
-    const worktreePath = await manager.create("nodeA");
+    const manager = new LazyWorktreeManager(runId, repoDir);
+    const worktreePath = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
 
     // Capture the branch name before removal
     const { stdout: branchOut } = await execFileAsync("git", [
@@ -192,10 +205,10 @@ describe("WorktreeManager integration", () => {
 
   it("cleanup removes all worktrees and the run base directory", async () => {
     const runId = randomUUID();
-    const manager = new WorktreeManager(runId, repoDir);
+    const manager = new LazyWorktreeManager(runId, repoDir);
 
-    const pathA = await manager.create("nodeA");
-    const pathB = await manager.create("nodeB");
+    const pathA = await manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG);
+    const pathB = await manager.getOrCreate("nodeB", MINIMAL_NODE_CONFIG);
 
     await manager.cleanup();
 
@@ -208,13 +221,13 @@ describe("WorktreeManager integration", () => {
     expect(await exists(baseDir)).toBe(false);
   });
 
-  it("create respects AbortSignal", async () => {
-    const manager = new WorktreeManager(randomUUID(), repoDir);
+  it("getOrCreate respects AbortSignal", async () => {
+    const manager = new LazyWorktreeManager(randomUUID(), repoDir);
 
     const controller = new AbortController();
     // Abort before any async work begins
     controller.abort();
 
-    await expect(manager.create("nodeA", controller.signal)).rejects.toThrow();
+    await expect(manager.getOrCreate("nodeA", MINIMAL_NODE_CONFIG, controller.signal)).rejects.toThrow();
   });
 });

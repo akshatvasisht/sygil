@@ -12,3 +12,20 @@ export function formatHHMMSS(iso: string): string {
     second: "2-digit",
   });
 }
+
+/**
+ * Format a duration in milliseconds as a human-readable string.
+ * <1 s  → "Xms"  (rounded to nearest ms)
+ * <1 m  → "X.Xs" (one decimal)
+ * ≥1 m  → "Xm00s" (zero-padded seconds)
+ * Mirrors the formatMs helper in MetricsStrip.tsx so duration rendering
+ * stays consistent across the monitor and any other consumer.
+ */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s - m * 60);
+  return `${m}m${rem.toString().padStart(2, "0")}s`;
+}

@@ -1,7 +1,7 @@
 import type { AdapterType, NodeConfig } from "../types/workflow.js";
 
 /**
- * Catalog of tools each adapter is known to advertise as of this writing.
+ * Catalog of tools each adapter is known to advertise.
  * This is intentionally a best-effort reference list — it will drift behind
  * upstream CLIs and must NEVER block a run. The validator only emits warnings.
  *
@@ -10,42 +10,28 @@ import type { AdapterType, NodeConfig } from "../types/workflow.js";
  * arbitrary; echo ignores tools entirely). MCP prefixes (`mcp__<server>__*`)
  * are always allowed on any adapter.
  */
+// Claude Code built-in tool names (subset that reaches adapter configs).
+const CLAUDE_CODE_TOOLS: ReadonlySet<string> = new Set([
+  "Read",
+  "Write",
+  "Edit",
+  "Glob",
+  "Grep",
+  "Bash",
+  "BashOutput",
+  "KillBash",
+  "WebFetch",
+  "WebSearch",
+  "NotebookEdit",
+  "Task",
+  "TodoWrite",
+  "SlashCommand",
+  "ExitPlanMode",
+]);
+
 export const ADAPTER_TOOL_CATALOG: Record<AdapterType, ReadonlySet<string> | null> = {
-  // Claude Code built-in tool names (subset that reaches adapter configs).
-  "claude-sdk": new Set<string>([
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "Bash",
-    "BashOutput",
-    "KillBash",
-    "WebFetch",
-    "WebSearch",
-    "NotebookEdit",
-    "Task",
-    "TodoWrite",
-    "SlashCommand",
-    "ExitPlanMode",
-  ]),
-  "claude-cli": new Set<string>([
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "Bash",
-    "BashOutput",
-    "KillBash",
-    "WebFetch",
-    "WebSearch",
-    "NotebookEdit",
-    "Task",
-    "TodoWrite",
-    "SlashCommand",
-    "ExitPlanMode",
-  ]),
+  "claude-sdk": CLAUDE_CODE_TOOLS,
+  "claude-cli": CLAUDE_CODE_TOOLS,
   // Cursor headless mode ignores the tools allowlist but these are the names users expect.
   cursor: new Set<string>(["Read", "Write", "Edit", "Bash", "Grep", "Glob"]),
   // Codex CLI's documented built-ins.

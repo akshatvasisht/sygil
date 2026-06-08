@@ -126,6 +126,13 @@ export function eventRenderData(event: AgentEvent): EventRenderData {
         iconKey: "failover",
         severity: "warn",
       };
+    case "rate_limit":
+      return {
+        title: "rate_limit",
+        subtitle: event.retryAfterMs > 0 ? `retry after ${event.retryAfterMs}ms` : "no retry-after",
+        iconKey: "retry",
+        severity: "warn",
+      };
     case "context_set":
       return {
         title: event.key,

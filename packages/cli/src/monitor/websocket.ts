@@ -15,7 +15,6 @@ import { EventFanOut } from "./event-fanout.js";
 import { MetricsAggregator } from "./metrics-aggregator.js";
 import type { PrometheusMetrics } from "./prometheus-metrics.js";
 import type { AdapterPool } from "../adapters/adapter-pool.js";
-import { constantTimeEquals } from "../utils/ct-equals.js";
 import { checkHttpAuth } from "./_auth.js";
 
 interface SubscriberInfo {
@@ -130,9 +129,7 @@ export class WsMonitorServer {
         const clientId = `ws-${++this.clientIdCounter}`;
 
         // Check auth token from query string: ws://host:port/?token=<uuid>
-        const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-        const token = url.searchParams.get("token");
-        const authenticated = token !== null && constantTimeEquals(token, this.authToken);
+        const authenticated = checkHttpAuth(req, this.authToken);
 
         const info: SubscriberInfo = { ws, workflowIds: new Set(), authenticated, isAlive: true };
         this.subscribers.set(ws, info);
@@ -187,15 +184,12 @@ export class WsMonitorServer {
           }
         });
 
-        ws.on("close", () => {
+        const cleanup = (): void => {
           this.subscribers.delete(ws);
           this.fanOut.removeClient(clientId);
-        });
-
-        ws.on("error", () => {
-          this.subscribers.delete(ws);
-          this.fanOut.removeClient(clientId);
-        });
+        };
+        ws.on("close", cleanup);
+        ws.on("error", cleanup);
       });
 
       httpServer.listen(0, "127.0.0.1", () => {
@@ -219,22 +213,18 @@ export class WsMonitorServer {
     });
   }
 
-  // ── POST /run helpers ──────────────────────────────────────────────────────
+  // ----- POST /run helpers ---------------------------------------------------
 
-  /**
-   * Check if an incoming HTTP request carries a valid auth token.
-   * Accepts either:
-   *   - `Authorization: Bearer <token>` header
-   *   - `?token=<token>` query parameter
-   */
-  private isHttpAuthorized(req: IncomingMessage): boolean {
+  // Check if an incoming HTTP request carries a valid auth token.
+  // Accepts either:
+  //   - `Authorization: Bearer <token>` header
+  //   - `?token=<token>` query parameter
+  private isAuthorized(req: IncomingMessage): boolean {
     return checkHttpAuth(req, this.authToken);
   }
 
-  /**
-   * Read the full JSON body from an incoming HTTP request.
-   * Rejects with an error if the body exceeds 4 MB.
-   */
+  // Read the full JSON body from an incoming HTTP request.
+  // Rejects with an error if the body exceeds 4 MB.
   private async readJsonBody(req: IncomingMessage): Promise<unknown> {
     const MAX_BODY_BYTES = 4 * 1024 * 1024;
     return new Promise<unknown>((resolve, reject) => {
@@ -260,29 +250,27 @@ export class WsMonitorServer {
     });
   }
 
-  /**
-   * Handle POST /run — spawn a new sygil run and return the runId.
-   *
-   * Auth: bearer token OR ?token= matching this server's authToken.
-   * Body: RunRequestSchema (workflow + optional parameters + flags).
-   * Working dir: per-run tmpdir so each run is isolated by default.
-   *
-   * The handler spawns `sygil run -` with the workflow JSON piped to stdin
-   * and extracts the runId from stdout ("Run ID: <id>" line). It returns the
-   * runId and this server's auth token so the caller can open the monitor URL.
-   *
-   * Child process stdio is not awaited — the run executes independently and
-   * streams events back to this server via the existing WebSocket channel.
-   */
+  // Handle POST /run — spawn a new sygil run and return the runId.
+  //
+  // Auth: bearer token OR ?token= matching this server's authToken.
+  // Body: RunRequestSchema (workflow + optional parameters + flags).
+  // Working dir: per-run tmpdir so each run is isolated by default.
+  //
+  // The handler spawns `sygil run -` with the workflow JSON piped to stdin
+  // and extracts the runId from stdout ("Run ID: <id>" line). It returns the
+  // runId and this server's auth token so the caller can open the monitor URL.
+  //
+  // Child process stdio is not awaited — the run executes independently and
+  // streams events back to this server via the existing WebSocket channel.
   private async handlePostRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // 1. Auth
-    if (!this.isHttpAuthorized(req)) {
+    // Auth
+    if (!this.isAuthorized(req)) {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Unauthorized — provide a valid ?token= or Authorization: Bearer header" }));
       return;
     }
 
-    // 2. Parse + validate body
+    // Parse + validate body
     let body: unknown;
     try {
       body = await this.readJsonBody(req);
@@ -301,10 +289,10 @@ export class WsMonitorServer {
 
     const { workflow, parameters, isolate } = parsed.data;
 
-    // 3. Create a per-run working directory (matches --isolate default)
+    // Create a per-run working directory (matches --isolate default)
     const workDir = await mkdtemp(path.join(tmpdir(), "sygil-run-"));
 
-    // 4. Spawn `sygil run -` with workflow JSON piped to stdin
+    // Spawn `sygil run -` with workflow JSON piped to stdin
     //    Build extra flags from the request body
     const args: string[] = ["run", "-", "--no-monitor"];
     if (isolate) args.push("--isolate");
@@ -331,15 +319,15 @@ export class WsMonitorServer {
       logger.warn(`[monitor] POST /run — stdin write failed: ${err}`);
     }
 
-    // 5. Extract runId from child stdout ("Run ID: <id>" line)
+    // Extract runId from child stdout ("Run ID: <id>" line)
     const RUN_ID_TIMEOUT_MS = 5_000;
     const runIdPromise = new Promise<string | null>((resolve) => {
       const timeout = setTimeout(() => resolve(null), RUN_ID_TIMEOUT_MS);
-      const RUN_ID_RE = /Run ID:\s+([^\s]+)/;
+      const RUN_ID_OUTPUT_RE = /Run ID:\s+([^\s]+)/;
       let buffer = "";
       child.stdout?.on("data", (chunk: Buffer | string) => {
         buffer += chunk.toString();
-        const match = RUN_ID_RE.exec(buffer);
+        const match = RUN_ID_OUTPUT_RE.exec(buffer);
         if (match) {
           clearTimeout(timeout);
           resolve(match[1] ?? null);
@@ -360,7 +348,7 @@ export class WsMonitorServer {
       return;
     }
 
-    // 6. Return runId + monitorUrl + authToken
+    // Return runId + monitorUrl + authToken
     const port = this.port ?? 0;
     const monitorUrl = `http://localhost:${port}`;
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -436,12 +424,10 @@ export class WsMonitorServer {
     await this.stop();
   }
 
-  /**
-   * Ping every connected client on a 30s cadence and terminate any that
-   * didn't pong between ticks. Without this, a suspended laptop or
-   * silently-dropped connection keeps its per-client ring buffer allocated
-   * in `EventFanOut` indefinitely.
-   */
+  // Ping every connected client on a 30s cadence and terminate any that
+  // didn't pong between ticks. Without this, a suspended laptop or
+  // silently-dropped connection keeps its per-client ring buffer allocated
+  // in `EventFanOut` indefinitely.
   private startHeartbeat(): void {
     if (this.heartbeatTimer !== null) return;
     const tick = (): void => {

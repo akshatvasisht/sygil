@@ -50,6 +50,7 @@ vi.mock("../utils/tier-resolver.js", () => ({
 
 vi.mock("../utils/config.js", () => ({
   readConfigSafe: vi.fn().mockResolvedValue({ tiers: {}, hooks: {} }),
+  hooksOpt: (cfg: { hooks?: unknown } | null) => (cfg?.hooks ? { hooks: cfg.hooks } : {}),
 }));
 
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";

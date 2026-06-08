@@ -101,21 +101,11 @@ export interface PoolMetrics {
   maxConcurrency: number;
 }
 
-/** Events sent by monitor clients to the Sygil server */
-export type WsClientEvent =
-  | { type: "subscribe"; workflowId: string }
-  | { type: "unsubscribe"; workflowId: string }
-  | { type: "pause"; workflowId: string }
-  | { type: "resume_workflow"; workflowId: string }
-  | { type: "cancel"; workflowId: string }
-  | { type: "human_review_approve"; workflowId: string; edgeId: string }
-  | { type: "human_review_reject"; workflowId: string; edgeId: string };
-
 /**
  * Zod schema for validating inbound client messages — protects the monitor
  * from malformed / hostile payloads before dispatch.
  */
-export const WsClientEventSchema: z.ZodType<WsClientEvent> = z.discriminatedUnion("type", [
+export const WsClientEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("subscribe"), workflowId: z.string() }),
   z.object({ type: z.literal("unsubscribe"), workflowId: z.string() }),
   z.object({ type: z.literal("pause"), workflowId: z.string() }),
@@ -132,6 +122,9 @@ export const WsClientEventSchema: z.ZodType<WsClientEvent> = z.discriminatedUnio
     edgeId: z.string(),
   }),
 ]);
+
+/** Events sent by monitor clients to the Sygil server */
+export type WsClientEvent = z.infer<typeof WsClientEventSchema>;
 
 /** A single recorded agent event with timing and node context — used for replay/debugging. */
 export interface RecordedEvent {
@@ -259,7 +252,7 @@ export const WorkflowRunStateSchema = z.object({
       checkpointIndex: z.number().int().nonnegative(),
     })
     .optional(),
-  // environment is absent on checkpoints written before B.2 was introduced.
+  // environment is absent on checkpoints written before this field existed — backfilled by the scheduler on resume().
   environment: z
     .object({
       sygilVersion: z.string(),

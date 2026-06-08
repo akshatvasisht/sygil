@@ -5,7 +5,6 @@
  * optionally. If the SDK is not installed, spawn() throws a clear error.
  */
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type {
   AgentAdapter,
   AgentSession,
@@ -15,6 +14,7 @@ import type {
   SpawnContext,
 } from "@sygil/shared";
 import { exitCodeToSygilError } from "./constants.js";
+import { makeAgentSession } from "./session.js";
 
 // ---------------------------------------------------------------------------
 // Security helper — path-traversal-safe tool permission check
@@ -64,7 +64,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
 
   async isAvailable(): Promise<boolean> {
     try {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- optional peer dep import
       // @ts-ignore -- optional peer dep, may not be installed
       await import("@anthropic-ai/claude-agent-sdk");
       return Boolean(process.env["ANTHROPIC_API_KEY"]);
@@ -75,7 +75,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
 
   async getVersion(): Promise<string | null> {
     try {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- optional peer dep import
       // @ts-ignore -- optional peer dep, may not be installed
       const pkg = await import("@anthropic-ai/claude-agent-sdk/package.json").catch(() => null) as { version?: string } | null;
       return pkg?.version ?? null;
@@ -85,7 +85,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
   }
 
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- optional peer dep import
     // @ts-ignore -- optional peer dep, may not be installed
     const sdk = await import("@anthropic-ai/claude-agent-sdk").catch(() => null) as ClaudeSDKModule | null;
     if (!sdk) {
@@ -114,17 +114,21 @@ export class ClaudeSDKAdapter implements AgentAdapter {
       // inherit the per-node span. SDK versions without header support silently
       // ignore the field.
       ...(ctx?.traceparent ? { defaultHeaders: { traceparent: ctx.traceparent } } : {}),
+      // Pass the node abort signal into session startup; SDK versions without
+      // signal support silently ignore it (the listener below is the reliable path).
+      ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
+
+    // Abort the SDK session when the node's signal fires, so a workflow cancel
+    // interrupts a long generation rather than only the streaming loop.
+    if (ctx?.signal) {
+      if (ctx.signal.aborted) await session.abort?.().catch(() => undefined);
+      else ctx.signal.addEventListener("abort", () => { void session.abort?.().catch(() => undefined); }, { once: true });
+    }
 
     await session.send(config.prompt);
 
-    return {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: session,
-    };
+    return makeAgentSession(this.name, config.role, session);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -187,7 +191,7 @@ export class ClaudeSDKAdapter implements AgentAdapter {
   }
 
   async resume(config: NodeConfig, previousSession: AgentSession, feedbackMessage: string, _ctx?: SpawnContext): Promise<AgentSession> {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- optional peer dep import
     // @ts-ignore -- optional peer dep, may not be installed
     const sdk = await import("@anthropic-ai/claude-agent-sdk").catch(() => null);
     if (!sdk) throw new Error("Claude SDK not installed");

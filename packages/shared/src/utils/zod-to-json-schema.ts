@@ -36,12 +36,10 @@ export function zodToJsonSchema(
   };
 }
 
-/**
- * Walk the emitted JSON Schema and rename `category` to `x-category` at every
- * level. Zod v4 copies `.meta()` keys verbatim into the output, so a top-level
- * `category: "core"` emerges as a plain field; the `x-` prefix follows the
- * JSON Schema extension convention and avoids collisions with future spec keys.
- */
+// Walk the emitted JSON Schema and rename `category` to `x-category` at every
+// level. Zod v4 copies `.meta()` keys verbatim into the output, so a top-level
+// `category: "core"` emerges as a plain field; the `x-` prefix follows the
+// JSON Schema extension convention and avoids collisions with future spec keys.
 function renameCategoryKey(node: unknown): void {
   if (node === null || typeof node !== "object") return;
   if (Array.isArray(node)) {

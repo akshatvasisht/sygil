@@ -123,7 +123,7 @@ async function defaultLoadSigstore(): Promise<SigstoreModule | null> {
  * @experimental Template signature verification is opt-in via
  * `SYGIL_VERIFY_TEMPLATES=1` and protects a registry that barely exists yet.
  * The expected-identity regex, error surface, and outcome shape may change
- * without a deprecation window in v0.x. See `agentcontext/positioning.md`.
+ * without a deprecation window in v0.x.
  */
 export async function verifyTemplateSignature(
   templatePath: string,

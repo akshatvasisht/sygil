@@ -1,13 +1,5 @@
 "use client";
 
-/**
- * @experimental Visual workflow editor. The supported authoring surface is
- * direct edits to `workflow.json`; this component is a demo-grade visualizer
- * with several advanced NodeConfig fields not yet round-trippable. May change
- * shape, move to a side branch, or be removed in v0.x. See
- * `agentcontext/positioning.md`.
- */
-
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   ReactFlow,
@@ -43,13 +35,15 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
-import { NodeCard, type NodeCardData, type NodeExecutionStatus } from "./NodeCard";
+import { NodeCard, type NodeCardData } from "./NodeCard";
+import { type NodeExecutionStatus } from "@sygil/shared";
 import { EdgeGatePanel } from "./EdgeGatePanel";
 import { NodePropertyPanel } from "./NodePropertyPanel";
 import { NodePalette } from "./NodePalette";
 import { RunModal } from "./RunModal";
 import { useWorkflowEditor, type NodeArchetype } from "@/hooks/useWorkflowEditor";
 import { WorkflowGraphSchema, type EdgeConfig, type NodeConfig, type WorkflowGraph } from "@sygil/shared";
+import { triggerDownload } from "@/utils/exportLog";
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
 
@@ -254,13 +248,20 @@ export interface WorkflowEditorProps {
   initialWorkflow?: WorkflowGraph;
 }
 
+/**
+ * @experimental Visual workflow editor. The supported authoring surface is
+ * direct edits to `workflow.json`; this component is a demo-grade visualizer
+ * with several advanced NodeConfig fields not yet round-trippable. May change
+ * shape, move to a side branch, or be removed in v0.x. See
+ * `agentcontext/positioning.md`.
+ */
 export function WorkflowEditor({
   mode = "edit",
   executionState,
   initialWorkflow,
 }: WorkflowEditorProps = {}) {
   const isMonitor = mode === "monitor";
-  const editor = useWorkflowEditor();
+  const editor = useWorkflowEditor({ enabled: !isMonitor });
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("none");
   const [showRunModal, setShowRunModal] = useState(false);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
@@ -466,13 +467,7 @@ export function WorkflowEditor({
       setExportError(issues);
       return;
     }
-    const blob = new Blob([JSON.stringify(validation.data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${editor.workflowName}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerDownload(JSON.stringify(validation.data, null, 2), `${editor.workflowName}.json`, "application/json");
   }
 
   // ── Render ──────────────────────────────────────────────────────────────

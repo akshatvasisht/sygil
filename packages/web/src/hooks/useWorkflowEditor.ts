@@ -30,7 +30,7 @@ import type { NodeCardData } from "@/components/editor/NodeCard";
 
 const DRAFT_STORAGE_KEY = "sygil-editor-draft";
 
-/** Node dimensions used for dagre layout (w-44 = 176px, h = 64px). */
+// Node dimensions for dagre layout (w-44 = 176px, h = 64px).
 const TIDY_NODE_WIDTH = 176;
 const TIDY_NODE_HEIGHT = 64;
 
@@ -168,10 +168,10 @@ function makeNodeCardData(id: string, config: Partial<NodeConfig>): NodeCardData
   };
 }
 
-/** Default stroke color for forward edges — uses the border-bright design token. */
+// Forward edge stroke — border-bright design token.
 const EDGE_COLOR_FORWARD = "var(--border-bright)";
 
-/** Stroke color for loop-back (retry) edges — uses the warning/accent-amber design token. */
+// Loop-back (retry) edge stroke — warning/accent-amber design token.
 const EDGE_COLOR_LOOPBACK = "var(--warning)";
 
 const EDGE_DEFAULTS: Partial<Edge> = {
@@ -294,7 +294,7 @@ function loadDraft(): { nodes: Node[]; edges: Edge[]; workflowName: string } | n
   }
 }
 
-export function useWorkflowEditor(): UseWorkflowEditorReturn {
+export function useWorkflowEditor({ enabled = true }: { enabled?: boolean } = {}): UseWorkflowEditorReturn {
   // Restore from localStorage before any other state initialization
   const draft = useRef(loadDraft());
 
@@ -633,6 +633,7 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
   const [validationResult, setValidationResult] = useState<{ success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } }>({ success: true });
 
   useEffect(() => {
+    if (!enabled) return;
     const timer = setTimeout(() => {
       const workflow = flowToWorkflow(workflowName, nodes, edges);
       const result = WorkflowGraphSchema.safeParse(workflow);
@@ -646,11 +647,12 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [nodes, edges, workflowName]);
+  }, [enabled, nodes, edges, workflowName]);
 
   // ── localStorage auto-save (debounced ~5s) ──────────────────────────────
 
   useEffect(() => {
+    if (!enabled) return;
     if (typeof window === "undefined") return;
     const timer = setTimeout(() => {
       try {
@@ -663,7 +665,7 @@ export function useWorkflowEditor(): UseWorkflowEditorReturn {
       }
     }, 5000);
     return () => clearTimeout(timer);
-  }, [nodes, edges, workflowName]);
+  }, [enabled, nodes, edges, workflowName]);
 
   // ── Tidy layout (dagre LR) ───────────────────────────────────────────────
 

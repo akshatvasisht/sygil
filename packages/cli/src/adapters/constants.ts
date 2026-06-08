@@ -7,7 +7,10 @@
  * this file holds only values that were identically redeclared across files.
  */
 
+import { execSync } from "node:child_process";
+import type { NodeConfig, SpawnContext } from "@sygil/shared";
 import { SygilErrorCode, STALL_EXIT_CODE } from "@sygil/shared";
+import { logger } from "../utils/logger.js";
 
 /**
  * Upper bound on `getResult`'s wait-for-exit poll. Post-stream teardown should
@@ -51,3 +54,50 @@ export const GETRESULT_POLL_INTERVAL_MS = 50;
  * kill, not the getResult force-kill.
  */
 export const GETRESULT_KILL_GRACE_MS = 2_000;
+
+/** Shared timeout for gate and lifecycle-hook scripts. */
+export const SCRIPT_TIMEOUT_MS = 30_000;
+
+/** SIGTERM->SIGKILL grace in adapter kill() (shared by the stream-json CLI adapters). */
+export const KILL_GRACE_PERIOD_MS = 2_000;
+
+/**
+ * Runs `<binary> --version`, returns the first line trimmed, or `null` on any
+ * error (binary not found, timeout, non-zero exit). Used by CLI adapters that
+ * populate `AgentAdapter.getVersion()`.
+ */
+export async function getCliVersion(binary: string): Promise<string | null> {
+  try {
+    const out = execSync(`${binary} --version`, {
+      encoding: "utf8",
+      timeout: 1_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const firstLine = out.split("\n")[0]?.trim();
+    return firstLine ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns a copy of `process.env` with `TRACEPARENT` set to
+ * `ctx.traceparent` when that field is present, otherwise returns
+ * `process.env` unchanged. Shared by all process-spawning adapters.
+ */
+export function buildSpawnEnv(ctx?: SpawnContext): NodeJS.ProcessEnv {
+  return ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env;
+}
+
+/**
+ * Emits the standard info log for adapters that accept `outputSchema` but
+ * have no upstream strict-mode flag, falling back to post-hoc validation.
+ * Guard-checked: no-ops when `config.outputSchema` is absent.
+ */
+export function warnOutputSchemaPartial(adapterName: string, config: NodeConfig): void {
+  if (config.outputSchema) {
+    logger.info(
+      `${adapterName}: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
+    );
+  }
+}

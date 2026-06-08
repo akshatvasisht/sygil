@@ -4,9 +4,7 @@ import { existsSync } from "node:fs";
 import { replayEvents } from "../scheduler/event-replay.js";
 import { isContainedIn } from "../gates/index.js";
 import type { RecordedEvent } from "@sygil/shared";
-
-const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
-const NODE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+import { RUN_ID_RE, NODE_ID_RE } from "../utils/run-id.js";
 
 export async function replayCommand(
   runId: string,

@@ -1,4 +1,5 @@
 import type { WsServerEvent } from "@sygil/shared";
+import { SYGIL_CLI_VERSION } from "../scheduler/environment.js";
 
 /**
  * Hand-rolled Prometheus + OpenTelemetry exporter state.
@@ -294,7 +295,7 @@ export class PrometheusMetrics {
    * spec; all integer counts are stringified to preserve 64-bit precision over
    * JSON.
    */
-  renderOtlp(serviceName = "sygil", serviceVersion = "0.1.0"): OtlpExportRequest {
+  renderOtlp(serviceName = "sygil", serviceVersion = SYGIL_CLI_VERSION): OtlpExportRequest {
     const nowUnixNano = msToUnixNano(Date.now());
     const startUnixNano = msToUnixNano(this.startTimeMs);
 

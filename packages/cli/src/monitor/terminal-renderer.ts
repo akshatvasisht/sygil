@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import type { AgentEvent } from "@sygil/shared";
+import { eventRenderData, type AgentEvent } from "@sygil/shared";
 
 export type NodeStatus = "waiting" | "running" | "completed" | "failed";
 
@@ -116,7 +116,8 @@ function renderTree(state: TerminalMonitorState, spinnerFrame: number): string {
 
     const paddedId = nodeId.padEnd(maxIdLen);
     const icon = statusIcon(node.status, spinnerFrame);
-    const label = statusLabel(node.status).padEnd(STATUS_LABEL_WIDTH + (statusLabel(node.status).length - node.status.length));
+    const rawLabel = statusLabel(node.status);
+    const label = rawLabel.padEnd(STATUS_LABEL_WIDTH + (rawLabel.length - node.status.length));
 
     let timePart = "";
     if (node.status === "running" || node.status === "completed" || node.status === "failed") {
@@ -207,70 +208,10 @@ export function logEvent(nodeId: string, event: { type: string; summary: string 
 }
 
 export function formatEventSummary(event: AgentEvent): { type: string; summary: string } {
-  switch (event.type) {
-    case "tool_call": {
-      const firstArgValue = getFirstArgValue(event.input);
-      const argDisplay = firstArgValue !== null ? `("${truncate(firstArgValue, 40)}")` : "";
-      return { type: "tool_call", summary: `${event.tool}${argDisplay}` };
-    }
-    case "tool_result": {
-      const icon = event.success ? "✓" : "✗";
-      return { type: "tool_result", summary: `${event.tool} → ${icon}` };
-    }
-    case "file_write":
-      return { type: "file_write", summary: `Write("${event.path}")` };
-    case "shell_exec":
-      return { type: "shell_exec", summary: `Bash("${truncate(event.command, 40)}") → exit:${event.exitCode}` };
-    case "text_delta":
-      return { type: "text_delta", summary: truncate(event.text, 50) };
-    case "cost_update":
-      return { type: "cost_update", summary: `$${event.totalCostUsd.toFixed(4)}` };
-    case "stall":
-      return { type: "stall", summary: event.reason };
-    case "error":
-      return { type: "error", summary: event.message };
-    case "adapter_failover":
-      return {
-        type: "adapter_failover",
-        summary: `${event.fromAdapter} → ${event.toAdapter} (${event.reason})`,
-      };
-    case "context_set":
-      return {
-        type: "context_set",
-        summary: `${event.key} = ${truncate(JSON.stringify(event.value) ?? "undefined", 40)}`,
-      };
-    case "hook_result": {
-      const icon = event.exitCode === 0 ? "✓" : "✗";
-      return {
-        type: "hook_result",
-        summary: `${event.hook} ${icon} exit:${event.exitCode} (${event.durationMs}ms)`,
-      };
-    }
-    case "retry_scheduled":
-      return {
-        type: "retry_scheduled",
-        summary: `retry ${event.attempt}→${event.nextAttempt} in ${event.delayMs}ms (${event.reason})`,
-      };
-    case "sync_acquire":
-      return {
-        type: "sync_acquire",
-        summary: `acquiring sync "${event.key}" (limit=${event.limit})`,
-      };
-    case "sync_release":
-      return {
-        type: "sync_release",
-        summary: `released sync "${event.key}"`,
-      };
-  }
-}
-
-/** Extract the first string value from a tool input record for display. */
-function getFirstArgValue(input: Record<string, unknown>): string | null {
-  const keys = Object.keys(input);
-  const firstKey = keys[0];
-  if (firstKey === undefined) return null;
-  const val = input[firstKey];
-  if (typeof val === "string") return val;
-  if (val !== null && val !== undefined) return String(val);
-  return null;
+  // Single source of truth: the shared `eventRenderData` projection. The CLI
+  // flattens its { title, subtitle } into one summary line; the web renders the
+  // same projection with its own icons/layout. New AgentEvent variants are
+  // covered automatically (exhaustiveness enforced in eventRenderData).
+  const d = eventRenderData(event);
+  return { type: event.type, summary: d.subtitle ? `${d.title} ${d.subtitle}` : d.title };
 }

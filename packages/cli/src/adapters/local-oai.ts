@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createParser } from "eventsource-parser";
 import type {
   AgentAdapter,
@@ -10,6 +9,7 @@ import type {
 } from "@sygil/shared";
 import { SygilErrorCode } from "@sygil/shared";
 import { pushEvent, finishStream, drainEventQueue, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { makeAgentSession } from "./session.js";
 
 const DEFAULT_BASE_URL = "http://localhost:11434/v1"; // Ollama default
 const DEFAULT_API_KEY = "ollama"; // sentinel; servers ignore but SDKs require a value
@@ -24,7 +24,6 @@ interface LocalOaiInternal {
   totalCostUsd: number;
   outputText: string;
   tokenUsage?: { input: number; output: number; cacheRead?: number };
-  startedAt: number;
   maxQueueSize: number;
   error?: Error;
 }
@@ -72,22 +71,31 @@ interface OaiChunk {
 export class LocalOaiAdapter implements AgentAdapter {
   readonly name = "local-oai";
 
-  private _resolveEndpoint(config: NodeConfig): { baseUrl: string; apiKey: string } {
+  /** Resolve base URL and API key from environment variables only (no config). */
+  private resolveEnvEndpoint(): { baseUrl: string; apiKey: string } {
+    const baseUrl =
+      (process.env["SYGIL_LOCAL_OAI_URL"] ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+    const apiKey = process.env["SYGIL_LOCAL_OAI_KEY"] ?? DEFAULT_API_KEY;
+    return { baseUrl, apiKey };
+  }
+
+  private resolveEndpoint(config: NodeConfig): { baseUrl: string; apiKey: string } {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- NodeConfig lacks an adapterOptions surface today; read through unknown
     const opts = (config as any).adapterOptions?.localOai as
       | { baseUrl?: string; apiKey?: string }
       | undefined;
-    const baseUrl =
-      opts?.baseUrl ?? process.env["SYGIL_LOCAL_OAI_URL"] ?? DEFAULT_BASE_URL;
-    const apiKey =
-      opts?.apiKey ?? process.env["SYGIL_LOCAL_OAI_KEY"] ?? DEFAULT_API_KEY;
-    return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
+    if (opts?.baseUrl !== undefined || opts?.apiKey !== undefined) {
+      const { baseUrl: envBase, apiKey: envKey } = this.resolveEnvEndpoint();
+      return {
+        baseUrl: (opts.baseUrl ?? envBase).replace(/\/+$/, ""),
+        apiKey: opts.apiKey ?? envKey,
+      };
+    }
+    return this.resolveEnvEndpoint();
   }
 
   async isAvailable(): Promise<boolean> {
-    const baseUrl =
-      process.env["SYGIL_LOCAL_OAI_URL"]?.replace(/\/+$/, "") ?? DEFAULT_BASE_URL;
-    const apiKey = process.env["SYGIL_LOCAL_OAI_KEY"] ?? DEFAULT_API_KEY;
+    const { baseUrl, apiKey } = this.resolveEnvEndpoint();
     try {
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -100,9 +108,7 @@ export class LocalOaiAdapter implements AgentAdapter {
   }
 
   async getVersion(): Promise<string | null> {
-    const baseUrl =
-      process.env["SYGIL_LOCAL_OAI_URL"]?.replace(/\/+$/, "") ?? DEFAULT_BASE_URL;
-    const apiKey = process.env["SYGIL_LOCAL_OAI_KEY"] ?? DEFAULT_API_KEY;
+    const { baseUrl, apiKey } = this.resolveEnvEndpoint();
     try {
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -117,7 +123,7 @@ export class LocalOaiAdapter implements AgentAdapter {
   }
 
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
-    const { baseUrl, apiKey } = this._resolveEndpoint(config);
+    const { baseUrl, apiKey } = this.resolveEndpoint(config);
     const internal: LocalOaiInternal = {
       abortController: new AbortController(),
       exitCode: null,
@@ -126,20 +132,21 @@ export class LocalOaiAdapter implements AgentAdapter {
       resolve: null,
       totalCostUsd: 0,
       outputText: "",
-      startedAt: Date.now(),
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
 
-    const session: AgentSession = {
-      id: randomUUID(),
-      nodeId: config.role,
-      adapter: this.name,
-      startedAt: new Date(),
-      _internal: internal,
-    };
+    // Thread the node's abort signal into the request lifetime so a workflow
+    // cancel interrupts an in-flight startup/stream, not just the internal
+    // timeout path. Composes with the adapter's own AbortController.
+    if (ctx?.signal) {
+      if (ctx.signal.aborted) internal.abortController.abort();
+      else ctx.signal.addEventListener("abort", () => internal.abortController.abort(), { once: true });
+    }
+
+    const session = makeAgentSession(this.name, config.role, internal);
 
     // Fire the request but don't await — stream() drives the SSE reader.
-    this._startRequest(config, internal, baseUrl, apiKey, ctx).catch((err: unknown) => {
+    this.startRequest(config, internal, baseUrl, apiKey, ctx).catch((err: unknown) => {
       // If kill() already finished the stream (e.g. user cancelled), don't
       // overwrite its exitCode (130) with 1 and don't push a spurious error
       // event — the scheduler has already decided this was a kill, not a crash.
@@ -154,7 +161,7 @@ export class LocalOaiAdapter implements AgentAdapter {
     return session;
   }
 
-  private async _startRequest(
+  private async startRequest(
     config: NodeConfig,
     internal: LocalOaiInternal,
     baseUrl: string,
@@ -211,12 +218,12 @@ export class LocalOaiAdapter implements AgentAdapter {
       throw new Error(`OpenAI-compatible endpoint returned HTTP ${res.status}`);
     }
 
-    await this._consumeSse(res.body, internal);
+    await this.consumeSse(res.body, internal);
     internal.exitCode = 0;
     finishStream(internal);
   }
 
-  private async _consumeSse(
+  private async consumeSse(
     body: ReadableStream<Uint8Array>,
     internal: LocalOaiInternal
   ): Promise<void> {
@@ -232,7 +239,7 @@ export class LocalOaiAdapter implements AgentAdapter {
         } catch {
           return;
         }
-        this._handleChunk(chunk, internal, toolCalls);
+        this.handleChunk(chunk, internal, toolCalls);
       },
     });
 
@@ -250,13 +257,13 @@ export class LocalOaiAdapter implements AgentAdapter {
         pushEvent(internal, {
           type: "tool_call",
           tool: tc.name,
-          input: this._parseArgs(tc.arguments),
+          input: this.parseArgs(tc.arguments),
         });
       }
     }
   }
 
-  private _handleChunk(
+  private handleChunk(
     chunk: OaiChunk,
     internal: LocalOaiInternal,
     toolCalls: Map<number, ToolCallAccumulator>
@@ -285,7 +292,7 @@ export class LocalOaiAdapter implements AgentAdapter {
           pushEvent(internal, {
             type: "tool_call",
             tool: tc.name,
-            input: this._parseArgs(tc.arguments),
+            input: this.parseArgs(tc.arguments),
           });
         }
       }
@@ -302,7 +309,7 @@ export class LocalOaiAdapter implements AgentAdapter {
     }
   }
 
-  private _parseArgs(raw: string): Record<string, unknown> {
+  private parseArgs(raw: string): Record<string, unknown> {
     if (!raw) return {};
     try {
       const parsed = JSON.parse(raw) as unknown;
@@ -337,7 +344,7 @@ export class LocalOaiAdapter implements AgentAdapter {
     return {
       output: internal.outputText,
       exitCode,
-      durationMs: Date.now() - internal.startedAt,
+      durationMs: Date.now() - session.startedAt.getTime(),
       costUsd: 0,
       ...(internal.tokenUsage !== undefined ? { tokenUsage: internal.tokenUsage } : {}),
       ...(errorCode !== undefined ? { errorCode } : {}),

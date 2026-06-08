@@ -14,6 +14,13 @@ export interface SpawnContext {
   traceId?: string;
   /** 16-hex span id. */
   spanId?: string;
+  /**
+   * Abort signal for the node. Adapters thread it into the agent's *startup*
+   * (process spawn, SDK session create, HTTP request) so a workflow cancel
+   * interrupts a long binary/SDK launch, not just the streaming loop. Optional
+   * so callers/replay predating this field still work.
+   */
+  signal?: AbortSignal;
 }
 
 export interface AgentAdapter {
@@ -57,6 +64,16 @@ export type AgentEvent =
   | { type: "stall"; reason: string }
   | { type: "error"; message: string }
   | { type: "adapter_failover"; fromAdapter: string; toAdapter: string; reason: string }
+  | {
+      /**
+       * The provider signalled rate-limiting. `retryAfterMs` is the
+       * adapter-supplied backoff (0 when none was given). Emitted on the per-node
+       * event stream in addition to the run-level `rate_limit` WsServerEvent so
+       * NDJSON replay sees the throttle in node-event order.
+       */
+      type: "rate_limit";
+      retryAfterMs: number;
+    }
   | { type: "context_set"; key: string; value: unknown }
   | {
       type: "hook_result";

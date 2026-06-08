@@ -12,6 +12,7 @@ import { importTemplateCommand } from "./commands/import-template.js";
 import { registryCommand } from "./commands/registry.js";
 import { schemaCommand } from "./commands/schema.js";
 import { setVerbose } from "./utils/logger.js";
+import { SYGIL_CLI_VERSION } from "./scheduler/environment.js";
 
 /**
  * Build the Commander program graph. Extracted from the CLI entry point so
@@ -24,7 +25,7 @@ export function buildProgram(): Command {
   program
     .name("sygil")
     .description("Deterministic orchestrator for coding agent sessions")
-    .version("0.1.0");
+    .version(SYGIL_CLI_VERSION);
 
   program.option("--config <path>", "Path to .sygil config directory");
   program.option("-v, --verbose", "Verbose output");
@@ -53,6 +54,7 @@ Examples:
     .option("--no-open", "Do not automatically open the monitor in a browser")
     .option("--no-monitor", "Disable the web monitor (headless mode)")
     .option("--web", "Open the web browser monitor instead of terminal TUI")
+    .option("--stream", "Stream agent output to the terminal in real time (suppresses the spinner/TUI)")
     .option("--metrics-port <port>", "Expose Prometheus metrics on an HTTP port (see CLAUDE.md)")
     .addHelpText("after", `
 Examples:

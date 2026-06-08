@@ -182,7 +182,6 @@ function AddConditionForm({ onAdd }: AddConditionFormProps) {
     }
     if (cond) {
       onAdd(cond);
-      // Reset
       setExitCode("0");
       setFilePath("");
       setRegexFile("");
