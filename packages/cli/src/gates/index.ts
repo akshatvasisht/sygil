@@ -563,6 +563,11 @@ export class GateEvaluator {
         reject(new Error("Gate evaluation cancelled"));
       };
       signal.addEventListener("abort", onAbort, { once: true });
+      // Re-check after addEventListener: if the signal aborted in the window
+      // between the pre-check above and the listener registration, the {once}
+      // handler will never fire for an already-aborted signal, so we call it
+      // manually here to ensure the gate doesn't hang on stdin/timeout.
+      if (signal.aborted) onAbort();
     });
 
     let answer: string;

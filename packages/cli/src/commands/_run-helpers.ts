@@ -21,8 +21,11 @@ export async function checkEnvironmentDrift(
     try {
       const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
       drift = diffEnvironment(storedEnv, currentEnv);
-    } catch {
-      // Drift check failure must not block resume
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(chalk.yellow(`Drift check could not be evaluated: ${msg}`));
+      console.warn(chalk.dim("Drop --check-drift to proceed without the check."));
+      process.exit(1);
     }
     if (drift.length > 0) {
       console.warn(chalk.yellow("Environment drift detected:"));

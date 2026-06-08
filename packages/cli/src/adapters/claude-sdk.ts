@@ -126,7 +126,9 @@ export class ClaudeSDKAdapter implements AgentAdapter {
       else ctx.signal.addEventListener("abort", () => { void session.abort?.().catch(() => undefined); }, { once: true });
     }
 
-    await session.send(config.prompt);
+    if (!ctx?.signal?.aborted) {
+      await session.send(config.prompt);
+    }
 
     return makeAgentSession(this.name, config.role, session);
   }

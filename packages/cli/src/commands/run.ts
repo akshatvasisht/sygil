@@ -166,7 +166,13 @@ export async function runCommand(
   const requiredAdaptersPreflight = [...new Set(Object.values(workflow.nodes).map((n) => n.adapter))];
   for (const adapterType of requiredAdaptersPreflight) {
     const adapter = getAdapter(adapterType);
-    const available = await adapter.isAvailable();
+    // Probe with a representative node so config-scoped endpoints (e.g.
+    // local-oai's adapterOptions.localOai.baseUrl) are checked at the same
+    // endpoint spawn() will use, not just the env/default one. Pass the first
+    // node declaring this adapter; adapters that ignore per-node config keep
+    // their env/default behavior via the optional param.
+    const representativeNode = Object.values(workflow.nodes).find((n) => n.adapter === adapterType);
+    const available = await adapter.isAvailable(representativeNode);
     if (!available) {
       console.error(chalk.red(`✗ Adapter '${adapterType}' is not available.`));
       console.error(chalk.dim(`  Run 'sygil init' to see adapter status and setup instructions.`));

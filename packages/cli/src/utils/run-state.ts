@@ -67,14 +67,19 @@ export async function loadRunState(
   // recovers that node. Absent nodes/ dir = nothing to merge (backward compatible with
   // checkpoints that only have the inline main file).
   const nodesDir = join(runsRoot, runId, "nodes");
+  let nodeFiles: string[];
   try {
-    for (const file of await readdir(nodesDir)) {
-      if (!file.endsWith(".json")) continue;
-      const nodeId = file.slice(0, -5);
-      state.nodeResults[nodeId] = JSON.parse(await readFile(join(nodesDir, file), "utf8")) as NodeResult;
-    }
+    nodeFiles = await readdir(nodesDir);
   } catch {
     // No per-node directory — all results are inline in the main state file.
+    return state;
+  }
+  for (const file of nodeFiles) {
+    if (!file.endsWith(".json")) continue;
+    const nodeId = file.slice(0, -5);
+    state.nodeResults[nodeId] = JSON.parse(
+      await readFile(join(nodesDir, file), "utf8")
+    ) as NodeResult;
   }
 
   return state;

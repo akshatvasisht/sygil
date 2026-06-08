@@ -94,8 +94,10 @@ export class LocalOaiAdapter implements AgentAdapter {
     return this.resolveEnvEndpoint();
   }
 
-  async isAvailable(): Promise<boolean> {
-    const { baseUrl, apiKey } = this.resolveEnvEndpoint();
+  async isAvailable(config?: NodeConfig): Promise<boolean> {
+    const { baseUrl, apiKey } = config !== undefined
+      ? this.resolveEndpoint(config)
+      : this.resolveEnvEndpoint();
     try {
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -107,8 +109,10 @@ export class LocalOaiAdapter implements AgentAdapter {
     }
   }
 
-  async getVersion(): Promise<string | null> {
-    const { baseUrl, apiKey } = this.resolveEnvEndpoint();
+  async getVersion(config?: NodeConfig): Promise<string | null> {
+    const { baseUrl, apiKey } = config !== undefined
+      ? this.resolveEndpoint(config)
+      : this.resolveEnvEndpoint();
     try {
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
