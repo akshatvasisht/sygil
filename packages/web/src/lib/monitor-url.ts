@@ -1,15 +1,3 @@
-/**
- * Resolves the WebSocket URL for the monitor page.
- *
- * Three cases:
- *   1. Embedded (CLI serves the page at http://localhost:<port>/monitor?workflow=x&token=t):
- *      No ?ws= param. Token is present. Use locationPort (same as WS port).
- *   2. Dev mode (SYGIL_UI_DEV=1, CLI passes ?ws=<port>&workflow=x&token=t):
- *      ?ws= param overrides — connect to the CLI port, not the Next.js dev port.
- *   3. Direct web access (no CLI involved, no ?token=):
- *      Return null → monitor shows "No workflow connected" empty state.
- */
-
 const PORT_RE = /^[1-9][0-9]{0,4}$/;
 
 function isValidPort(value: string): boolean {
@@ -29,6 +17,17 @@ export function classifyMonitorWsParam(
   return isValidPort(wsParam) ? "valid" : "invalid_port";
 }
 
+/**
+ * Resolves the WebSocket URL for the monitor page.
+ *
+ * Three cases:
+ *   1. Embedded (CLI serves the page at http://localhost:<port>/monitor?workflow=x&token=t):
+ *      No ?ws= param. Token is present. Use locationPort (same as WS port).
+ *   2. Dev mode (SYGIL_UI_DEV=1, CLI passes ?ws=<port>&workflow=x&token=t):
+ *      ?ws= param overrides — connect to the CLI port, not the Next.js dev port.
+ *   3. Direct web access (no CLI involved, no ?token=):
+ *      Return null → monitor shows "No workflow connected" empty state.
+ */
 export function resolveMonitorWsUrl(params: {
   wsParam: string | null;
   token: string | null;

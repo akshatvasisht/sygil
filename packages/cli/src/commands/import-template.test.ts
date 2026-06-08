@@ -26,7 +26,7 @@ vi.mock("../utils/atomic-write.js", () => ({
 }));
 
 vi.mock("../utils/workflow.js", () => ({
-  loadWorkflow: vi.fn(),
+  parseWorkflowContent: vi.fn(),
 }));
 
 vi.mock("../utils/registry.js", () => ({
@@ -36,13 +36,15 @@ vi.mock("../utils/registry.js", () => ({
 }));
 
 import { readFile, writeFile, mkdir, unlink } from "node:fs/promises";
-import { loadWorkflow } from "../utils/workflow.js";
+import { parseWorkflowContent } from "../utils/workflow.js";
+import { writeFileAtomic } from "../utils/atomic-write.js";
 
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
 const mockWriteFile = writeFile as ReturnType<typeof vi.fn>;
 const mockMkdir = mkdir as ReturnType<typeof vi.fn>;
 const mockUnlink = unlink as ReturnType<typeof vi.fn>;
-const mockLoadWorkflow = loadWorkflow as ReturnType<typeof vi.fn>;
+const mockParseWorkflowContent = parseWorkflowContent as ReturnType<typeof vi.fn>;
+const mockWriteFileAtomic = writeFileAtomic as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -84,12 +86,12 @@ describe("importTemplateCommand", () => {
   it("imports a local file and saves it to user templates directory", async () => {
     const content = JSON.stringify(VALID_WORKFLOW);
     mockReadFile.mockResolvedValue(content);
-    mockLoadWorkflow.mockResolvedValue(VALID_WORKFLOW);
+    mockParseWorkflowContent.mockReturnValue(VALID_WORKFLOW);
 
     await importTemplateCommand("/path/to/template.json");
 
-    // Should write a temp file then the final destination
-    expect(mockWriteFile).toHaveBeenCalled();
+    // Writes the workflow to the destination via the atomic-write shim.
+    expect(mockWriteFileAtomic).toHaveBeenCalled();
     expect(mockMkdir).toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining("Imported template")
@@ -99,7 +101,7 @@ describe("importTemplateCommand", () => {
   it("uses the workflow name from the loaded workflow for the template filename", async () => {
     const content = JSON.stringify(VALID_WORKFLOW);
     mockReadFile.mockResolvedValue(content);
-    mockLoadWorkflow.mockResolvedValue(VALID_WORKFLOW);
+    mockParseWorkflowContent.mockReturnValue(VALID_WORKFLOW);
 
     await importTemplateCommand("/path/to/template.json");
 
@@ -119,7 +121,7 @@ describe("importTemplateCommand", () => {
   it("exits 1 when the JSON fails workflow validation", async () => {
     const content = JSON.stringify({ invalid: true });
     mockReadFile.mockResolvedValue(content);
-    mockLoadWorkflow.mockRejectedValue(new Error("Workflow validation failed"));
+    mockParseWorkflowContent.mockImplementation(() => { throw new Error("Workflow validation failed"); });
 
     await expect(importTemplateCommand("/path/to/bad.json")).rejects.toThrow("process.exit(1)");
     expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -135,7 +137,7 @@ describe("importTemplateCommand", () => {
       text: () => Promise.resolve(content),
     });
     vi.stubGlobal("fetch", mockFetch);
-    mockLoadWorkflow.mockResolvedValue(VALID_WORKFLOW);
+    mockParseWorkflowContent.mockReturnValue(VALID_WORKFLOW);
 
     await importTemplateCommand("https://example.com/template.json");
 
@@ -168,7 +170,7 @@ describe("importTemplateCommand", () => {
     const noNameWorkflow = { ...VALID_WORKFLOW, name: undefined };
     const content = JSON.stringify(noNameWorkflow);
     mockReadFile.mockResolvedValue(content);
-    mockLoadWorkflow.mockResolvedValue(noNameWorkflow);
+    mockParseWorkflowContent.mockReturnValue(noNameWorkflow);
 
     await importTemplateCommand("/path/to/my-cool-template.json");
 

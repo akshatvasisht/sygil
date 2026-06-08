@@ -57,8 +57,9 @@ export function hashEnvVar(name: string): string | null {
 
 /**
  * Probe an adapter for its version string. Returns null on any failure (missing
- * binary, timeout, unimplemented `getVersion`). Uses a 1s AbortSignal.timeout
- * so a missing binary doesn't stall run start.
+ * binary, timeout, unimplemented `getVersion`). Races against a 1 s manual
+ * setTimeout (unref'd so the timer never keeps the process alive) — `getVersion`
+ * takes no signal, so AbortSignal.timeout cannot be used here.
  */
 async function probeAdapterVersion(adapter: AgentAdapter): Promise<string | null> {
   if (typeof adapter.getVersion !== "function") return null;

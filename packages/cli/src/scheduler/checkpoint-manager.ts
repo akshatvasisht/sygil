@@ -61,7 +61,7 @@ export class CheckpointManager {
    * Does NOT return a promise; the write happens in the background.
    */
   markDirty(state: WorkflowRunState): void {
-    // Deep-copy to capture the current snapshot
+    // Snapshot now so in-flight background writes cannot mutate what we persist.
     this.pendingState = JSON.parse(JSON.stringify(state)) as WorkflowRunState;
     this.dirty = true;
     this.scheduleWrite();

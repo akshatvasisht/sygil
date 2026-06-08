@@ -2,8 +2,8 @@ import chalk from "chalk";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { getAdapter } from "../adapters/index.js";
+import { getTemplatesDir } from "../utils/templates.js";
 import type { AdapterType, WorkflowRunState } from "@sygil/shared";
 
 const ADAPTER_TYPES: AdapterType[] = ["claude-sdk", "claude-cli", "codex", "cursor", "gemini-cli", "local-oai"];
@@ -64,8 +64,8 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
     return results;
   }
 
-  const bundledTemplatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
-  const experimentalTemplatesDir = fileURLToPath(new URL("../../templates/experimental", import.meta.url));
+  const bundledTemplatesDir = getTemplatesDir();
+  const experimentalTemplatesDir = join(getTemplatesDir(), "experimental");
   const userTemplatesDir = join(homedir(), ".sygil", "templates");
 
   // Experimental templates are only listed when explicitly requested via
@@ -123,7 +123,7 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
     .filter((f) => f.endsWith(".json") && !f.endsWith(".workflow.json"))
     .sort()
     .reverse()
-    .slice(0, 10); // show last 10
+    .slice(0, 10);
 
   if (jsonFiles.length === 0) {
     console.log(chalk.dim("  No runs found."));

@@ -1,7 +1,6 @@
 import chalk from "chalk";
 import { readdir, readFile, writeFile, mkdir, access, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { WorkflowGraphSchema } from "@sygil/shared";
 import type { WorkflowGraph } from "@sygil/shared";
 import {
@@ -10,10 +9,7 @@ import {
   isTarball,
 } from "./bundle.js";
 import { SYGIL_CLI_VERSION } from "../scheduler/environment.js";
-
-function getTemplatesDir(): string {
-  return fileURLToPath(new URL("../../templates", import.meta.url));
-}
+import { getTemplatesDir } from "../utils/templates.js";
 
 async function fileExists(path: string): Promise<boolean> {
   try {

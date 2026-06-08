@@ -2,6 +2,7 @@
 
 import type { MetricsSnapshot } from "@sygil/shared";
 import { Activity, Gauge, CheckCircle, XCircle, Hourglass } from "lucide-react";
+import { formatDuration } from "@/lib/format-time";
 
 interface MetricsStripProps {
   metrics: MetricsSnapshot | null;
@@ -55,11 +56,11 @@ export function MetricsStrip({ metrics }: MetricsStripProps) {
           {metrics.pool.waitCount > 0 && (
             <span className="text-dim">
               wait p50/p95/p99{" "}
-              <span className="text-body">{formatMs(metrics.pool.p50WaitMs)}</span>
+              <span className="text-body">{formatDuration(metrics.pool.p50WaitMs)}</span>
               <span className="text-dim"> / </span>
-              <span className="text-body">{formatMs(metrics.pool.p95WaitMs)}</span>
+              <span className="text-body">{formatDuration(metrics.pool.p95WaitMs)}</span>
               <span className="text-dim"> / </span>
-              <span className="text-body">{formatMs(metrics.pool.p99WaitMs)}</span>
+              <span className="text-body">{formatDuration(metrics.pool.p99WaitMs)}</span>
             </span>
           )}
         </div>
@@ -72,11 +73,11 @@ export function MetricsStrip({ metrics }: MetricsStripProps) {
               <span className="text-accent-purple">{adapter}</span>
               <span className="text-dim">
                 p50/p95/p99{" "}
-                <span className="text-body">{formatMs(m.p50Ms)}</span>
+                <span className="text-body">{formatDuration(m.p50Ms)}</span>
                 <span className="text-dim"> / </span>
-                <span className="text-body">{formatMs(m.p95Ms)}</span>
+                <span className="text-body">{formatDuration(m.p95Ms)}</span>
                 <span className="text-dim"> / </span>
-                <span className="text-body">{formatMs(m.p99Ms)}</span>
+                <span className="text-body">{formatDuration(m.p99Ms)}</span>
               </span>
               <span className="text-dim">×{m.count}</span>
             </div>
@@ -85,13 +86,4 @@ export function MetricsStrip({ metrics }: MetricsStripProps) {
       )}
     </div>
   );
-}
-
-function formatMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1)}s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s - m * 60);
-  return `${m}m${rem.toString().padStart(2, "0")}s`;
 }

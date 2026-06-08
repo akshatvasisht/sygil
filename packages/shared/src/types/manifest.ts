@@ -8,6 +8,7 @@ export const SygilManifestSchema = z.object({
   assets: z.object({
     gates: z.array(z.string()).optional(),
     specs: z.array(z.string()).optional(),
+    // reserved for #16 (per-node skills portability) — populated and consumed when #16 ships
     skills: z.array(z.string()).optional(),
   }).describe("Relative paths of assets included alongside workflow.json."),
   signed: z.boolean().optional().describe("Reserved — sigstore sidecar presence indicator."),

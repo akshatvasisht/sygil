@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { X, Cpu, Trash2, AlertTriangle, ChevronDown, Copy, Clipboard } from "lucide-react";
 import type { NodeConfig, AdapterType, SandboxMode, ProviderConfig, RetryPolicy, RetryableErrorClass } from "@sygil/shared";
-import { isFieldSupported } from "@sygil/shared";
+import { isFieldSupported, RetryableErrorClassSchema } from "@sygil/shared";
 import type { NodeCardData } from "./NodeCard";
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -98,10 +98,10 @@ function Field({ label, children }: FieldProps) {
   );
 }
 
-const inputCls =
+const INPUT_CLS =
   "w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright placeholder:text-muted focus:outline-none focus:border-accent transition-colors duration-200";
 
-const selectCls =
+const SELECT_CLS =
   "w-full bg-canvas border border-border rounded px-2.5 py-1.5 font-mono text-xs text-bright focus:outline-none focus:border-accent transition-colors duration-200 appearance-none cursor-pointer";
 
 // ── Field-support annotation ─────────────────────────────────────────────────
@@ -128,12 +128,10 @@ interface NodePropertyPanelProps {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-// Helper: split comma-separated string into trimmed non-empty array
 function splitComma(s: string): string[] {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 
-// Helper: check if any advanced field has a non-default value
 function hasAdvancedValue(config: NodeCardData): boolean {
   return (
     (config.providers !== undefined && (config.providers as unknown[]).length > 0) ||
@@ -258,7 +256,7 @@ export function NodePropertyPanel({
         <Section title="Identity">
           <Field label="Role">
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               value={config.role}
               placeholder="e.g. Planner"
               onChange={(e) => onUpdate({ role: e.target.value })}
@@ -271,7 +269,7 @@ export function NodePropertyPanel({
           <Field label="Adapter">
             <div className="relative">
               <select
-                className={selectCls}
+                className={SELECT_CLS}
                 value={adapter}
                 onChange={(e) => onUpdate({ adapter: e.target.value as AdapterType })}
               >
@@ -288,7 +286,7 @@ export function NodePropertyPanel({
             <div className="relative" ref={modelDropdownRef}>
               <div className="flex gap-1">
                 <input
-                  className={inputCls + " flex-1"}
+                  className={INPUT_CLS + " flex-1"}
                   value={config.model}
                   placeholder="e.g. claude-sonnet-4-6"
                   onChange={(e) => onUpdate({ model: e.target.value })}
@@ -388,7 +386,7 @@ export function NodePropertyPanel({
           {/* Add custom tool */}
           <div className="flex gap-1">
             <input
-              className={inputCls + " flex-1"}
+              className={INPUT_CLS + " flex-1"}
               value={newTool}
               placeholder="Add custom tool…"
               onChange={(e) => setNewTool(e.target.value)}
@@ -439,7 +437,7 @@ export function NodePropertyPanel({
           {/* Add disallowed tool */}
           <div className="flex gap-1">
             <input
-              className={inputCls + " flex-1"}
+              className={INPUT_CLS + " flex-1"}
               value={newDisallowedTool}
               placeholder="Add disallowed tool…"
               onChange={(e) => setNewDisallowedTool(e.target.value)}
@@ -464,7 +462,7 @@ export function NodePropertyPanel({
         <Section title="Advanced">
           <Field label="Output directory">
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               value={(config.outputDir as string | undefined) ?? ""}
               placeholder="e.g. ./output"
               title="Directory where the agent writes its artifacts. Relative paths resolve from the workflow file location."
@@ -475,7 +473,7 @@ export function NodePropertyPanel({
           </Field>
           <Field label="Timeout (ms)">
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               type="number"
               min={1}
               aria-label="Timeout in milliseconds"
@@ -491,7 +489,7 @@ export function NodePropertyPanel({
           </Field>
           <Field label="Idle Timeout (ms)">
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               type="number"
               min={1}
               aria-label="Idle timeout in milliseconds"
@@ -511,7 +509,7 @@ export function NodePropertyPanel({
               <FieldSupportNote adapter={adapter} field="maxBudgetUsd" />
             </label>
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               type="number"
               min={0.01}
               step={0.01}
@@ -532,7 +530,7 @@ export function NodePropertyPanel({
               <FieldSupportNote adapter={adapter} field="maxTurns" />
             </label>
             <input
-              className={inputCls}
+              className={INPUT_CLS}
               type="number"
               min={1}
               aria-label="Maximum turns"
@@ -550,7 +548,7 @@ export function NodePropertyPanel({
             <Field label="Sandbox">
               <div className="relative">
                 <select
-                  className={selectCls}
+                  className={SELECT_CLS}
                   title="Run the agent in an isolated sandbox environment."
                   value={(config.sandbox as SandboxMode | undefined) ?? ""}
                   onChange={(e) =>
@@ -590,7 +588,7 @@ export function NodePropertyPanel({
                 </label>
                 <div className="relative">
                   <select
-                    className={selectCls}
+                    className={SELECT_CLS}
                     value={(config.modelTier as string | undefined) ?? ""}
                     aria-label="Model tier"
                     onChange={(e) =>
@@ -611,7 +609,7 @@ export function NodePropertyPanel({
                   Writes context (comma-separated keys)
                 </label>
                 <input
-                  className={inputCls}
+                  className={INPUT_CLS}
                   placeholder="e.g. output, status"
                   aria-label="Context keys this node writes"
                   onBlur={(e) => {
@@ -629,14 +627,13 @@ export function NodePropertyPanel({
                   Reads context (comma-separated keys)
                 </label>
                 <input
-                  className={inputCls}
+                  className={INPUT_CLS}
                   placeholder="e.g. output"
                   aria-label="Context keys this node reads"
                   onBlur={(e) => {
                     const parts = splitComma(e.target.value);
                     onUpdate({ readsContext: parts.length > 0 ? parts : undefined });
                   }}
-                  onChange={(e) => { void e; }}
                   defaultValue={((config.readsContext as string[] | undefined) ?? []).join(", ")}
                   key={`reads-${JSON.stringify(config.readsContext)}`}
                 />
@@ -648,14 +645,13 @@ export function NodePropertyPanel({
                   Expected outputs (comma-separated)
                 </label>
                 <input
-                  className={inputCls}
+                  className={INPUT_CLS}
                   placeholder="e.g. report.md, summary.json"
                   aria-label="Expected output filenames"
                   onBlur={(e) => {
                     const parts = splitComma(e.target.value);
                     onUpdate({ expectedOutputs: parts.length > 0 ? parts : undefined });
                   }}
-                  onChange={(e) => { void e; }}
                   defaultValue={((config.expectedOutputs as string[] | undefined) ?? []).join(", ")}
                   key={`expected-${JSON.stringify(config.expectedOutputs)}`}
                 />
@@ -713,7 +709,7 @@ export function NodePropertyPanel({
                     <div className="flex-1">
                       <label className="block font-mono text-[10px] text-dim mb-0.5">Max attempts</label>
                       <input
-                        className={inputCls}
+                        className={INPUT_CLS}
                         type="number"
                         min={1}
                         aria-label="Retry max attempts"
@@ -728,7 +724,7 @@ export function NodePropertyPanel({
                     <div className="flex-1">
                       <label className="block font-mono text-[10px] text-dim mb-0.5">Initial delay (ms)</label>
                       <input
-                        className={inputCls}
+                        className={INPUT_CLS}
                         type="number"
                         min={0}
                         aria-label="Retry initial delay ms"
@@ -745,7 +741,7 @@ export function NodePropertyPanel({
                     <div className="flex-1">
                       <label className="block font-mono text-[10px] text-dim mb-0.5">Backoff multiplier</label>
                       <input
-                        className={inputCls}
+                        className={INPUT_CLS}
                         type="number"
                         min={1}
                         step={0.1}
@@ -761,7 +757,7 @@ export function NodePropertyPanel({
                     <div className="flex-1">
                       <label className="block font-mono text-[10px] text-dim mb-0.5">Max delay (ms)</label>
                       <input
-                        className={inputCls}
+                        className={INPUT_CLS}
                         type="number"
                         min={0}
                         aria-label="Retry max delay ms"
@@ -777,7 +773,7 @@ export function NodePropertyPanel({
                   <div>
                     <label className="block font-mono text-[10px] text-dim mb-1">Retryable errors</label>
                     <div className="flex gap-2">
-                      {(["transport", "rate_limit", "server_5xx"] as RetryableErrorClass[]).map((cls) => {
+                      {RetryableErrorClassSchema.options.map((cls) => {
                         const current = (config.retryPolicy as RetryPolicy | undefined)?.retryableErrors ?? [];
                         const checked = current.includes(cls);
                         return (
@@ -813,7 +809,7 @@ export function NodePropertyPanel({
                   <div key={i} className="flex gap-1 items-center mb-1.5">
                     <div className="relative flex-1">
                       <select
-                        className={`${selectCls} text-[10px] py-1`}
+                        className={`${SELECT_CLS} text-[10px] py-1`}
                         aria-label={`Provider ${i + 1} adapter`}
                         value={p.adapter}
                         onChange={(e) => {
@@ -826,7 +822,7 @@ export function NodePropertyPanel({
                       </select>
                     </div>
                     <input
-                      className={`${inputCls} flex-1 py-1 text-[10px]`}
+                      className={`${INPUT_CLS} flex-1 py-1 text-[10px]`}
                       value={p.model ?? ""}
                       placeholder="model"
                       aria-label={`Provider ${i + 1} model`}
@@ -837,7 +833,7 @@ export function NodePropertyPanel({
                       }}
                     />
                     <input
-                      className={`${inputCls} w-14 py-1 text-[10px]`}
+                      className={`${INPUT_CLS} w-14 py-1 text-[10px]`}
                       type="number"
                       min={0}
                       value={p.priority}

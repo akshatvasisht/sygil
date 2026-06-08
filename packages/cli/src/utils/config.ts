@@ -64,6 +64,15 @@ function configPath(configDir?: string): string {
   return join(resolveConfigDir(configDir), CONFIG_FILE);
 }
 
+/**
+ * Returns a spread-ready object containing `hooks` when the config defines them.
+ * Usage: `{ ...hooksOpt(cfg), otherField }` — avoids repeating the ternary at
+ * every call-site in run/resume/fork.
+ */
+export function hooksOpt(cfg: SygilConfig | null): { hooks?: HooksConfig } {
+  return cfg?.hooks !== undefined ? { hooks: cfg.hooks } : {};
+}
+
 /** Reads and parses sygil.config.json from the given directory (or default .sygil/). */
 export async function readConfig(configDir?: string): Promise<SygilConfig> {
   const raw = await readFile(configPath(configDir), "utf8");

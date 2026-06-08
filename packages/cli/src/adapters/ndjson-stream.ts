@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@sygil/shared";
+import type { ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 import { logger } from "../utils/logger.js";
 import { createLineDecoder } from "./ndjson-line-decoder.js";
@@ -123,6 +124,20 @@ export async function* drainEventQueue(
     if (next === null) break;
     yield next;
   }
+}
+
+/**
+ * Wire a child process's "error" event into the event queue.
+ * Handles ENOENT / EACCES spawn failures that would otherwise surface as an
+ * unhandled 'error' event. Matches the inline handler used in claude-cli.ts.
+ */
+export function wireSpawnError(proc: ChildProcess, internal: StreamableInternal): void {
+  proc.on("error", (err) => {
+    if (!internal.done) {
+      pushEvent(internal, { type: "error", message: `Process spawn failed: ${err.message}` });
+      finishStream(internal);
+    }
+  });
 }
 
 /**

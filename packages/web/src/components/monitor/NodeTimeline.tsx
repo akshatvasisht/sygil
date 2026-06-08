@@ -22,7 +22,7 @@ import {
   Webhook,
 } from "lucide-react";
 import type { AgentEvent } from "@sygil/shared";
-import { formatHHMMSS } from "@/lib/format-time";
+import { formatHHMMSS, formatDuration } from "@/lib/format-time";
 
 export interface HumanReviewTimelineEntry {
   nodeId: string; // synthetic key (e.g. "human-review-<edgeId>")
@@ -160,6 +160,16 @@ function EventBadge({ event }: { event: AgentEvent }) {
           <span className="text-dim shrink-0">({event.reason})</span>
         </div>
       );
+    case "rate_limit":
+      return (
+        <div className="flex items-center gap-1.5 font-mono text-[10px] text-accent-amber">
+          <Clock size={9} className="shrink-0" />
+          <span>rate_limit</span>
+          <span className="text-dim shrink-0">
+            {event.retryAfterMs > 0 ? `retry after ${event.retryAfterMs}ms` : "no retry-after"}
+          </span>
+        </div>
+      );
     case "context_set":
       return (
         <div className="flex items-center gap-1.5 font-mono text-[10px] text-dim">
@@ -192,12 +202,8 @@ function EventBadge({ event }: { event: AgentEvent }) {
   }
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
 
-export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTimelineProps) {
+export function NodeTimeline({ entries, selectedNodeId, currentNodeId, onSelectNode }: NodeTimelineProps) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   const toggleExpanded = (nodeId: string) => {
@@ -256,6 +262,10 @@ export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTime
             const nodeEntry = entry as NodeTimelineEntry;
             const isExpanded = expandedNodes.has(nodeEntry.nodeId);
             const isSelected = selectedNodeId === nodeEntry.nodeId;
+            const isCurrent = currentNodeId === nodeEntry.nodeId;
+            const visibleEvents = nodeEntry.events.filter(
+              (e) => e.type !== "text_delta" && e.type !== "tool_result"
+            );
 
             return (
               <div key={`${nodeEntry.nodeId}-${nodeEntry.attempt}`}>
@@ -268,6 +278,7 @@ export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTime
                   className={`
                     relative flex items-start gap-3 px-4 py-3 cursor-pointer transition-colors duration-200
                     ${isSelected ? "bg-surface" : "hover:bg-surface/50"}
+                    ${isCurrent ? "ring-1 ring-inset ring-accent-cyan/40" : ""}
                   `}
                   onClick={() => {
                     onSelectNode(isSelected ? null : nodeEntry.nodeId);
@@ -331,19 +342,16 @@ export function NodeTimeline({ entries, selectedNodeId, onSelectNode }: NodeTime
                 </div>
 
                 {/* Expanded events */}
-                {isExpanded && nodeEntry.events.length > 0 && (
+                {isExpanded && visibleEvents.length > 0 && (
                   <div className="ml-[52px] mr-4 mb-3 space-y-1 border-l border-border pl-3">
-                    {nodeEntry.events
-                      .filter((e) => e.type !== "text_delta" && e.type !== "tool_result")
-                      .slice(0, 12)
-                      .map((event, j) => (
-                        <div key={j} className="py-0.5">
-                          <EventBadge event={event} />
-                        </div>
-                      ))}
-                    {nodeEntry.events.filter((e) => e.type !== "text_delta" && e.type !== "tool_result").length > 12 && (
+                    {visibleEvents.slice(0, 12).map((event, j) => (
+                      <div key={j} className="py-0.5">
+                        <EventBadge event={event} />
+                      </div>
+                    ))}
+                    {visibleEvents.length > 12 && (
                       <div className="font-mono text-[10px] text-dim py-0.5">
-                        +{nodeEntry.events.filter((e) => e.type !== "text_delta" && e.type !== "tool_result").length - 12} more events
+                        +{visibleEvents.length - 12} more events
                       </div>
                     )}
                   </div>

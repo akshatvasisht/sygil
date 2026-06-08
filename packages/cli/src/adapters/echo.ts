@@ -30,6 +30,7 @@ const ECHO_SCRIPT = resolve(__dirname, "../../test-fixtures/echo-adapter.mjs");
 interface EchoInternal {
   proc: ReturnType<typeof spawn>;
   outputLines: string[];
+  outputText: string;
   exitCode: number | null;
   done: boolean;
   eventQueue: AgentEvent[];
@@ -69,11 +70,13 @@ export class EchoAdapter implements AgentAdapter {
         ECHO_OUTPUT_DIR: cwd,
         ...(ctx?.traceparent ? { TRACEPARENT: ctx.traceparent } : {}),
       },
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: EchoInternal = {
       proc,
       outputLines: [],
+      outputText: "",
       exitCode: null,
       done: false,
       eventQueue: [],
@@ -103,14 +106,22 @@ export class EchoAdapter implements AgentAdapter {
         )
       : null;
 
+    // finish() must wait for BOTH stdout "end" and process "exit" — whichever
+    // arrives last triggers it. The two events have no guaranteed order;
+    // finishing on the first would let "exit" resolve the stream before "end"
+    // flushes the trailing (newline-less) NDJSON line, dropping it. Mirrors the
+    // cursor/codex/gemini adapters' coordination.
+    let stdoutClosed = proc.stdout == null;
+
     proc.stdout?.on("end", () => {
       stdoutSink?.flush();
-      finish();
+      stdoutClosed = true;
+      if (internal.exitCode !== null) finish();
     });
 
     proc.on("exit", (code) => {
       internal.exitCode = code ?? 1;
-      finish();
+      if (stdoutClosed) finish();
     });
 
     yield* drainEventQueue(internal);
@@ -128,8 +139,11 @@ export class EchoAdapter implements AgentAdapter {
 
     switch (type) {
       case "text":
-      case "assistant":
-        return { type: "text_delta", text: String(parsed["text"] ?? parsed["content"] ?? "") };
+      case "assistant": {
+        const text = String(parsed["text"] ?? parsed["content"] ?? "");
+        internal.outputText += text;
+        return { type: "text_delta", text };
+      }
 
       case "tool_use":
         return {
@@ -171,24 +185,7 @@ export class EchoAdapter implements AgentAdapter {
       });
     }
 
-    const output = internal.outputLines
-      .filter((l) => {
-        try {
-          const p = JSON.parse(l) as Record<string, unknown>;
-          return p["type"] === "text" || p["type"] === "assistant";
-        } catch {
-          return false;
-        }
-      })
-      .map((l) => {
-        try {
-          const p = JSON.parse(l) as Record<string, unknown>;
-          return String(p["text"] ?? p["content"] ?? "");
-        } catch {
-          return l;
-        }
-      })
-      .join("");
+    const output = internal.outputText;
 
     const costUsd = internal.totalCostUsd > 0 ? internal.totalCostUsd : undefined;
     const exitCode = internal.exitCode ?? 1;
@@ -222,4 +219,3 @@ export class EchoAdapter implements AgentAdapter {
   }
 }
 
-// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

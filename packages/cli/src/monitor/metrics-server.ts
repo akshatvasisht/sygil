@@ -26,7 +26,6 @@ export const METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
 const STOP_GRACE_MS = 500;
 
 export interface MetricsServerOptions {
-  port: number;
   metrics: PrometheusMetrics;
   /**
    * Optional pre-generated auth token. If omitted, a fresh UUID is generated.

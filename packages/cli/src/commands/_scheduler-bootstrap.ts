@@ -63,7 +63,7 @@ export async function buildSchedulerContext(
 
   if (opts.metricsPort !== undefined) {
     prometheusMetrics = new PrometheusMetrics();
-    metricsServer = new MetricsServer({ port: opts.metricsPort, metrics: prometheusMetrics });
+    metricsServer = new MetricsServer({ metrics: prometheusMetrics });
     try {
       metricsPort = await metricsServer.start(opts.metricsPort);
       metricsAuthToken = metricsServer.getAuthToken();

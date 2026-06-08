@@ -104,7 +104,6 @@ export class LazyWorktreeManager {
       throw new Error("Worktree creation aborted");
     }
 
-    // Mutex-protect the worktree add operation
     const release = await this.mutex.acquire();
     try {
       await execFileAsync("git", [

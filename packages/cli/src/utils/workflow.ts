@@ -6,12 +6,9 @@ import {
   verifyTemplateSignature,
 } from "./template-signature.js";
 
-/**
- * Adapters that accept `NodeConfig.tools` for cross-adapter shape parity but
- * have no upstream allowlist flag. They warn-ignore at runtime; we refuse at
- * load time unless the node opts in via `allowUnsafeToolsBypass: true`.
- * See `agentcontext/build-log.md` 2026-04-24 entry for context.
- */
+// Adapters that accept `NodeConfig.tools` for cross-adapter shape parity but
+// have no upstream allowlist flag. They warn-ignore at runtime; we refuse at
+// load time unless the node opts in via `allowUnsafeToolsBypass: true`.
 const TOOLS_BYPASS_ADAPTERS: ReadonlySet<AdapterType> = new Set<AdapterType>([
   "codex",
   "cursor",
@@ -86,8 +83,7 @@ const ESCAPE_CLOSE_SENTINEL = "\u0000SYGIL_ESC_CLOSE\u0000";
  *
  * Literal `{{` / `}}` can be emitted by doubling the braces: `{{{{foo}}}}`
  * renders as the string `{{foo}}` after interpolation. This is the only
- * escape syntax supported — we intentionally avoid a full template engine
- * (see decisions.md 2026-04-20 "Parameter interpolation stays string-literal-only").
+ * escape syntax supported — we intentionally avoid a full template engine.
  */
 export function interpolateWorkflow(
   graph: WorkflowGraph,
@@ -140,6 +136,39 @@ export function interpolateWorkflow(
 // Load and validate a workflow file
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse and validate workflow content from an in-memory string. Performs
+ * JSON.parse, WorkflowGraphSchema validation, and all post-schema invariant
+ * checks — everything except file I/O and signature verification.
+ *
+ * Use this when workflow content is already available in memory (e.g.
+ * import-template parsing a bundle manifest inline, or stdin input). For
+ * the normal file-path entry point use `loadWorkflow`.
+ */
+export function parseWorkflowContent(content: string): WorkflowGraph {
+  let json: unknown;
+  try {
+    json = JSON.parse(content);
+  } catch (err) {
+    throw new Error(
+      `Workflow content is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const result = WorkflowGraphSchema.safeParse(json);
+
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
+    throw new Error(`Workflow validation failed:\n${issues}`);
+  }
+
+  const graph = result.data as WorkflowGraph;
+  validateWorkflowInvariants(graph);
+  return graph;
+}
+
 export async function loadWorkflow(filePath: string): Promise<WorkflowGraph> {
   // Optional Sigstore sidecar verification. Runs BEFORE JSON parse so
   // a tampered file is rejected without the scheduler ever seeing its
@@ -167,27 +196,22 @@ export async function loadWorkflow(filePath: string): Promise<WorkflowGraph> {
     );
   }
 
-  let json: unknown;
+  // Delegate parse+validate to the shared in-memory helper, but rewrite the
+  // generic "Workflow content is not valid JSON" message to include the file
+  // path so callers see a actionable diagnostic.
   try {
-    json = JSON.parse(raw);
+    return parseWorkflowContent(raw);
   } catch (err) {
-    throw new Error(
-      `Workflow file "${filePath}" is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
-    );
+    if (err instanceof Error && err.message.startsWith("Workflow content is not valid JSON:")) {
+      throw new Error(
+        err.message.replace(
+          "Workflow content is not valid JSON:",
+          `Workflow file "${filePath}" is not valid JSON:`
+        )
+      );
+    }
+    throw err;
   }
-
-  const result = WorkflowGraphSchema.safeParse(json);
-
-  if (!result.success) {
-    const issues = result.error.issues
-      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-      .join("\n");
-    throw new Error(`Workflow validation failed:\n${issues}`);
-  }
-
-  const graph = result.data as WorkflowGraph;
-  validateWorkflowInvariants(graph);
-  return graph;
 }
 
 /**

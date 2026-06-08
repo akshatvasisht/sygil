@@ -11,24 +11,27 @@ import type {
   SpawnContext,
 } from "@sygil/shared";
 import { STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireSpawnError, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
 import {
+  buildSpawnEnv,
+  getCliVersion,
   GETRESULT_KILL_GRACE_MS,
   GETRESULT_POLL_INTERVAL_MS as POLL_INTERVAL_MS,
   GETRESULT_TIMEOUT_MS,
+  KILL_GRACE_PERIOD_MS,
   STALL_GRACE_MS,
   exitCodeToSygilError,
+  warnOutputSchemaPartial,
 } from "./constants.js";
 import { makeAgentSession } from "./session.js";
 
-const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface GeminiInternal {
   proc: ReturnType<typeof spawn>;
-  stdout: string[];
+  outputLines: string[];
   exitCode: number | null;
   done: boolean;
   eventQueue: AgentEvent[];
@@ -80,20 +83,10 @@ export class GeminiCLIAdapter implements AgentAdapter {
   }
 
   async getVersion(): Promise<string | null> {
-    try {
-      const out = execSync("gemini --version", {
-        encoding: "utf8",
-        timeout: 1_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const firstLine = out.split("\n")[0]?.trim();
-      return firstLine ?? null;
-    } catch {
-      return null;
-    }
+    return getCliVersion("gemini");
   }
 
-  private _buildArgs(prompt: string, config: NodeConfig): string[] {
+  private buildArgs(prompt: string, config: NodeConfig): string[] {
     const args: string[] = [
       "-p", prompt,
       "--output-format", "stream-json",
@@ -103,19 +96,20 @@ export class GeminiCLIAdapter implements AgentAdapter {
     return args;
   }
 
-  private _spawnWithArgs(config: NodeConfig, prompt: string, ctx?: SpawnContext): AgentSession {
-    const args = this._buildArgs(prompt, config);
+  private spawnWithArgs(config: NodeConfig, prompt: string, ctx?: SpawnContext): AgentSession {
+    const args = this.buildArgs(prompt, config);
     const cwd = config.outputDir ?? process.cwd();
 
     const proc = spawn("gemini", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: GeminiInternal = {
       proc,
-      stdout: [],
+      outputLines: [],
       exitCode: null,
       done: false,
       eventQueue: [],
@@ -126,6 +120,10 @@ export class GeminiCLIAdapter implements AgentAdapter {
       stallTimer: null,
       maxQueueSize: DEFAULT_QUEUE_HIGH_WATER_MARK,
     };
+
+    // Wire up process error handler immediately after spawn.
+    // Without this, ENOENT / EACCES errors surface as an unhandled 'error' event.
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal);
   }
@@ -138,11 +136,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
       );
     }
 
-    if (config.outputSchema) {
-      logger.info(
-        `gemini-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
-      );
-    }
+    warnOutputSchemaPartial(this.name, config);
 
     // Upstream gemini-cli deprecated `--allowed-tools` in v0.30.0 (2026-02-25)
     // in favor of a policy-engine `--policy <file>` flag that requires a
@@ -155,7 +149,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
       );
     }
 
-    return this._spawnWithArgs(config, config.prompt, ctx);
+    return this.spawnWithArgs(config, config.prompt, ctx);
   }
 
   async *stream(session: AgentSession): AsyncIterable<AgentEvent> {
@@ -179,7 +173,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
             const event = this.parseLine(line, internal);
             return event ? [event] : [];
           },
-          (line) => internal.stdout.push(line),
+          (line) => internal.outputLines.push(line),
         )
       : null;
 
@@ -270,7 +264,7 @@ export class GeminiCLIAdapter implements AgentAdapter {
           }
           resolve();
         }, KILL_GRACE_PERIOD_MS);
-        internal.proc.on("exit", () => {
+        internal.proc.once("exit", () => {
           clearTimeout(killTimeout);
           resolve();
         });
@@ -290,11 +284,14 @@ export class GeminiCLIAdapter implements AgentAdapter {
     }
     // Gemini CLI does not expose a session-resume flag in headless mode yet.
     // Fall back to a cold spawn with the feedback appended to the prompt.
+    // Call spawnWithArgs directly to avoid a redundant isAvailable() check
+    // (already performed above) — mirrors the cursor-cli pattern.
     const newConfig: NodeConfig = {
       ...config,
       prompt: `${config.prompt}\n\nFeedback from previous attempt: ${feedbackMessage}`,
     };
-    return this.spawn(newConfig, ctx);
+    warnOutputSchemaPartial(this.name, newConfig);
+    return this.spawnWithArgs(newConfig, newConfig.prompt, ctx);
   }
 }
 

@@ -8,7 +8,7 @@ import type {
   SpawnContext,
 } from "@sygil/shared";
 import { STALL_EXIT_CODE } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK, wireSpawnError } from "./ndjson-stream.js";
 import { dispatchEventLine, type EventMapping } from "./ndjson-event-mapper.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
 import { logger } from "../utils/logger.js";
@@ -18,12 +18,14 @@ import {
   GETRESULT_TIMEOUT_MS,
   STALL_GRACE_MS,
   exitCodeToSygilError,
+  buildSpawnEnv,
+  warnOutputSchemaPartial,
+  KILL_GRACE_PERIOD_MS,
+  getCliVersion,
 } from "./constants.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
 
-/** Grace period before SIGKILL after SIGTERM during kill(). */
-const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface TokenUsage {
   input: number;
@@ -65,25 +67,11 @@ export class CodexCLIAdapter implements AgentAdapter {
   }
 
   async getVersion(): Promise<string | null> {
-    try {
-      const out = execSync("codex --version", {
-        encoding: "utf8",
-        timeout: 1_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const firstLine = out.split("\n")[0]?.trim();
-      return firstLine ?? null;
-    } catch {
-      return null;
-    }
+    return getCliVersion("codex");
   }
 
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
-    if (config.outputSchema) {
-      logger.info(
-        `codex: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
-      );
-    }
+    warnOutputSchemaPartial(this.name, config);
 
     // Codex exposes `--sandbox` but no tool-name allowlist flag; `NodeConfig.tools`
     // is accepted for cross-adapter shape parity but has no runtime effect here
@@ -116,7 +104,8 @@ export class CodexCLIAdapter implements AgentAdapter {
     const proc = spawn("codex", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: CodexInternal = {
@@ -134,12 +123,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       sessionId: null,
     };
 
-    proc.on("error", (err) => {
-      if (!internal.done) {
-        pushEvent(internal, { type: "error", message: `Process spawn failed: ${err.message}` });
-        finishStream(internal);
-      }
-    });
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal);
   }
@@ -166,7 +150,8 @@ export class CodexCLIAdapter implements AgentAdapter {
     const proc = spawn("codex", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: CodexInternal = {
@@ -184,12 +169,7 @@ export class CodexCLIAdapter implements AgentAdapter {
       sessionId,
     };
 
-    proc.on("error", (err) => {
-      if (!internal.done) {
-        pushEvent(internal, { type: "error", message: `Process spawn failed: ${err.message}` });
-        finishStream(internal);
-      }
-    });
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal, { id: previousSession.id });
   }
@@ -435,4 +415,3 @@ const CODEX_EVENT_MAPPING: EventMapping<Record<string, unknown>, CodexInternal> 
   },
 };
 
-// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

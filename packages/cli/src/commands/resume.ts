@@ -3,74 +3,24 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import ora from "ora";
 import { loadWorkflow } from "../utils/workflow.js";
-import { readConfigSafe } from "../utils/config.js";
+import { readConfigSafe, hooksOpt } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
-import { getAdapter } from "../adapters/index.js";
-import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
-import { isContainedIn } from "../gates/index.js";
-import type { WorkflowRunState, AgentEvent } from "@sygil/shared";
-import { WorkflowRunStateSchema } from "@sygil/shared";
-
-const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
+import { loadRunState } from "../utils/run-state.js";
+import { checkEnvironmentDrift, wireSimpleTerminalListeners } from "./_run-helpers.js";
+import type { WorkflowRunState } from "@sygil/shared";
 
 export async function resumeCommand(runId: string, options: { checkDrift?: boolean } = {}): Promise<void> {
-  // Reject runIds with path-traversal characters before constructing any path.
-  // Mirror of `replay.ts`'s guard — without this, `sygil resume "../../etc/passwd"`
-  // probes for `<configDir>/runs/../../etc/passwd.json` and the differential error
-  // ("file not found" vs "JSON parse failure") leaks file existence.
-  if (!RUN_ID_RE.test(runId)) {
-    console.error(chalk.red(`Invalid runId "${runId}": must be alphanumeric/_/-`));
-    process.exit(1);
-  }
-
   // Reap orphan `.git/worktrees/` entries from prior SIGINT'd runs.
   // Cheap, idempotent, and silent on non-git directories.
   await pruneWorktrees();
 
   const spinner = ora(`Loading run ${chalk.cyan(runId)}...`).start();
 
-  // Load the persisted run state
-  const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
-  const runsRoot = join(configDir, "runs");
-  const stateFile = join(runsRoot, `${runId}.json`);
-  if (!isContainedIn(stateFile, runsRoot)) {
-    spinner.fail(`Invalid runId "${runId}": resolved path escapes the runs directory`);
-    process.exit(1);
-  }
-  let state: WorkflowRunState;
-
-  let raw: string;
-  try {
-    raw = await readFile(stateFile, "utf8");
-  } catch {
-    spinner.fail(`Could not load run state from ${stateFile}`);
-    process.exit(1);
-  }
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(raw);
-  } catch (err) {
-    spinner.fail(
-      `Checkpoint at ${stateFile} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    process.exit(1);
-  }
-
-  const parseResult = WorkflowRunStateSchema.safeParse(parsedJson);
-  if (!parseResult.success) {
-    const firstIssue = parseResult.error.issues[0];
-    const issueMsg = firstIssue
-      ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-      : parseResult.error.message;
-    spinner.fail(
-      `Checkpoint at ${stateFile} is corrupt or from an incompatible version: ${issueMsg}`,
-    );
-    process.exit(1);
-  }
-  state = parseResult.data as WorkflowRunState;
+  // Load and validate the persisted run state (guard, path containment, JSON parse,
+  // and schema validation are all handled by loadRunState).
+  const state: WorkflowRunState = await loadRunState(runId, spinner);
   spinner.succeed(`Loaded run: ${chalk.cyan(state.workflowName)} (${state.status})`);
 
   if (state.status === "completed") {
@@ -136,31 +86,12 @@ export async function resumeCommand(runId: string, options: { checkDrift?: boole
   const tierConfig = await readConfigSafe(process.env["SYGIL_CONFIG_DIR"]);
   workflow = resolveModelTiersAndLog(workflow, tierConfig?.tiers);
 
-  // Drift detection (opt-in via --check-drift). When the flag is set and the
-  // checkpoint stored an environment snapshot, refuse to resume on any
-  // version/key/platform delta. Default behavior is to proceed silently —
-  // most resumes are routine ("agent crashed, run again") and treating any
-  // version bump as a hard block was too noisy in practice.
-  if (options.checkDrift && state.environment) {
-    let drift: string[] = [];
-    try {
-      const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
-      drift = diffEnvironment(state.environment, currentEnv);
-    } catch {
-      // Drift check failure must not block resume
-    }
-    if (drift.length > 0) {
-      console.warn(chalk.yellow("Environment drift detected:"));
-      for (const d of drift) console.warn(`  • ${d}`);
-      console.warn(chalk.dim("Drop --check-drift to proceed without the check."));
-      process.exit(1);
-    }
-  }
+  await checkEnvironmentDrift(options.checkDrift ?? false, state.environment, workflow);
 
   // Build scheduler context (monitor + scheduler) via the shared bootstrap.
   const ctx = await buildSchedulerContext({
     workflow,
-    ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+    ...hooksOpt(tierConfig),
   });
   const { scheduler } = ctx;
   if (ctx.monitorPort !== null) {
@@ -170,24 +101,10 @@ export async function resumeCommand(runId: string, options: { checkDrift?: boole
     );
   }
 
-  scheduler.on("node_start", (nodeId: string) => {
-    console.log(chalk.cyan(`  ${nodeId} starting...`));
-  });
-
-  scheduler.on("node_event", (_nodeId: string, event: AgentEvent) => {
-    if (event.type === "text_delta") {
-      process.stdout.write(chalk.dim("."));
-    }
-  });
-
-  scheduler.on("node_end", (nodeId: string, success: boolean) => {
-    const icon = success ? chalk.green("✓") : chalk.red("✗");
-    console.log(`\n  ${icon} ${nodeId} ${success ? "completed" : "failed"}`);
-  });
+  wireSimpleTerminalListeners(scheduler);
 
   try {
-    const resumeOpts = tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {};
-    const result = await scheduler.resume(state, resumeOpts);
+    const result = await scheduler.resume(state, hooksOpt(tierConfig));
 
     if (result.success) {
       console.log(

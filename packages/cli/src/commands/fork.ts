@@ -1,21 +1,18 @@
 import chalk from "chalk";
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ora from "ora";
 import { loadWorkflow } from "../utils/workflow.js";
 import { parseParamPairs, resolveWorkflowParams } from "../utils/params.js";
-import { readConfigSafe } from "../utils/config.js";
+import { readConfigSafe, hooksOpt } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { buildSchedulerContext } from "./_scheduler-bootstrap.js";
 import { pruneWorktrees } from "../worktree/index.js";
-import { getAdapter } from "../adapters/index.js";
-import { buildEnvironmentSnapshot, diffEnvironment } from "../scheduler/environment.js";
-import { isContainedIn } from "../gates/index.js";
-import type { WorkflowRunState, AgentEvent, NodeResult } from "@sygil/shared";
-import { WorkflowRunStateSchema } from "@sygil/shared";
-
-const RUN_ID_RE = /^[a-zA-Z0-9_-]+$/;
+import { loadRunState } from "../utils/run-state.js";
+import { RUN_ID_RE } from "../utils/run-id.js";
+import { checkEnvironmentDrift, wireSimpleTerminalListeners } from "./_run-helpers.js";
+import type { WorkflowRunState, NodeResult } from "@sygil/shared";
 
 export interface ForkOptions {
   at?: string;
@@ -34,8 +31,8 @@ export interface ForkOptions {
  * requires via `--param key=value`.
  */
 export async function forkCommand(parentRunId: string, options: ForkOptions): Promise<void> {
-  // Reject runIds with path-traversal characters before constructing any path.
-  // Mirror of `replay.ts`'s guard — see resume.ts for the full reasoning.
+  // Reject runIds with path-traversal characters before constructing any path or
+  // touching the filesystem. (loadRunState re-checks defensively below.)
   if (!RUN_ID_RE.test(parentRunId)) {
     console.error(chalk.red(`Invalid parent runId "${parentRunId}": must be alphanumeric/_/-`));
     process.exit(1);
@@ -43,45 +40,13 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
 
   await pruneWorktrees();
 
+  const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
   const spinner = ora(`Loading parent run ${chalk.cyan(parentRunId)}...`).start();
 
-  const configDir = process.env["SYGIL_CONFIG_DIR"] ?? join(process.cwd(), ".sygil");
-  const runsRoot = join(configDir, "runs");
-  const parentStateFile = join(runsRoot, `${parentRunId}.json`);
-  if (!isContainedIn(parentStateFile, runsRoot)) {
-    spinner.fail(`Invalid parent runId "${parentRunId}": resolved path escapes the runs directory`);
-    process.exit(1);
-  }
-  let raw: string;
-  try {
-    raw = await readFile(parentStateFile, "utf8");
-  } catch {
-    spinner.fail(`Could not load parent run state from ${parentStateFile}`);
-    process.exit(1);
-  }
-
-  let parentJson: unknown;
-  try {
-    parentJson = JSON.parse(raw);
-  } catch (err) {
-    spinner.fail(
-      `Parent checkpoint at ${parentStateFile} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    process.exit(1);
-  }
-
-  const parseResult = WorkflowRunStateSchema.safeParse(parentJson);
-  if (!parseResult.success) {
-    const firstIssue = parseResult.error.issues[0];
-    const issueMsg = firstIssue
-      ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
-      : parseResult.error.message;
-    spinner.fail(
-      `Parent checkpoint at ${parentStateFile} is corrupt or from an incompatible version: ${issueMsg}`,
-    );
-    process.exit(1);
-  }
-  const parent = parseResult.data as WorkflowRunState;
+  // loadRunState handles the RUN_ID_RE guard, path-containment check, readFile,
+  // JSON.parse, and WorkflowRunStateSchema validation — failing via spinner.fail()
+  // + process.exit(1) on any error.
+  const parent = await loadRunState(parentRunId, spinner);
   spinner.succeed(`Loaded parent: ${chalk.cyan(parent.workflowName)} (${parent.completedNodes.length} node(s) completed)`);
 
   // Resolve `--at <checkpointIndex>` against the parent's completedNodes length.
@@ -146,21 +111,7 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
   // Drift detection (opt-in via --check-drift). See resume.ts for the
   // rationale: most forks don't need to be blocked on a version bump, so
   // the check fires only when the operator explicitly asks for it.
-  if (options.checkDrift && parent.environment) {
-    let drift: string[] = [];
-    try {
-      const currentEnv = await buildEnvironmentSnapshot(workflow, getAdapter);
-      drift = diffEnvironment(parent.environment, currentEnv);
-    } catch {
-      // Drift check failure must not block fork
-    }
-    if (drift.length > 0) {
-      console.warn(chalk.yellow("Environment drift detected:"));
-      for (const d of drift) console.warn(`  • ${d}`);
-      console.warn(chalk.dim("Drop --check-drift to proceed without the check."));
-      process.exit(1);
-    }
-  }
+  await checkEnvironmentDrift(options.checkDrift ?? false, parent.environment, workflow);
 
   // Construct the fresh child state.
   const childRunId = randomUUID();
@@ -213,7 +164,7 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
 
   const ctx = await buildSchedulerContext({
     workflow,
-    ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+    ...hooksOpt(tierConfig),
   });
   const { scheduler } = ctx;
   if (ctx.monitorPort !== null) {
@@ -223,20 +174,11 @@ export async function forkCommand(parentRunId: string, options: ForkOptions): Pr
     );
   }
 
-  scheduler.on("node_start", (nodeId: string) => {
-    console.log(chalk.cyan(`  ${nodeId} starting...`));
-  });
-  scheduler.on("node_event", (_nodeId: string, event: AgentEvent) => {
-    if (event.type === "text_delta") process.stdout.write(chalk.dim("."));
-  });
-  scheduler.on("node_end", (nodeId: string, success: boolean) => {
-    const icon = success ? chalk.green("✓") : chalk.red("✗");
-    console.log(`\n  ${icon} ${nodeId} ${success ? "completed" : "failed"}`);
-  });
+  wireSimpleTerminalListeners(scheduler);
 
   try {
     const resumeOpts = {
-      ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+      ...hooksOpt(tierConfig),
       runReason: "fork" as const,
     };
     const result = await scheduler.resume(childState, resumeOpts);

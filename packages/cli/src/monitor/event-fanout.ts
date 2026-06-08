@@ -2,6 +2,7 @@ import { RingBuffer } from "./ring-buffer.js";
 
 const DEFAULT_BUFFER_CAPACITY = 1024;
 const DEFAULT_FLUSH_INTERVAL_MS = 16;
+const WS_OPEN = 1 as const;
 
 export interface FanOutConfig {
   bufferCapacity: number;
@@ -97,10 +98,14 @@ export class EventFanOut {
     for (const [id, entry] of this.clients) {
       const { ws, buffer } = entry;
 
-      // Slow client detection
+      // Slow client detection: disconnect if the TCP send buffer is backed up
+      // (ws.bufferedAmount) OR if the in-process ring buffer has had to drop
+      // events (buffer.dropped > 0), which means the client is consuming
+      // slower than the scheduler emits.
       if (
-        this.config.maxBufferedAmount !== undefined &&
-        ws.bufferedAmount > this.config.maxBufferedAmount
+        (this.config.maxBufferedAmount !== undefined &&
+          ws.bufferedAmount > this.config.maxBufferedAmount) ||
+        buffer.dropped > 0
       ) {
         ws.close();
         this.clients.delete(id);
@@ -110,8 +115,7 @@ export class EventFanOut {
       const items = buffer.drain();
       if (items.length === 0) continue;
 
-      // WebSocket readyState: 1 = OPEN
-      if (ws.readyState !== 1) continue;
+      if (ws.readyState !== WS_OPEN) continue;
 
       // Coalesce text_delta events and build final payload
       const coalesced = this.coalesceTextDeltas(items);

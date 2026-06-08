@@ -10,7 +10,7 @@ describe("MetricsServer", () => {
 
   beforeEach(async () => {
     metrics = new PrometheusMetrics();
-    server = new MetricsServer({ port: 0, metrics, authToken: "test-token-1234" });
+    server = new MetricsServer({ metrics, authToken: "test-token-1234" });
     port = await server.start(0);
     token = server.getAuthToken();
   });
@@ -24,7 +24,7 @@ describe("MetricsServer", () => {
   });
 
   it("generates a UUID token when none is passed", async () => {
-    const other = new MetricsServer({ port: 0, metrics });
+    const other = new MetricsServer({ metrics });
     await other.start(0);
     try {
       const t = other.getAuthToken();
@@ -94,7 +94,7 @@ describe("MetricsServer", () => {
   });
 
   it("stop() is idempotent", async () => {
-    const s = new MetricsServer({ port: 0, metrics });
+    const s = new MetricsServer({ metrics });
     await s.start(0);
     await s.stop();
     await s.stop(); // should not throw

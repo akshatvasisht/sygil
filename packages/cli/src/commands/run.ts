@@ -1,13 +1,14 @@
 import path from "node:path";
 import { writeFile, unlink, mkdir, access } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import chalk from "chalk";
+import { ensureGitRepo } from "../utils/git-check.js";
 import ora from "ora";
 import open from "open";
+import { getTemplatesDir } from "../utils/templates.js";
 import { loadWorkflow, validateWorkflowInvariants } from "../utils/workflow.js";
 import { parseParamPairs, resolveWorkflowParams } from "../utils/params.js";
 import { pruneWorktrees } from "../worktree/index.js";
-import { readConfigSafe } from "../utils/config.js";
+import { readConfigSafe, hooksOpt } from "../utils/config.js";
 import { resolveModelTiersAndLog } from "../utils/tier-resolver.js";
 import { validateWorkflowTools, ADAPTER_FIELD_SUPPORT, WorkflowGraphSchema } from "@sygil/shared";
 import { getAdapter } from "../adapters/index.js";
@@ -42,11 +43,10 @@ async function resolveWorkflowPath(workflowPath: string): Promise<string> {
   }
   // Bare template-name shape: lowercase, digits, hyphens, starts with a letter
   if (/^[a-z][a-z0-9-]*$/.test(workflowPath)) {
-    // Mirror the pattern from export.ts: URL("../../templates", import.meta.url).
     // Probe the canonical templates dir first, then templates/experimental/ so
     // bare names still resolve for experimental templates (e.g. `sygil run
     // optimize`) even though `sygil list` hides them from default output.
-    const templatesDir = fileURLToPath(new URL("../../templates", import.meta.url));
+    const templatesDir = getTemplatesDir();
     const candidates = [
       path.join(templatesDir, `${workflowPath}.json`),
       path.join(templatesDir, "experimental", `${workflowPath}.json`),
@@ -72,6 +72,14 @@ interface RunOptions {
   monitor?: boolean;
   web?: boolean;
   metricsPort?: string;
+  /**
+   * Stream agent events directly to stdout instead of the ora spinner / TUI.
+   * Mutually exclusive renderer: when true the spinner never starts and the TUI
+   * is skipped; the WsMonitorServer still runs so web clients are unaffected.
+   * Register the CLI flag in packages/cli/src/cli-program.ts:
+   *   .option("--stream", "Stream agent output to the terminal in real time")
+   */
+  stream?: boolean;
 }
 
 /**
@@ -95,12 +103,28 @@ export async function runCommand(
   // Cheap, idempotent, and silent on non-git directories.
   await pruneWorktrees();
 
-  // 1. Load and validate workflow
+  // Worktree isolation requires git + a repo. Fail fast with a clear, actionable
+  // message rather than surfacing a cryptic error from the first worktree op
+  // mid-run. (No-op under VITEST per ensureGitRepo's own test guard.)
+  if (options.isolate) {
+    try {
+      await ensureGitRepo();
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  }
+
+  // Load and validate workflow
   //    If workflowPath is "-", read workflow JSON from stdin instead of a file.
   //    If workflowPath is a bare template name, resolve it to the bundled file.
   workflowPath = await resolveWorkflowPath(workflowPath);
 
-  const spinner = ora("Loading workflow...").start();
+  // In --stream mode the spinner is suppressed — raw events go to stdout
+  // instead. Use a no-op shim that keeps the rest of the loading block clean.
+  const spinner = options.stream
+    ? { succeed: (msg: string) => console.log(msg), fail: (msg: string) => console.error(msg) }
+    : ora("Loading workflow...").start();
 
   let workflow;
   try {
@@ -136,7 +160,7 @@ export async function runCommand(
     return;
   }
 
-  // 2. Adapter availability pre-flight — runs before parameter interpolation because
+  // Adapter availability pre-flight — runs before parameter interpolation because
   //    adapter types are hard-coded at the node level (no {{...}} on adapter field).
   //    Failing fast here avoids wasted interpolation on missing adapters.
   const requiredAdaptersPreflight = [...new Set(Object.values(workflow.nodes).map((n) => n.adapter))];
@@ -166,7 +190,7 @@ export async function runCommand(
     }
   }
 
-  // 3. Parse parameters. The positional `task` arg is a run-only convenience
+  // Parse parameters. The positional `task` arg is a run-only convenience
   //    that seeds the `task` parameter; CLI --param pairs override it.
   const parameters: Record<string, string> = {};
   if (task) {
@@ -176,7 +200,7 @@ export async function runCommand(
     Object.assign(parameters, parseParamPairs(options.param));
   }
 
-  // 4. Resolve parameters: merge CLI params with workflow defaults, validate
+  // Resolve parameters: merge CLI params with workflow defaults, validate
   //    required fields, then interpolate {{param}} placeholders.
   workflow = resolveWorkflowParams(workflow, parameters, "Supply them with --param key=value");
 
@@ -224,14 +248,14 @@ export async function runCommand(
     parsedMetricsPort = port;
   }
 
-  // 5. Build shared scheduler context (monitor, Prometheus, OTLP, scheduler).
+  // Build shared scheduler context (monitor, Prometheus, OTLP, scheduler).
   //    Consolidated bootstrap — see commands/_scheduler-bootstrap.ts.
   let ctx;
   try {
     ctx = await buildSchedulerContext({
       workflow,
       workflowPath,
-      ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+      ...hooksOpt(tierConfig),
       enableMonitor: options.monitor !== false,
       ...(parsedMetricsPort !== undefined ? { metricsPort: parsedMetricsPort } : {}),
     });
@@ -285,13 +309,16 @@ export async function runCommand(
     console.log(chalk.dim(`\n  Monitor disabled (headless mode)\n`));
   }
 
-  // 6. Compute topological node order for display
+  // Compute topological node order for display
   const nodeOrder = topoSort(Object.keys(workflow.nodes), workflow.edges);
 
-  // 7. Set up monitoring display
+  // Set up monitoring display
   const isTTY = Boolean(process.stdout.isTTY);
   const useWebMonitor = Boolean(options.web);
-  const useTUI = !useWebMonitor && isTTY && options.monitor !== false;
+  // --stream is a third renderer: direct stdout streaming, mutually exclusive
+  // with both the TUI and the per-event logEvent calls in the non-TUI path.
+  const useStream = Boolean(options.stream);
+  const useTUI = !useWebMonitor && !useStream && isTTY && options.monitor !== false;
 
   // Build shared state for TUI
   const monitorState: TerminalMonitorState = {
@@ -319,7 +346,7 @@ export async function runCommand(
 
   const tui = useTUI ? createTerminalMonitor(monitorState) : null;
 
-  // 8. Wire client control events (pause/resume/cancel) from WebSocket to scheduler
+  // Wire client control events (pause/resume/cancel) from WebSocket to scheduler
   monitor.onClientControl = (event) => {
     if (event.type === "pause") scheduler.pause();
     if (event.type === "resume_workflow") scheduler.resumeExecution();
@@ -358,7 +385,7 @@ export async function runCommand(
       node.status = "running";
       node.startedAt = Date.now();
     }
-    if (!useTUI) {
+    if (!useTUI && !useStream) {
       const nodeConfig = workflow.nodes[nodeId];
       logEvent(nodeId, { type: "status", summary: `running  (${nodeConfig?.adapter ?? "?"})` });
     }
@@ -370,7 +397,6 @@ export async function runCommand(
 
     const summary = formatEventSummary(event);
 
-    // Keep last 3 events
     node.recentEvents.push(summary);
     if (node.recentEvents.length > 3) node.recentEvents.shift();
 
@@ -382,7 +408,7 @@ export async function runCommand(
       }
     }
 
-    if (!useTUI) {
+    if (!useTUI && !useStream) {
       logEvent(nodeId, summary);
     }
   });
@@ -392,7 +418,7 @@ export async function runCommand(
     if (node) {
       node.status = success ? "completed" : "failed";
     }
-    if (!useTUI) {
+    if (!useTUI && !useStream) {
       const icon = success ? chalk.green("✓") : chalk.red("✗");
       const elapsed = node ? `${(node.elapsedMs / 1000).toFixed(1)}s` : "";
       const cost = node && node.costUsd > 0 ? `  $${node.costUsd.toFixed(4)}` : "";
@@ -413,6 +439,37 @@ export async function runCommand(
     }
   });
 
+  // --stream renderer: write agent events directly to stdout.
+  // The WsMonitorServer still runs — this only changes the terminal output.
+  // loop_back and gate_eval fall through to the non-TUI handlers above (they
+  // are already gated on !useTUI, not on !useStream, so they always print).
+  if (useStream) {
+    scheduler.on("node_start", (nodeId: string) => {
+      console.log(chalk.cyan(`\n▶ ${nodeId}`));
+    });
+
+    scheduler.on("node_event", (_nodeId: string, event: AgentEvent) => {
+      if (event.type === "text_delta") {
+        process.stdout.write(event.text);
+      } else if (event.type === "tool_call") {
+        const inputSlice = JSON.stringify(event.input).slice(0, 80);
+        console.log(chalk.yellow(`\n  → tool(${inputSlice})`));
+      } else if (event.type === "tool_result") {
+        console.log(chalk.dim(`  ✓ tool`));
+      } else if (event.type === "error") {
+        console.log(chalk.red(`  ✗ ${event.message}`));
+      }
+    });
+
+    scheduler.on("node_end", (nodeId: string, success: boolean) => {
+      if (success) {
+        console.log(chalk.green(`✓ ${nodeId}`));
+      } else {
+        console.log(chalk.red(`✗ ${nodeId}`));
+      }
+    });
+  }
+
   let runFailed = false;
   try {
     trackEvent("workflow_run_started", {
@@ -422,7 +479,7 @@ export async function runCommand(
     });
     const runOpts: import("../scheduler/index.js").RunOptions = {
       ...(options.isolate !== undefined ? { isolate: options.isolate } : {}),
-      ...(tierConfig?.hooks !== undefined ? { hooks: tierConfig.hooks } : {}),
+      ...hooksOpt(tierConfig),
       ...(ctx.prometheusMetrics !== null ? { metricsObserver: ctx.prometheusMetrics } : {}),
       ...(tierConfig?.performance?.nodeCache === true ? { nodeCacheEnabled: true } : {}),
     };

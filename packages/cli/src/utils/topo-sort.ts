@@ -50,8 +50,9 @@ export function topoSort(nodeIds: string[], edges: EdgeConfig[]): string[] {
   }
 
   if (sorted.length < nodeIds.length) {
+    const sortedSet = new Set(sorted);
     for (const id of nodeIds) {
-      if (!sorted.includes(id)) sorted.push(id);
+      if (!sortedSet.has(id)) sorted.push(id);
     }
   }
 

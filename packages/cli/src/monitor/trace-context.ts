@@ -12,7 +12,10 @@ import type { SpawnContext } from "@sygil/shared";
  * Hash derivation mirrors `scheduler/retry-policy.ts > deterministicJitter`
  * — same `createHash("sha256")` primitive, same replay-determinism contract.
  */
-export function deriveTraceContext(runId: string, nodeId: string): Required<SpawnContext> {
+export function deriveTraceContext(
+  runId: string,
+  nodeId: string
+): Required<Omit<SpawnContext, "signal">> {
   const traceId = createHash("sha256").update(runId).digest("hex").slice(0, 32);
   const spanId = createHash("sha256").update(`${runId}/${nodeId}`).digest("hex").slice(0, 16);
   return {

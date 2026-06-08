@@ -1,9 +1,9 @@
 import chalk from "chalk";
-import { readFile, writeFile, mkdir, access, unlink, rm, copyFile, readdir } from "node:fs/promises";
+import { readFile, mkdir, access, rm, copyFile, readdir } from "node:fs/promises";
 import { join, basename, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { execSync } from "node:child_process";
-import { loadWorkflow } from "../utils/workflow.js";
+import { parseWorkflowContent } from "../utils/workflow.js";
 import { writeFileAtomic } from "../utils/atomic-write.js";
 import { listUserTemplates, USER_TEMPLATES_DIR, validateTemplateUrl } from "../utils/registry.js";
 import {
@@ -151,11 +151,9 @@ async function importBundle(sourcePath: string): Promise<void> {
     return;
   }
 
-  const tempJson = join(tmpdir(), `sygil-import-bundle-${Date.now()}.json`);
-  await writeFile(tempJson, workflowContent, "utf8");
   let workflow;
   try {
-    workflow = await loadWorkflow(tempJson);
+    workflow = parseWorkflowContent(workflowContent);
   } catch (err) {
     if (tempExtractDir) await rm(tempExtractDir, { recursive: true, force: true });
     console.error(
@@ -163,8 +161,6 @@ async function importBundle(sourcePath: string): Promise<void> {
     );
     process.exit(1);
     return;
-  } finally {
-    await unlink(tempJson).catch(() => undefined);
   }
 
   // Determine install name
@@ -294,22 +290,16 @@ export async function importTemplateCommand(urlOrPath: string): Promise<void> {
 
   const { content, resolvedPath } = resolved;
 
-  // Write to a temp file and validate via loadWorkflow
-  const tempFile = join(tmpdir(), `sygil-import-${Date.now()}.json`);
-  await writeFile(tempFile, content, "utf8");
-
+  // Validate the in-memory content directly — no temp file needed
   let workflow;
   try {
-    workflow = await loadWorkflow(tempFile);
+    workflow = parseWorkflowContent(content);
   } catch (err) {
     console.error(
       chalk.red(`Validation failed:\n${err instanceof Error ? err.message : String(err)}`)
     );
     process.exit(1);
     return; // unreachable, but satisfies TypeScript
-  } finally {
-    // Always clean up temp file — don't accumulate /tmp garbage
-    await unlink(tempFile).catch(() => undefined);
   }
 
   // Save to ~/.sygil/templates/<safe-name>.json

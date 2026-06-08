@@ -1,7 +1,10 @@
 import { z } from "zod";
 
-export type AdapterType = "claude-sdk" | "claude-cli" | "codex" | "cursor" | "echo" | "gemini-cli" | "local-oai";
-export type SandboxMode = "read-only" | "workspace-write" | "full-access";
+export const AdapterTypeSchema = z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"]);
+export type AdapterType = z.infer<typeof AdapterTypeSchema>;
+
+export const SandboxModeSchema = z.enum(["read-only", "workspace-write", "full-access"]);
+export type SandboxMode = z.infer<typeof SandboxModeSchema>;
 
 /**
  * Static model tiers. Authored on a node via `modelTier`, resolved
@@ -9,7 +12,8 @@ export type SandboxMode = "read-only" | "workspace-write" | "full-access";
  * `tiers` mapping in `.sygil/config.json`. Always deterministic — no runtime
  * learning, no automatic escalation.
  */
-export type ModelTier = "cheap" | "smart";
+export const ModelTierSchema = z.enum(["cheap", "smart"]);
+export type ModelTier = z.infer<typeof ModelTierSchema>;
 
 export interface WorkflowGraph {
   version: string;
@@ -37,9 +41,10 @@ export interface ProviderConfig {
 /**
  * Classes of transient errors a RetryPolicy can opt into.
  * Must match the classification strings produced by
- * `adapters/provider-router.ts > classifyError` — see the Zod enum below.
+ * `adapters/provider-router.ts > classifyError`.
  */
-export type RetryableErrorClass = "transport" | "rate_limit" | "server_5xx";
+export const RetryableErrorClassSchema = z.enum(["transport", "rate_limit", "server_5xx"]);
+export type RetryableErrorClass = z.infer<typeof RetryableErrorClassSchema>;
 
 /**
  * Per-node retry policy. Wraps each provider attempt with an
@@ -217,7 +222,7 @@ export const ContractConfigSchema = z.object({
 });
 
 export const ProviderConfigSchema = z.object({
-  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"])
+  adapter: AdapterTypeSchema
     .describe("Adapter type to use for this provider attempt."),
   model: z.string().min(1).optional()
     .describe("Model ID for this provider; falls back to the node's top-level model when omitted."),
@@ -234,7 +239,7 @@ export const RetryPolicySchema = z.object({
     .describe("Multiplier applied between attempts; 1 = constant delay, 2 = classic exponential."),
   maxDelayMs: z.number().int().min(0)
     .describe("Upper bound on computed delay; must be >= initialDelayMs."),
-  retryableErrors: z.array(z.enum(["transport", "rate_limit", "server_5xx"])).min(1).optional()
+  retryableErrors: z.array(RetryableErrorClassSchema).min(1).optional()
     .describe("Opt-in whitelist of transient error classes; omitted = all three classes retry."),
 }).superRefine((policy, ctx) => {
   if (policy.maxDelayMs < policy.initialDelayMs) {
@@ -246,7 +251,7 @@ export const RetryPolicySchema = z.object({
 });
 
 export const NodeConfigSchema = z.object({
-  adapter: z.enum(["claude-sdk", "claude-cli", "codex", "cursor", "echo", "gemini-cli", "local-oai"])
+  adapter: AdapterTypeSchema
     .describe("Agent adapter to spawn; controls how the prompt is executed and which CLI/SDK is used.")
     .meta({ category: "core" }),
   model: z.string().min(1)
@@ -285,13 +290,13 @@ export const NodeConfigSchema = z.object({
   idleTimeoutMs: z.number().int().positive().optional()
     .describe("Idle timeout; node is cancelled when no AgentEvent is received for this long.")
     .meta({ category: "limits" }),
-  sandbox: z.enum(["read-only", "workspace-write", "full-access"]).optional()
+  sandbox: SandboxModeSchema.optional()
     .describe("Filesystem permission boundary for sandbox-aware adapters (codex, cursor).")
     .meta({ category: "contract" }),
   providers: z.array(ProviderConfigSchema).min(1).optional()
     .describe("Failover list; scheduler tries providers in priority order on transient errors and takes precedence over top-level adapter.")
     .meta({ category: "resilience" }),
-  modelTier: z.enum(["cheap", "smart"]).optional()
+  modelTier: ModelTierSchema.optional()
     .describe("Symbolic tier resolved at workflow-load time via .sygil/config.json > tiers; overrides model with the mapped value.")
     .meta({ category: "resilience" }),
   writesContext: z.array(z.string().min(1)).optional()

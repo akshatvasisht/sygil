@@ -46,6 +46,11 @@ export const ADAPTER_FIELD_SUPPORT: Record<AdapterType, Partial<Record<string, F
   echo: {},
 };
 
+/**
+ * Returns the `FieldSupport` level for a given adapter/field pair.
+ * Defaults to `"enforced"` when the field is absent from the adapter's entry in
+ * `ADAPTER_FIELD_SUPPORT` — all fields not explicitly listed are handled uniformly.
+ */
 export function isFieldSupported(adapter: AdapterType, field: string): FieldSupport {
   return ADAPTER_FIELD_SUPPORT[adapter]?.[field] ?? "enforced";
 }

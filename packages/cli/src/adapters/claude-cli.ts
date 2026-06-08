@@ -7,15 +7,11 @@ import type {
   NodeResult,
   SpawnContext,
 } from "@sygil/shared";
-import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
+import { pushEvent, finishStream, drainEventQueue, wireStdoutBackpressure, wireSpawnError, DEFAULT_QUEUE_HIGH_WATER_MARK } from "./ndjson-stream.js";
 import { waitForDoneOrTimeout } from "./await-done.js";
-import { GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS, GETRESULT_TIMEOUT_MS, exitCodeToSygilError } from "./constants.js";
+import { buildSpawnEnv, warnOutputSchemaPartial, getCliVersion, KILL_GRACE_PERIOD_MS, GETRESULT_KILL_GRACE_MS, GETRESULT_POLL_INTERVAL_MS, GETRESULT_TIMEOUT_MS, exitCodeToSygilError } from "./constants.js";
 import { makeAgentSession } from "./session.js";
 import { extractJsonFromOutput } from "./extract-json.js";
-import { logger } from "../utils/logger.js";
-
-/** Grace period before SIGKILL after SIGTERM during kill(). */
-const KILL_GRACE_PERIOD_MS = 2_000;
 
 interface ClaudeCLIInternal {
   proc: ReturnType<typeof spawn>;
@@ -46,25 +42,11 @@ export class ClaudeCLIAdapter implements AgentAdapter {
   }
 
   async getVersion(): Promise<string | null> {
-    try {
-      const out = execSync("claude --version", {
-        encoding: "utf8",
-        timeout: 1_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const firstLine = out.split("\n")[0]?.trim();
-      return firstLine ?? null;
-    } catch {
-      return null;
-    }
+    return getCliVersion("claude");
   }
 
   async spawn(config: NodeConfig, ctx?: SpawnContext): Promise<AgentSession> {
-    if (config.outputSchema) {
-      logger.info(
-        `claude-cli: outputSchema present but adapter has no upstream strict-mode flag — relying on post-hoc validation.`,
-      );
-    }
+    warnOutputSchemaPartial(this.name, config);
 
     const cwd = config.outputDir ?? process.cwd();
     const tools = (config.tools ?? []).join(",");
@@ -100,7 +82,8 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
     const internal: ClaudeCLIInternal = {
@@ -116,12 +99,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
 
     // Wire up process error handler immediately after spawn.
     // Without this, ENOENT / EACCES errors surface as an unhandled 'error' event.
-    proc.on("error", (err) => {
-      if (!internal.done) {
-        pushEvent(internal, { type: "error", message: `Process spawn failed: ${err.message}` });
-        finishStream(internal);
-      }
-    });
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal);
   }
@@ -228,12 +206,10 @@ export class ClaudeCLIAdapter implements AgentAdapter {
           internal.totalCostUsd = cost;
           events.push({ type: "cost_update", totalCostUsd: cost });
         }
-        // Capture final output text
         const resultText = parsed["result"];
         if (typeof resultText === "string" && resultText.length > 0) {
           internal.fullOutput = resultText;
         }
-        // Detect error results
         if (parsed["is_error"] === true) {
           events.push({ type: "error", message: String(parsed["result"] ?? "Unknown error") });
         }
@@ -304,7 +280,8 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     const proc = spawn("claude", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: ctx?.traceparent ? { ...process.env, TRACEPARENT: ctx.traceparent } : process.env,
+      env: buildSpawnEnv(ctx),
+      ...(ctx?.signal !== undefined ? { signal: ctx.signal } : {}),
     });
 
     const internal: ClaudeCLIInternal = {
@@ -319,12 +296,7 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     };
 
     // Wire up process error handler immediately after spawn.
-    proc.on("error", (err) => {
-      if (!internal.done) {
-        pushEvent(internal, { type: "error", message: `Process spawn failed: ${err.message}` });
-        finishStream(internal);
-      }
-    });
+    wireSpawnError(proc, internal);
 
     return makeAgentSession(this.name, config.role, internal, { id: previousSession.id });
   }
@@ -348,5 +320,3 @@ export class ClaudeCLIAdapter implements AgentAdapter {
     }
   }
 }
-
-// extractJsonFromOutput moved to adapters/extract-json.ts (cycle 20: greedy-regex bug fix + dedup across 4 adapters).

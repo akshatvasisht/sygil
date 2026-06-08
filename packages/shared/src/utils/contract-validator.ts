@@ -11,7 +11,6 @@ export interface ValidationResult {
 /**
  * Validates structured output against a JSON Schema-like object.
  * Uses a lightweight structural check — not a full JSON Schema validator.
- * For v1, validates: required fields present, type checking for string/number/boolean/array/object.
  */
 export function validateStructuredOutput(
   schema: Record<string, unknown>,
@@ -31,14 +30,12 @@ export function validateStructuredOutput(
 
   const output = value as Record<string, unknown>;
 
-  // Check required fields
   for (const field of required) {
     if (!(field in output)) {
       errors.push(`Missing required field: "${field}"`);
     }
   }
 
-  // Check type constraints
   for (const [field, fieldSchema] of Object.entries(properties)) {
     if (!(field in output)) continue;
     const fieldValue = output[field];
@@ -66,6 +63,18 @@ export interface InputMappingResult {
   errors: string[];
 }
 
+/**
+ * Resolves each entry in `mapping` against `predecessorOutputDir` and returns the
+ * extracted string values alongside any accumulated errors.
+ *
+ * Source syntax per entry value:
+ * - `"path/to/file.txt"` — reads the whole file as a UTF-8 string.
+ * - `"path/to/file.json#field.nested"` — reads the file as JSON and extracts the
+ *   dot-separated field path; missing or non-string values are coerced via `String()`.
+ *
+ * Errors are accumulated (not thrown): a failed entry contributes an error message and
+ * sets the resolved value to `""` so callers always receive a complete `resolved` map.
+ */
 export async function resolveInputMapping(
   mapping: Record<string, string>,
   predecessorOutputDir: string

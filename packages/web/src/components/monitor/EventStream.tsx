@@ -307,6 +307,19 @@ function EventRow({ event, timestamp, isRecent, allEvents = [], sendControl, wor
               </div>
             </div>
           );
+        case "rate_limit":
+          return (
+            <div className={`${baseClass} bg-accent-amber/5`}>
+              <span className="text-dim text-[10px] shrink-0 mt-0.5 w-16">{timestamp}</span>
+              <AlertTriangle size={12} className="text-accent-amber shrink-0 mt-0.5" />
+              <div>
+                <span className="text-accent-amber">rate_limit</span>
+                <span className="text-dim ml-2">
+                  {inner.retryAfterMs > 0 ? `retry after ${inner.retryAfterMs}ms` : "no retry-after"}
+                </span>
+              </div>
+            </div>
+          );
         case "context_set":
           return (
             <div className={`${baseClass}`}>
